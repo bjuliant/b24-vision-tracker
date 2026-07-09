@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>B24 Vision Tracker</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">B24</p>
+          <h1>Vision Tracker</h1>
+        </div>
+        <div class="sync-pill" id="syncStatus">Local</div>
+      </header>
+
+      <section class="toolbar" aria-label="Map tools">
+        <button class="tool-button active" data-status="unknown" type="button" title="Unknown">
+          <span class="dot unknown"></span>
+          <span>Unknown</span>
+        </button>
+        <button class="tool-button" data-status="scout" type="button" title="Scout Vision">
+          <span class="dot scout"></span>
+          <span>Scout</span>
+        </button>
+        <button class="tool-button" data-status="base" type="button" title="Base">
+          <span class="dot base"></span>
+          <span>Base</span>
+        </button>
+        <button class="tool-button" data-status="enemy" type="button" title="Enemy Base">
+          <span class="dot enemy"></span>
+          <span>Enemy</span>
+        </button>
+        <button class="tool-button" data-status="reserved" type="button" title="Reserved">
+          <span class="dot reserved"></span>
+          <span>Reserved</span>
+        </button>
+      </section>
+
+      <section class="board-wrap" aria-label="B24 sector map">
+        <div class="axis axis-top" id="xAxis"></div>
+        <div class="axis axis-left" id="yAxis"></div>
+        <div class="grid" id="grid"></div>
+      </section>
+
+      <footer class="details-panel" aria-live="polite">
+        <div>
+          <p class="label">Selected</p>
+          <strong id="selectedSector">A1</strong>
+        </div>
+        <div>
+          <p class="label">Status</p>
+          <strong id="selectedStatus">Unknown</strong>
+        </div>
+        <div>
+          <p class="label">Updated By</p>
+          <strong id="selectedUser">Nobody yet</strong>
+        </div>
+        <div>
+          <p class="label">Last Update</p>
+          <strong id="selectedTime">Never</strong>
+        </div>
+      </footer>
+    </main>
+
+    <template id="cellTemplate">
+      <button class="cell unknown" type="button">
+        <span class="coord"></span>
+      </button>
+    </template>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
