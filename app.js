@@ -1,6 +1,8 @@
 (function () {
-  const COLUMNS = "ABCDEFGHIJ".split("");
-  const ROWS = Array.from({ length: 10 }, (_, index) => index + 1);
+  const SECTORS = Array.from({ length: 100 }, (_, index) => {
+    return index === 0 ? "00" : `B24:${index}`;
+  });
+  const PLAYABLE_SECTORS = SECTORS.slice(1);
   const STATUSES = {
     unknown: "Unknown",
     scout: "Scout Vision",
@@ -12,8 +14,6 @@
   const config = window.B24_CONFIG || {};
   const tg = window.Telegram?.WebApp;
   const grid = document.querySelector("#grid");
-  const xAxis = document.querySelector("#xAxis");
-  const yAxis = document.querySelector("#yAxis");
   const syncStatus = document.querySelector("#syncStatus");
   const selectedSector = document.querySelector("#selectedSector");
   const selectedStatus = document.querySelector("#selectedStatus");
@@ -25,7 +25,7 @@
   const storageKey = `b24-map-${config.MAP_ID || "main"}`;
   const hasSupabase = Boolean(config.SUPABASE_URL && config.SUPABASE_ANON_KEY && window.supabase);
   const user = getTelegramUser();
-  let selected = "A1";
+  let selected = "B24:1";
   let activeStatus = "unknown";
   let client = null;
   let realtimeChannel = null;
@@ -37,7 +37,6 @@
     tg?.ready();
     tg?.expand();
 
-    renderAxis();
     renderGrid();
     bindToolbar();
     selectSector(selected);
@@ -49,23 +48,23 @@
     }
   }
 
-  function renderAxis() {
-    xAxis.innerHTML = COLUMNS.map((column) => `<span>${column}</span>`).join("");
-    yAxis.innerHTML = ROWS.map((row) => `<span>${row}</span>`).join("");
-  }
-
   function renderGrid() {
     const fragment = document.createDocumentFragment();
 
-    ROWS.forEach((row) => {
-      COLUMNS.forEach((column) => {
-        const id = `${column}${row}`;
-        const cell = template.content.firstElementChild.cloneNode(true);
-        cell.dataset.sector = id;
-        cell.querySelector(".coord").textContent = id;
+    SECTORS.forEach((id) => {
+      const cell = template.content.firstElementChild.cloneNode(true);
+      cell.dataset.sector = id;
+      cell.querySelector(".coord").textContent = id;
+
+      if (id === "00") {
+        cell.className = "cell empty";
+        cell.disabled = true;
+        cell.setAttribute("aria-label", "Empty sector");
+      } else {
         cell.addEventListener("click", () => updateSector(id, activeStatus));
-        fragment.appendChild(cell);
-      });
+      }
+
+      fragment.appendChild(cell);
     });
 
     grid.appendChild(fragment);
@@ -159,12 +158,16 @@
   }
 
   function paintAll() {
-    Object.keys(getBlankMap()).forEach(paintSector);
+    PLAYABLE_SECTORS.forEach(paintSector);
   }
 
   function paintSector(id) {
     const cell = grid.querySelector(`[data-sector="${id}"]`);
     if (!cell) return;
+    if (id === "00") {
+      cell.className = "cell empty";
+      return;
+    }
 
     const status = sectors[id]?.status || "unknown";
     cell.className = `cell ${status}`;
@@ -172,6 +175,7 @@
   }
 
   function selectSector(id) {
+    if (id === "00") return;
     selected = id;
     grid.querySelectorAll(".cell").forEach((cell) => {
       cell.classList.toggle("selected", cell.dataset.sector === id);
@@ -198,10 +202,8 @@
 
   function getBlankMap() {
     const blank = {};
-    ROWS.forEach((row) => {
-      COLUMNS.forEach((column) => {
-        blank[`${column}${row}`] = { status: "unknown" };
-      });
+    PLAYABLE_SECTORS.forEach((id) => {
+      blank[id] = { status: "unknown" };
     });
     return blank;
   }

@@ -1,6 +1,6 @@
 # B24 Vision Tracker
 
-A Telegram Mini App starter for a shared 10x10 guild map.
+A Telegram Mini App starter for a shared 10x10 guild map. The upper-left tile is `00` and stores no data; the playable sectors are `B24:1` through `B24:99`.
 
 ## Files
 
