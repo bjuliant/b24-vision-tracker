@@ -18,6 +18,10 @@
   const selectedStatus = document.querySelector("#selectedStatus");
   const selectedSystems = document.querySelector("#selectedSystems");
   const selectedBases = document.querySelector("#selectedBases");
+  const sectorPanelTitle = document.querySelector("#sectorPanelTitle");
+  const sectorCounts = document.querySelector("#sectorCounts");
+  const baseList = document.querySelector("#baseList");
+  const systemList = document.querySelector("#systemList");
   const template = document.querySelector("#cellTemplate");
   const toolButtons = Array.from(document.querySelectorAll(".tool-button"));
   const importText = document.querySelector("#importText");
@@ -482,6 +486,34 @@
     selectedStatus.textContent = flags.length ? flags.join(" ") : "None";
     selectedSystems.textContent = `${getSystemCount(id)} known`;
     selectedBases.textContent = `${getBaseCount(id)} known`;
+    renderSectorPanel(id);
+  }
+
+  function renderSectorPanel(id) {
+    const systems = getSystemsForRegion(id);
+    const bases = getBasesForRegion(id);
+
+    sectorPanelTitle.textContent = id;
+    sectorCounts.textContent = `${systems.length} systems · ${bases.length} bases`;
+
+    if (bases.length) {
+      baseList.innerHTML = bases.map((base) => {
+        const guild = escapeHtml(base.guild || "");
+        const label = escapeHtml(base.label || "Unknown owner");
+        const coord = escapeHtml(base.coord);
+        return `<div class="base-row"><div><strong>${coord}</strong><span>${label}</span></div><div class="base-guild">${guild}</div></div>`;
+      }).join("");
+    } else {
+      baseList.textContent = "No bases imported for this sector.";
+    }
+
+    if (systems.length) {
+      systemList.innerHTML = systems.map((systemNo) => {
+        return `<span class="system-chip">${escapeHtml(id)}:${escapeHtml(systemNo)}</span>`;
+      }).join("");
+    } else {
+      systemList.textContent = "No systems imported for this sector.";
+    }
   }
 
   function getSector(id) {
@@ -497,11 +529,21 @@
   }
 
   function getSystemCount(region) {
-    return (intel.systems[region] || []).length;
+    return getSystemsForRegion(region).length;
   }
 
   function getBaseCount(region) {
-    return Object.values(intel.bases).filter((base) => base.region === region).length;
+    return getBasesForRegion(region).length;
+  }
+
+  function getSystemsForRegion(region) {
+    return [...(intel.systems[region] || [])].sort();
+  }
+
+  function getBasesForRegion(region) {
+    return Object.values(intel.bases)
+      .filter((base) => base.region === region)
+      .sort((a, b) => a.coord.localeCompare(b.coord));
   }
 
   function loadLocalState() {
@@ -551,6 +593,15 @@
       .replace(coord, "")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   function normalizeRegionId(value) {
