@@ -59,7 +59,7 @@
     if (hasSupabase && !new URLSearchParams(location.search).get("gal")) {
       client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
       const preferredGalaxy = await loadPreferredGalaxy();
-      if (preferredGalaxy) setGalaxy(preferredGalaxy);
+      setGalaxy(preferredGalaxy || galaxy);
     } else {
       setGalaxy(galaxy);
     }
