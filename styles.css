@@ -284,6 +284,37 @@ h1 {
   font-weight: 850;
 }
 
+.mini-instructions {
+  margin: 0 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(14, 16, 18, 0.78);
+  padding: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.mini-instructions strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+}
+
+.mini-instructions ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.mini-instructions li + li {
+  margin-top: 4px;
+}
+
+.mini-instructions code {
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
 .intel-panel textarea {
   width: calc(100% - 24px);
   min-height: 116px;
