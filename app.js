@@ -20,6 +20,18 @@
   const selectedBases = document.querySelector("#selectedBases");
   const sectorPanelTitle = document.querySelector("#sectorPanelTitle");
   const sectorCounts = document.querySelector("#sectorCounts");
+  const claimsPanelTitle = document.querySelector("#claimsPanelTitle");
+  const claimCounts = document.querySelector("#claimCounts");
+  const claimTarget = document.querySelector("#claimTarget");
+  const claimArrival = document.querySelector("#claimArrival");
+  const claimNote = document.querySelector("#claimNote");
+  const claimButton = document.querySelector("#claimButton");
+  const claimList = document.querySelector("#claimList");
+  const attackCounts = document.querySelector("#attackCounts");
+  const attackBoard = document.querySelector("#attackBoard");
+  const confirmFleetText = document.querySelector("#confirmFleetText");
+  const confirmFleetButton = document.querySelector("#confirmFleetButton");
+  const confirmFleetResult = document.querySelector("#confirmFleetResult");
   const baseList = document.querySelector("#baseList");
   const systemList = document.querySelector("#systemList");
   const template = document.querySelector("#cellTemplate");
@@ -44,9 +56,12 @@
     tg?.ready();
     tg?.expand();
 
+    populateArrivalOptions();
     renderGrid();
     bindControls();
     selectSector(selected);
+    renderAttackBoard();
+    setInterval(tickClaims, 1000);
 
     if (hasSupabase) {
       connectSupabase();
@@ -87,6 +102,22 @@
 
     importButton.addEventListener("click", importIntel);
     bookmarkletButton.addEventListener("click", copyBookmarklet);
+    claimButton.addEventListener("click", createClaim);
+    claimList.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-unclaim]");
+      if (button) unclaim(button.dataset.unclaim);
+    });
+    attackBoard.addEventListener("click", (event) => {
+      const confirmButton = event.target.closest("[data-confirm-claim]");
+      if (confirmButton) confirmClaim(confirmButton.dataset.confirmClaim, true);
+
+      const unconfirmButton = event.target.closest("[data-unconfirm-claim]");
+      if (unconfirmButton) confirmClaim(unconfirmButton.dataset.unconfirmClaim, false);
+
+      const unclaimButton = event.target.closest("[data-unclaim]");
+      if (unclaimButton) unclaim(unclaimButton.dataset.unclaim);
+    });
+    confirmFleetButton.addEventListener("click", confirmFleetPaste);
   }
 
   async function connectSupabase() {
@@ -98,10 +129,12 @@
         loadRemoteSectors(),
         loadRemoteSystems(),
         loadRemoteBases(),
-        loadRemoteAstros()
+        loadRemoteAstros(),
+        loadRemoteClaims()
       ]);
       paintAll();
       selectSector(selected);
+      renderAttackBoard();
       setSync("Live", true);
 
       realtimeChannel = client
@@ -124,6 +157,7 @@
             saveLocalState();
             paintSector(payload.new.region_id);
             if (payload.new.region_id === selected) selectSector(selected);
+            renderAttackBoard();
           }
         )
         .on(
@@ -142,6 +176,16 @@
           (payload) => {
             mergeAstroRow(payload.new);
             saveLocalState();
+          }
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "b24_claims", filter: `map_id=eq.${mapId}` },
+          (payload) => {
+            mergeClaimRow(payload.new);
+            saveLocalState();
+            paintSector(payload.new.region_id);
+            if (payload.new.region_id === selected) selectSector(selected);
           }
         )
         .subscribe();
@@ -177,6 +221,13 @@
     const { data, error } = await client.from("b24_astros").select("*").eq("map_id", mapId);
     if (error) return;
     data.forEach(mergeAstroRow);
+    saveLocalState();
+  }
+
+  async function loadRemoteClaims() {
+    const { data, error } = await client.from("b24_claims").select("*").eq("map_id", mapId);
+    if (error) return;
+    data.forEach(mergeClaimRow);
     saveLocalState();
   }
 
@@ -227,6 +278,30 @@
       attributes: row.attributes || [],
       hasBase: Boolean(row.has_base),
       updatedAt: row.updated_at
+    };
+  }
+
+  function mergeClaimRow(row) {
+    if (!row?.claim_id || !row?.target_coord) return;
+    const target = normalizeAstro(row.target_coord);
+    if (!target) return;
+
+    intel.claims[row.claim_id] = {
+      id: row.claim_id,
+      target,
+      region: normalizeRegionId(row.region_id),
+      system: row.system_id || astroToSystem(target),
+      claimedBy: row.claimed_by || "",
+      arrivalAt: row.arrival_at || "",
+      arrivalLabel: row.arrival_label || "",
+      confirmedSent: Boolean(row.confirmed_sent),
+      confirmedAt: row.confirmed_at || "",
+      confirmedBy: row.confirmed_by || "",
+      fleetLabel: row.fleet_label || "",
+      note: row.note || "",
+      status: row.status || "active",
+      createdAt: row.created_at || "",
+      updatedAt: row.updated_at || ""
     };
   }
 
@@ -295,6 +370,165 @@
       console.error(error);
       importResult.textContent = "Could not parse that paste";
     }
+  }
+
+  async function createClaim() {
+    const target = normalizeAstro(claimTarget.value.trim());
+    if (!target) {
+      claimList.textContent = "Use a full target like B24:44:76:10.";
+      return;
+    }
+
+    const region = astroToRegion(target);
+    if (region !== selected) selectSector(region);
+
+    const now = new Date();
+    const arrivalLabel = claimArrival.value || nearestQuarterHour(now);
+    const arrivalAt = nextTimeOfDay(arrivalLabel).toISOString();
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const stamp = now.toISOString();
+    const claim = {
+      id,
+      target,
+      region,
+      system: astroToSystem(target),
+      claimedBy: user,
+      arrivalAt,
+      arrivalLabel,
+      confirmedSent: false,
+      confirmedAt: "",
+      confirmedBy: "",
+      fleetLabel: "",
+      note: claimNote.value.trim(),
+      status: "active",
+      createdAt: stamp,
+      updatedAt: stamp
+    };
+
+    intel.claims ||= {};
+    intel.claims[id] = claim;
+    saveLocalState();
+    paintSector(region);
+    selectSector(region);
+    renderAttackBoard();
+    claimTarget.value = "";
+    claimNote.value = "";
+    tg?.HapticFeedback?.impactOccurred("light");
+
+    if (!client) return;
+
+    const { error } = await client.from("b24_claims").upsert({
+      map_id: mapId,
+      claim_id: id,
+      target_coord: target,
+      region_id: region,
+      system_id: claim.system,
+      claimed_by: user,
+      arrival_at: arrivalAt,
+      arrival_label: arrivalLabel,
+      confirmed_sent: false,
+      confirmed_at: null,
+      confirmed_by: "",
+      fleet_label: "",
+      note: claim.note,
+      status: "active",
+      created_at: stamp,
+      updated_at: stamp
+    });
+
+    if (error) {
+      console.error(error);
+      setSync("Local");
+    }
+  }
+
+  async function unclaim(claimId) {
+    const claim = intel.claims?.[claimId];
+    if (!claim) return;
+
+    const stamp = new Date().toISOString();
+    claim.status = "cancelled";
+    claim.updatedAt = stamp;
+    intel.claims[claimId] = claim;
+    saveLocalState();
+    paintSector(claim.region);
+    if (claim.region === selected) renderClaimsPanel(selected);
+    renderAttackBoard();
+
+    if (!client) return;
+
+    const { error } = await client
+      .from("b24_claims")
+      .update({ status: "cancelled", updated_at: stamp })
+      .eq("map_id", mapId)
+      .eq("claim_id", claimId);
+
+    if (error) {
+      console.error(error);
+      setSync("Local");
+    }
+  }
+
+  async function confirmClaim(claimId, confirmed, source = {}) {
+    const claim = intel.claims?.[claimId];
+    if (!claim) return;
+
+    const stamp = new Date().toISOString();
+    claim.confirmedSent = Boolean(confirmed);
+    claim.confirmedAt = confirmed ? stamp : "";
+    claim.confirmedBy = confirmed ? user : "";
+    claim.fleetLabel = confirmed ? source.fleetLabel || claim.fleetLabel || "" : "";
+    claim.updatedAt = stamp;
+    intel.claims[claimId] = claim;
+    saveLocalState();
+    if (claim.region === selected) renderClaimsPanel(selected);
+    renderAttackBoard();
+
+    if (!client) return;
+
+    const { error } = await client
+      .from("b24_claims")
+      .update({
+        confirmed_sent: Boolean(confirmed),
+        confirmed_at: confirmed ? stamp : null,
+        confirmed_by: confirmed ? user : "",
+        fleet_label: claim.fleetLabel,
+        updated_at: stamp
+      })
+      .eq("map_id", mapId)
+      .eq("claim_id", claimId);
+
+    if (error) {
+      console.error(error);
+      setSync("Local");
+    }
+  }
+
+  function confirmFleetPaste() {
+    const text = confirmFleetText.value.trim();
+    if (!text) {
+      confirmFleetResult.textContent = "Paste a fleet row first.";
+      return;
+    }
+
+    const coords = [...new Set(text.match(/B24:\d{2}:\d{2}:\d{2}/g) || [])];
+    const activeClaims = getAllActiveClaims();
+    const matches = activeClaims.filter((claim) => coords.includes(claim.target));
+
+    if (!matches.length) {
+      confirmFleetResult.textContent = "No active claim matched that fleet row.";
+      return;
+    }
+
+    if (matches.length > 1) {
+      confirmFleetResult.textContent = `Matched ${matches.length} claims. Use the row button for the right one.`;
+      return;
+    }
+
+    const fleetLabel = (text.match(/\[?(Fleet\s+\d+)\]?/i) || [])[1] || "";
+    confirmClaim(matches[0].id, true, { fleetLabel });
+    confirmFleetText.value = "";
+    confirmFleetResult.textContent = `Confirmed ${matches[0].target}.`;
   }
 
   async function copyBookmarklet() {
@@ -462,8 +696,9 @@
 
     const systems = getSystemCount(id);
     const bases = getBaseCount(id);
+    const claims = getClaimCount(id);
     const count = cell.querySelector(".intel-count");
-    count.textContent = systems || bases ? `${systems}s ${bases}b` : "";
+    count.textContent = systems || bases || claims ? `${systems}s ${bases}b ${claims}c` : "";
   }
 
   function setFlag(cell, letter, enabled, className) {
@@ -494,7 +729,9 @@
     const bases = getBasesForRegion(id);
 
     sectorPanelTitle.textContent = id;
-    sectorCounts.textContent = `${systems.length} systems · ${bases.length} bases`;
+    sectorCounts.textContent = `${systems.length} systems / ${bases.length} bases`;
+    claimsPanelTitle.textContent = id;
+    renderClaimsPanel(id);
 
     if (bases.length) {
       baseList.innerHTML = bases.map((base) => {
@@ -514,6 +751,51 @@
     } else {
       systemList.textContent = "No systems imported for this sector.";
     }
+  }
+
+  function renderClaimsPanel(id) {
+    const activeClaims = getClaimsForRegion(id);
+    claimCounts.textContent = `${activeClaims.length} active`;
+
+    if (!activeClaims.length) {
+      claimList.textContent = "No active claims for this sector.";
+      return;
+    }
+
+    claimList.innerHTML = activeClaims.map((claim) => {
+      const arrival = claim.arrivalAt ? formatCountdown(claim.arrivalAt, "arrived") : "No arrival";
+      const localTime = claim.arrivalAt ? formatLocalDateTime(claim.arrivalAt) : "";
+      const claimerTime = claim.arrivalLabel ? `${escapeHtml(claim.arrivalLabel)} claimer time` : "";
+      const note = claim.note ? ` - ${escapeHtml(claim.note)}` : "";
+      const by = claim.claimedBy ? ` by ${escapeHtml(claim.claimedBy)}` : "";
+      return `<div class="claim-row"><div><strong>${escapeHtml(claim.target)}</strong><span class="claim-meta">Claimed${by}${note}</span><button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div><div class="claim-time">Lands ${escapeHtml(arrival)}<br><span>${escapeHtml(localTime)}${claimerTime ? " / " + claimerTime : ""}</span></div></div>`;
+    }).join("");
+  }
+
+  function renderAttackBoard() {
+    const activeClaims = getAllActiveClaims();
+    const confirmed = activeClaims.filter((claim) => claim.confirmedSent).length;
+    attackCounts.textContent = `${activeClaims.length} planned / ${confirmed} confirmed`;
+
+    if (!activeClaims.length) {
+      attackBoard.textContent = "No active attacks planned.";
+      return;
+    }
+
+    attackBoard.innerHTML = activeClaims.map((claim) => {
+      const localTime = claim.arrivalAt ? formatLocalDateTime(claim.arrivalAt) : "No arrival";
+      const countdown = claim.arrivalAt ? formatCountdown(claim.arrivalAt, "arrived") : "";
+      const attacker = claim.claimedBy || "Unknown";
+      const note = claim.note ? ` - ${escapeHtml(claim.note)}` : "";
+      const statusClass = claim.confirmedSent ? "confirmed" : "";
+      const status = claim.confirmedSent ? "Confirmed" : "Planned";
+      const action = claim.confirmedSent
+        ? `<button class="unclaim-button" type="button" data-unconfirm-claim="${escapeHtml(claim.id)}">Unconfirm</button>`
+        : `<button class="unclaim-button" type="button" data-confirm-claim="${escapeHtml(claim.id)}">Confirm Sent</button>`;
+      const fleet = claim.fleetLabel ? `<span class="attack-meta">${escapeHtml(claim.fleetLabel)}</span>` : "";
+
+      return `<div class="attack-row"><div><strong>${escapeHtml(attacker)}</strong><span class="attack-meta">${escapeHtml(claim.target)}${note}</span>${fleet}</div><div><strong>${escapeHtml(localTime)}</strong><span class="attack-meta">Lands ${escapeHtml(countdown)} / ${escapeHtml(claim.arrivalLabel || "")} claimer time</span></div><div class="attack-actions"><span class="attack-status ${statusClass}">${status}</span>${action}<button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div></div>`;
+    }).join("");
   }
 
   function getSector(id) {
@@ -536,6 +818,10 @@
     return getBasesForRegion(region).length;
   }
 
+  function getClaimCount(region) {
+    return getClaimsForRegion(region).length;
+  }
+
   function getSystemsForRegion(region) {
     return [...(intel.systems[region] || [])].sort();
   }
@@ -546,8 +832,26 @@
       .sort((a, b) => a.coord.localeCompare(b.coord));
   }
 
+  function getClaimsForRegion(region) {
+    return getAllActiveClaims()
+      .filter((claim) => claim.region === region && isClaimActive(claim))
+      .sort((a, b) => a.target.localeCompare(b.target) || String(a.arrivalAt).localeCompare(String(b.arrivalAt)));
+  }
+
+  function getAllActiveClaims() {
+    return Object.values(intel.claims || {})
+      .filter(isClaimActive)
+      .sort((a, b) => String(a.arrivalAt).localeCompare(String(b.arrivalAt)) || a.target.localeCompare(b.target));
+  }
+
+  function isClaimActive(claim) {
+    if (!claim || claim.status !== "active") return false;
+    if (!claim.arrivalAt) return true;
+    return new Date(claim.arrivalAt).getTime() > Date.now();
+  }
+
   function loadLocalState() {
-    const blank = { sectors: {}, systems: {}, bases: {}, astros: {} };
+    const blank = { sectors: {}, systems: {}, bases: {}, astros: {}, claims: {} };
     try {
       return { ...blank, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
     } catch {
@@ -585,6 +889,71 @@
 
   function astroToSystem(astro) {
     return astro.split(":").slice(0, 3).join(":");
+  }
+
+  function populateArrivalOptions() {
+    if (!claimArrival) return;
+    const defaultValue = nearestQuarterHour(new Date());
+    const options = [];
+
+    for (let hour = 0; hour < 24; hour += 1) {
+      for (let minute = 0; minute < 60; minute += 15) {
+        const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+        options.push(`<option value="${value}">${value}</option>`);
+      }
+    }
+
+    claimArrival.innerHTML = options.join("");
+    claimArrival.value = defaultValue;
+  }
+
+  function nearestQuarterHour(date) {
+    const rounded = new Date(date.getTime());
+    rounded.setSeconds(0, 0);
+    rounded.setMinutes(Math.ceil(rounded.getMinutes() / 15) * 15);
+    if (rounded.getMinutes() === 60) {
+      rounded.setHours(rounded.getHours() + 1, 0, 0, 0);
+    }
+    return `${String(rounded.getHours()).padStart(2, "0")}:${String(rounded.getMinutes()).padStart(2, "0")}`;
+  }
+
+  function nextTimeOfDay(value) {
+    const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+    const next = new Date();
+    if (!match) return next;
+    next.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    if (next.getTime() <= Date.now()) next.setDate(next.getDate() + 1);
+    return next;
+  }
+
+  function formatCountdown(value, doneLabel) {
+    const diff = new Date(value).getTime() - Date.now();
+    if (!Number.isFinite(diff)) return "";
+    if (diff <= 0) return doneLabel;
+
+    const total = Math.floor(diff / 1000);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    if (hours) return `${hours}h ${minutes}m`;
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  }
+
+  function formatLocalDateTime(value) {
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    return date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+
+  function tickClaims() {
+    renderClaimsPanel(selected);
+    renderAttackBoard();
+    paintSector(selected);
   }
 
   function cleanOwnerLabel(value, coord) {

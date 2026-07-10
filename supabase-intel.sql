@@ -46,9 +46,36 @@ create table if not exists public.b24_bases (
   primary key (map_id, coord)
 );
 
+create table if not exists public.b24_claims (
+  map_id text not null,
+  claim_id text not null,
+  target_coord text not null,
+  region_id text not null,
+  system_id text not null,
+  claimed_by text,
+  arrival_at timestamptz,
+  arrival_label text,
+  confirmed_sent boolean not null default false,
+  confirmed_at timestamptz,
+  confirmed_by text,
+  fleet_label text,
+  note text,
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (map_id, claim_id)
+);
+
+alter table public.b24_claims
+add column if not exists confirmed_sent boolean not null default false,
+add column if not exists confirmed_at timestamptz,
+add column if not exists confirmed_by text,
+add column if not exists fleet_label text;
+
 alter table public.b24_systems enable row level security;
 alter table public.b24_astros enable row level security;
 alter table public.b24_bases enable row level security;
+alter table public.b24_claims enable row level security;
 
 drop policy if exists "Anyone can read B24 systems" on public.b24_systems;
 create policy "Anyone can read B24 systems"
@@ -107,6 +134,25 @@ for update
 using (true)
 with check (true);
 
+drop policy if exists "Anyone can read B24 claims" on public.b24_claims;
+create policy "Anyone can read B24 claims"
+on public.b24_claims
+for select
+using (true);
+
+drop policy if exists "Anyone can write B24 claims" on public.b24_claims;
+create policy "Anyone can write B24 claims"
+on public.b24_claims
+for insert
+with check (true);
+
+drop policy if exists "Anyone can update B24 claims" on public.b24_claims;
+create policy "Anyone can update B24 claims"
+on public.b24_claims
+for update
+using (true)
+with check (true);
+
 do $$
 begin
   if not exists (
@@ -134,5 +180,14 @@ begin
       and tablename = 'b24_bases'
   ) then
     alter publication supabase_realtime add table public.b24_bases;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'b24_claims'
+  ) then
+    alter publication supabase_realtime add table public.b24_claims;
   end if;
 end $$;

@@ -65,23 +65,56 @@
       </footer>
 
       <section class="sector-panel" aria-live="polite">
-        <div class="sector-panel-head">
-          <div>
-            <p class="label">Sector Intel</p>
+        <details open>
+          <summary>
+            <span>Sector Intel</span>
             <strong id="sectorPanelTitle">B24:1</strong>
+            <em id="sectorCounts">0 systems / 0 bases</em>
+          </summary>
+          <div class="sector-lists">
+            <div>
+              <p class="label">Known Bases</p>
+              <div class="base-list" id="baseList">No bases imported for this sector.</div>
+            </div>
+            <div>
+              <p class="label">Systems</p>
+              <div class="system-list" id="systemList">No systems imported for this sector.</div>
+            </div>
           </div>
-          <div class="sector-counts" id="sectorCounts">0 systems · 0 bases</div>
-        </div>
-        <div class="sector-lists">
-          <div>
-            <p class="label">Known Bases</p>
-            <div class="base-list" id="baseList">No bases imported for this sector.</div>
+        </details>
+      </section>
+
+      <section class="claims-panel">
+        <details>
+          <summary>
+            <span>Claims</span>
+            <strong id="claimsPanelTitle">B24:1</strong>
+            <em id="claimCounts">0 active</em>
+          </summary>
+          <div class="claim-form">
+            <input id="claimTarget" type="text" inputmode="text" placeholder="B24:44:76:10" />
+            <select id="claimArrival" aria-label="Expected arrival time"></select>
+            <input id="claimNote" type="text" placeholder="Note" />
+            <button class="command-button" id="claimButton" type="button">Claim</button>
           </div>
-          <div>
-            <p class="label">Systems</p>
-            <div class="system-list" id="systemList">No systems imported for this sector.</div>
+          <div class="claim-list" id="claimList">No active claims for this sector.</div>
+        </details>
+      </section>
+
+      <section class="attack-panel">
+        <details>
+          <summary>
+            <span>Attack Board</span>
+            <strong>All B24</strong>
+            <em id="attackCounts">0 planned / 0 confirmed</em>
+          </summary>
+          <div class="confirm-form">
+            <textarea id="confirmFleetText" spellcheck="false" placeholder="Paste a sent fleet row to confirm it is moving."></textarea>
+            <button class="command-button" id="confirmFleetButton" type="button">Confirm Fleet</button>
+            <span id="confirmFleetResult">Paste a fleet row after sending.</span>
           </div>
-        </div>
+          <div class="attack-board" id="attackBoard">No active attacks planned.</div>
+        </details>
       </section>
 
       <section class="intel-panel">
