@@ -1,12 +1,13 @@
 # B24 Vision Tracker
 
-A Telegram Mini App starter for a shared 10x10 guild map. The upper-left tile is `00` and stores no data; the playable sectors are `B24:1` through `B24:99`.
+A Telegram Mini App starter for a shared 10x10 guild intel map. The upper-left tile is `00` and stores no data; the playable sectors are `B24:1` through `B24:99`.
 
 ## Files
 
 - `index.html`, `styles.css`, `app.js`: the Mini App
 - `config.js`: optional Supabase credentials
 - `supabase.sql`: database table, policies, and realtime setup
+- `supabase-intel.sql`: extra tables for systems, astros, bases, and multi-flag sectors
 - `bot/`: a tiny Telegram bot that sends an `Open Map` button
 
 ## Run Locally
@@ -16,7 +17,7 @@ Open `index.html` in a browser. Without Supabase credentials, updates are saved 
 ## Add Live Sync
 
 1. Create a free Supabase project.
-2. Open the SQL editor and run `supabase.sql`.
+2. Open the SQL editor and run `supabase.sql`, then run `supabase-intel.sql`.
 3. Copy `config.example.js` to `config.js`.
 4. Fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 5. Host the folder on GitHub Pages, Netlify, Vercel, or Cloudflare Pages.

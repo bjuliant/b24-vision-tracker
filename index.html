@@ -19,24 +19,24 @@
       </header>
 
       <section class="toolbar" aria-label="Map tools">
-        <button class="tool-button active" data-status="unknown" type="button" title="Unknown">
-          <span class="dot unknown"></span>
-          <span>Unknown</span>
+        <button class="tool-button" data-flag="unknown" type="button" title="Clear selected sector">
+          <span class="flag-chip unknown">U</span>
+          <span>Clear</span>
         </button>
-        <button class="tool-button" data-status="scout" type="button" title="Scout Vision">
-          <span class="dot scout"></span>
+        <button class="tool-button" data-flag="scout" type="button" title="Toggle scout vision">
+          <span class="flag-chip scout">S</span>
           <span>Scout</span>
         </button>
-        <button class="tool-button" data-status="base" type="button" title="Base">
-          <span class="dot base"></span>
-          <span>Base</span>
+        <button class="tool-button" data-flag="friendly" type="button" title="Toggle friendly presence">
+          <span class="flag-chip friendly">F</span>
+          <span>Friend</span>
         </button>
-        <button class="tool-button" data-status="enemy" type="button" title="Enemy Base">
-          <span class="dot enemy"></span>
+        <button class="tool-button" data-flag="enemy" type="button" title="Toggle enemy presence">
+          <span class="flag-chip enemy">E</span>
           <span>Enemy</span>
         </button>
-        <button class="tool-button" data-status="reserved" type="button" title="Reserved">
-          <span class="dot reserved"></span>
+        <button class="tool-button" data-flag="reserved" type="button" title="Toggle reserved/claim activity">
+          <span class="flag-chip reserved">R</span>
           <span>Reserved</span>
         </button>
       </section>
@@ -51,23 +51,42 @@
           <strong id="selectedSector">B24:1</strong>
         </div>
         <div>
-          <p class="label">Status</p>
-          <strong id="selectedStatus">Unknown</strong>
+          <p class="label">Flags</p>
+          <strong id="selectedStatus">None</strong>
         </div>
         <div>
-          <p class="label">Updated By</p>
-          <strong id="selectedUser">Nobody yet</strong>
+          <p class="label">Systems</p>
+          <strong id="selectedSystems">0 known</strong>
         </div>
         <div>
-          <p class="label">Last Update</p>
-          <strong id="selectedTime">Never</strong>
+          <p class="label">Bases</p>
+          <strong id="selectedBases">0 known</strong>
         </div>
       </footer>
+
+      <section class="intel-panel">
+        <details>
+          <summary>Import Intel</summary>
+          <textarea id="importText" spellcheck="false" placeholder="Paste a systems JSON export, base ownership JSON export, or astros report rows."></textarea>
+          <div class="import-actions">
+            <button class="command-button" id="importButton" type="button">Import</button>
+            <button class="command-button" id="bookmarkletButton" type="button">Copy AE Export Bookmarklet</button>
+            <span id="importResult">Ready</span>
+          </div>
+        </details>
+      </section>
     </main>
 
     <template id="cellTemplate">
       <button class="cell unknown" type="button">
         <span class="coord"></span>
+        <span class="intel-count"></span>
+        <span class="flags" aria-hidden="true">
+          <span data-letter="F">F</span>
+          <span data-letter="E">E</span>
+          <span data-letter="S">S</span>
+          <span data-letter="R">R</span>
+        </span>
       </button>
     </template>
 

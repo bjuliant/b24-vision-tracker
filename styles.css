@@ -8,7 +8,7 @@
   --muted: #9fa8a7;
   --unknown: #4b535b;
   --scout: #2678d9;
-  --base: #23a15b;
+  --friendly: #23a15b;
   --enemy: #d64045;
   --reserved: #d4a21f;
   --focus: #f2f5f4;
@@ -109,18 +109,22 @@ h1 {
   border-color: transparent;
 }
 
-.dot {
-  width: 11px;
-  height: 11px;
-  flex: 0 0 11px;
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+.flag-chip {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  font-size: 0.78rem;
+  font-weight: 950;
 }
 
-.cell.unknown { background-color: #343c43; }
-.dot.unknown { background-color: var(--unknown); }
+.unknown { background-color: var(--unknown); }
 .scout { background-color: var(--scout); }
-.base { background-color: var(--base); }
+.friendly { background-color: var(--friendly); }
 .enemy { background-color: var(--enemy); }
 .reserved { background-color: var(--reserved); color: #1e1806; }
 
@@ -148,9 +152,10 @@ h1 {
   min-height: 0;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  align-items: start;
   padding: 5px;
   color: rgba(255, 255, 255, 0.82);
   cursor: pointer;
@@ -162,6 +167,33 @@ h1 {
   color: var(--muted);
   cursor: default;
   opacity: 0.72;
+}
+
+.cell.unknown {
+  background-color: #343c43;
+}
+
+.cell.has-friendly {
+  box-shadow: inset 4px 0 0 var(--friendly);
+}
+
+.cell.has-enemy {
+  background: linear-gradient(135deg, rgba(214, 64, 69, 0.36), #343c43 48%);
+}
+
+.cell.has-scout {
+  box-shadow: inset 0 4px 0 var(--scout);
+}
+
+.cell.has-reserved::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--reserved);
 }
 
 .cell:hover,
@@ -192,12 +224,99 @@ h1 {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
 }
 
+.intel-count {
+  align-self: center;
+  justify-self: center;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: clamp(0.5rem, 1.55vw, 0.7rem);
+  font-weight: 850;
+  line-height: 1;
+}
+
+.flags {
+  align-self: end;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+}
+
+.flags span {
+  min-width: 0;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.26);
+  font-size: clamp(0.45rem, 1.55vw, 0.66rem);
+  font-weight: 950;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.flags span.on-f { background: var(--friendly); color: white; }
+.flags span.on-e { background: var(--enemy); color: white; }
+.flags span.on-s { background: var(--scout); color: white; }
+.flags span.on-r { background: var(--reserved); color: #1e1806; }
+
 .details-panel {
   display: grid;
   grid-template-columns: 0.8fr 1fr 1fr 1.1fr;
   gap: 8px;
   border-top: 1px solid var(--line);
   padding-top: 12px;
+}
+
+.intel-panel {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.intel-panel details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(25, 29, 32, 0.78);
+}
+
+.intel-panel summary {
+  cursor: pointer;
+  padding: 11px 12px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.intel-panel textarea {
+  width: calc(100% - 24px);
+  min-height: 116px;
+  margin: 0 12px 10px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #0e1012;
+  color: var(--text);
+  padding: 10px;
+  font: 0.82rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.import-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 12px 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.command-button {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #24313b;
+  padding: 7px 13px;
+  color: var(--text);
+  font-weight: 850;
+  cursor: pointer;
 }
 
 .details-panel > div {
