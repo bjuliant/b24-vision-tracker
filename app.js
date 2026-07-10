@@ -1,8 +1,6 @@
 (function () {
-  const SECTORS = Array.from({ length: 100 }, (_, index) => {
-    return index === 0 ? "00" : `B24:${index}`;
-  });
-  const PLAYABLE_SECTORS = SECTORS.slice(1);
+  let SECTORS = [];
+  let PLAYABLE_SECTORS = [];
   const FLAG_LABELS = {
     friendly: "F",
     enemy: "E",
@@ -41,20 +39,30 @@
   const bookmarkletButton = document.querySelector("#bookmarkletButton");
   const importResult = document.querySelector("#importResult");
 
-  const mapId = config.MAP_ID || "main";
-  const storageKey = `b24-intel-${mapId}`;
+  const defaultGalaxy = normalizeGalaxy(config.GALAXY || galaxyFromMapId(config.MAP_ID) || "B24");
+  let galaxy = normalizeGalaxy(new URLSearchParams(location.search).get("gal")) || defaultGalaxy;
+  let mapId = galaxyToMapId(galaxy);
+  let storageKey = `vision-intel-${mapId}`;
   const hasSupabase = Boolean(config.SUPABASE_URL && config.SUPABASE_ANON_KEY && window.supabase);
   const user = getTelegramUser();
-  let selected = "B24:1";
+  let selected = `${galaxy}:1`;
   let client = null;
   let realtimeChannel = null;
   let intel = loadLocalState();
 
   init();
 
-  function init() {
+  async function init() {
     tg?.ready();
     tg?.expand();
+
+    if (hasSupabase && !new URLSearchParams(location.search).get("gal")) {
+      client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
+      const preferredGalaxy = await loadPreferredGalaxy();
+      if (preferredGalaxy) setGalaxy(preferredGalaxy);
+    } else {
+      setGalaxy(galaxy);
+    }
 
     populateArrivalOptions();
     renderGrid();
@@ -68,6 +76,22 @@
     } else {
       setSync("Local");
     }
+  }
+
+  function setGalaxy(nextGalaxy) {
+    galaxy = normalizeGalaxy(nextGalaxy) || defaultGalaxy;
+    mapId = galaxyToMapId(galaxy);
+    storageKey = `vision-intel-${mapId}`;
+    selected = `${galaxy}:1`;
+    SECTORS = Array.from({ length: 100 }, (_, index) => {
+      return index === 0 ? "00" : `${galaxy}:${index}`;
+    });
+    PLAYABLE_SECTORS = SECTORS.slice(1);
+    intel = loadLocalState();
+    document.querySelector(".eyebrow").textContent = galaxy;
+    document.title = `${galaxy} Vision Tracker`;
+    grid.setAttribute("aria-label", `${galaxy} sector map`);
+    claimTarget.placeholder = `${galaxy}:44:76:10`;
   }
 
   function renderGrid() {
@@ -122,7 +146,7 @@
 
   async function connectSupabase() {
     setSync("Syncing");
-    client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
+    client ||= window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
 
     try {
       await Promise.all([
@@ -229,6 +253,18 @@
     if (error) return;
     data.forEach(mergeClaimRow);
     saveLocalState();
+  }
+
+  async function loadPreferredGalaxy() {
+    const tgUser = tg?.initDataUnsafe?.user;
+    if (!tgUser?.id || !client) return "";
+    const { data, error } = await client
+      .from("b24_user_settings")
+      .select("galaxy")
+      .eq("user_id", String(tgUser.id))
+      .limit(1);
+    if (error) return "";
+    return normalizeGalaxy(data?.[0]?.galaxy || "");
   }
 
   function mergeSectorRow(row) {
@@ -375,7 +411,7 @@
   async function createClaim() {
     const target = normalizeAstro(claimTarget.value.trim());
     if (!target) {
-      claimList.textContent = "Use a full target like B24:44:76:10.";
+      claimList.textContent = `Use a full target like ${galaxy}:44:76:10.`;
       return;
     }
 
@@ -511,7 +547,7 @@
       return;
     }
 
-    const coords = [...new Set(text.match(/B24:\d{2}:\d{2}:\d{2}/g) || [])];
+    const coords = [...new Set(text.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "g")) || [])];
     const activeClaims = getAllActiveClaims();
     const matches = activeClaims.filter((claim) => coords.includes(claim.target));
 
@@ -537,7 +573,7 @@
       return;
     }
 
-    const code = `javascript:(async()=>{const MAP_ID=${JSON.stringify(mapId)},SUPA=${JSON.stringify(config.SUPABASE_URL)},KEY=${JSON.stringify(config.SUPABASE_ANON_KEY)};const now=new Date().toISOString();const hdr={'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'};const post=async(t,r,c)=>{if(!r.length)return 0;const u=SUPA+'/rest/v1/'+t+'?on_conflict='+encodeURIComponent(c);const x=await fetch(u,{method:'POST',headers:hdr,body:JSON.stringify(r)});if(!x.ok)throw new Error(t+': '+await x.text());return r.length};const reg=v=>{const m=String(v||'').match(/^B24:(\\d{1,2})/);return m?'B24:'+Number(m[1]):''};const sys=v=>String(v||'').split(':').slice(0,3).join(':');const clean=(v,c)=>String(v||'').replace(/^44-;-\\s*/,'').replace(c,'').replace(/\\s+/g,' ').trim();const html=document.documentElement.innerHTML;const systems=[...new Set(html.match(/B24:\\d{2}:\\d{2}(?!:)/g)||[])].map(c=>({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:c.split(':')[2],updated_at:now}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const v of Object.values(mapToolBox_data||{})){const s=String(v||'');const c=(s.match(/B24:\\d{2}:\\d{2}:\\d{2}/)||[])[0];if(!c)continue;const g=(s.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'';const txt=s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').trim();bases.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),guild:g,label:clean(txt,c),updated_at:now})}}const seen={};const uniqueBases=bases.filter(b=>!seen[b.coord]&&(seen[b.coord]=1));const body=document.body.innerText||'';const astros=[];for(const line of body.split(/\\r?\\n/)){const m=line.trim().match(/^(B24:\\d{2}:\\d{2}:\\d{2})\\s+([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(!m)continue;astros.push({map_id:MAP_ID,coord:m[1],region_id:reg(m[1]),system_id:sys(m[1]),astro_no:m[1].split(':')[3],terrain:m[2],astro_type:m[3],attributes:m[4].trim().split(/\\s+/).map(Number),has_base:m[5]==='Yes',updated_at:now})}try{const a=await post('b24_systems',systems,'map_id,coord');const b=await post('b24_bases',uniqueBases,'map_id,coord');const c=await post('b24_astros',astros,'map_id,coord');alert('VisionBot import complete: '+a+' systems, '+b+' bases, '+c+' astros')}catch(e){console.error(e);alert('VisionBot import failed: '+e.message)}})()`;
+    const code = `javascript:(async()=>{const GALAXY=${JSON.stringify(galaxy)},MAP_ID=${JSON.stringify(mapId)},SUPA=${JSON.stringify(config.SUPABASE_URL)},KEY=${JSON.stringify(config.SUPABASE_ANON_KEY)};const now=new Date().toISOString();const hdr={'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'};const post=async(t,r,c)=>{if(!r.length)return 0;const u=SUPA+'/rest/v1/'+t+'?on_conflict='+encodeURIComponent(c);const x=await fetch(u,{method:'POST',headers:hdr,body:JSON.stringify(r)});if(!x.ok)throw new Error(t+': '+await x.text());return r.length};const re3=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}(?!:)','g');const re4=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const reg=v=>{const m=String(v||'').match(new RegExp('^'+GALAXY+':(\\\\d{1,2})'));return m?GALAXY+':'+Number(m[1]):''};const sys=v=>String(v||'').split(':').slice(0,3).join(':');const clean=(v,c)=>String(v||'').replace(/^44-;-\\s*/,'').replace(c,'').replace(/\\s+/g,' ').trim();const html=document.documentElement.innerHTML;const systems=[...new Set(html.match(re3)||[])].map(c=>({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:c.split(':')[2],updated_at:now}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const v of Object.values(mapToolBox_data||{})){const s=String(v||'');const c=(s.match(re4)||[])[0];if(!c)continue;const g=(s.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'';const txt=s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').trim();bases.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),guild:g,label:clean(txt,c),updated_at:now})}}const seen={};const uniqueBases=bases.filter(b=>!seen[b.coord]&&(seen[b.coord]=1));const body=document.body.innerText||'';const astros=[];for(const line of body.split(/\\r?\\n/)){const c=(line.match(re4)||[])[0];if(!c)continue;const rest=line.replace(c,'').trim();const m=rest.match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(!m)continue;astros.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),astro_no:c.split(':')[3],terrain:m[1],astro_type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),has_base:m[4]==='Yes',updated_at:now})}try{const a=await post('b24_systems',systems,'map_id,coord');const b=await post('b24_bases',uniqueBases,'map_id,coord');const c=await post('b24_astros',astros,'map_id,coord');alert('VisionBot import complete for '+GALAXY+': '+a+' systems, '+b+' bases, '+c+' astros')}catch(e){console.error(e);alert('VisionBot import failed: '+e.message)}})()`;
 
     try {
       await navigator.clipboard.writeText(code);
@@ -586,7 +622,8 @@
     const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
     lines.forEach((line) => {
-      const match = line.match(/^(B24:\d{2}:\d{2}:\d{2})\s+([A-Za-z]+)\s+([A-Za-z]+)\s+((?:\d+\s+){5}\d+)(?:\s+(Yes))?/);
+      const pattern = new RegExp(`^(${galaxy}:\\d{2}:\\d{2}:\\d{2})\\s+([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?`);
+      const match = line.match(pattern);
       if (!match) return;
 
       const coord = normalizeAstro(match[1]);
@@ -793,8 +830,9 @@
         ? `<button class="unclaim-button" type="button" data-unconfirm-claim="${escapeHtml(claim.id)}">Unconfirm</button>`
         : `<button class="unclaim-button" type="button" data-confirm-claim="${escapeHtml(claim.id)}">Confirm Sent</button>`;
       const fleet = claim.fleetLabel ? `<span class="attack-meta">${escapeHtml(claim.fleetLabel)}</span>` : "";
+      const claimerTime = claim.arrivalLabel ? ` / ${escapeHtml(claim.arrivalLabel)} claimer time` : "";
 
-      return `<div class="attack-row"><div><strong>${escapeHtml(attacker)}</strong><span class="attack-meta">${escapeHtml(claim.target)}${note}</span>${fleet}</div><div><strong>${escapeHtml(localTime)}</strong><span class="attack-meta">Lands ${escapeHtml(countdown)} / ${escapeHtml(claim.arrivalLabel || "")} claimer time</span></div><div class="attack-actions"><span class="attack-status ${statusClass}">${status}</span>${action}<button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div></div>`;
+      return `<div class="attack-row"><div><strong>${escapeHtml(attacker)}</strong><span class="attack-meta">${escapeHtml(claim.target)}${note}</span>${fleet}</div><div><strong>${escapeHtml(localTime)}</strong><span class="attack-meta">Lands ${escapeHtml(countdown)}${claimerTime}</span></div><div class="attack-actions"><span class="attack-status ${statusClass}">${status}</span>${action}<button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div></div>`;
     }).join("");
   }
 
@@ -870,13 +908,15 @@
   }
 
   function normalizeSystem(value) {
-    const match = String(value || "").match(/^B24:(\d{2}):(\d{2})$/);
-    return match ? `B24:${match[1]}:${match[2]}` : "";
+    const pattern = new RegExp(`^${galaxy}:(\\d{2}):(\\d{2})$`);
+    const match = String(value || "").toUpperCase().match(pattern);
+    return match ? `${galaxy}:${match[1]}:${match[2]}` : "";
   }
 
   function normalizeAstro(value) {
-    const match = String(value || "").match(/^B24:(\d{2}):(\d{2}):(\d{2})$/);
-    return match ? `B24:${match[1]}:${match[2]}:${match[3]}` : "";
+    const pattern = new RegExp(`^${galaxy}:(\\d{2}):(\\d{2}):(\\d{2})$`);
+    const match = String(value || "").toUpperCase().match(pattern);
+    return match ? `${galaxy}:${match[1]}:${match[2]}:${match[3]}` : "";
   }
 
   function systemToRegion(system) {
@@ -964,6 +1004,20 @@
       .trim();
   }
 
+  function normalizeGalaxy(value) {
+    const match = String(value || "").toUpperCase().match(/^B\d{2}$/);
+    return match ? match[0] : "";
+  }
+
+  function galaxyToMapId(value) {
+    return `${normalizeGalaxy(value).toLowerCase()}-main`;
+  }
+
+  function galaxyFromMapId(value) {
+    const match = String(value || "").toUpperCase().match(/^(B\d{2})/);
+    return match ? match[1] : "";
+  }
+
   function escapeHtml(value) {
     return String(value || "")
       .replace(/&/g, "&amp;")
@@ -974,9 +1028,10 @@
   }
 
   function normalizeRegionId(value) {
-    const match = String(value || "").match(/^B24:(\d{1,2})$/);
+    const pattern = new RegExp(`^${galaxy}:(\\d{1,2})$`);
+    const match = String(value || "").toUpperCase().match(pattern);
     if (!match) return String(value || "");
-    return `B24:${Number(match[1])}`;
+    return `${galaxy}:${Number(match[1])}`;
   }
 
   function flagsFromLegacyStatus(status) {
