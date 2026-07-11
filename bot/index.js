@@ -7,6 +7,7 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 const defaultGalaxy = normalizeGalaxy(process.env.DEFAULT_GALAXY || process.env.GALAXY || "B24");
 const port = Number(process.env.PORT || 10000);
+const webhookBaseUrl = (process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
 const approvedChatIds = parseCsv(process.env.APPROVED_CHAT_IDS);
 const accessChatIds = parseCsv(process.env.ACCESS_CHAT_IDS || process.env.COMMAND_STAFF_CHAT_IDS);
 const officerUserIds = parseCsv(process.env.OFFICER_USER_IDS);
@@ -24,6 +25,8 @@ const attackedPattern = /^[!$](attacked|sos)\s+(.+)$/i;
 const minePattern = /^[!$]mine\s+(.+)$/i;
 const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
+const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
+const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
 
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
@@ -2596,15 +2599,36 @@ function escapeHtml(value) {
   return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
+
 http.createServer((request, response) => {
+  const path = new URL(request.url || "/", "http://localhost").pathname;
+  if (webhookHandler && path === webhookPath) {
+    return webhookHandler(request, response);
+  }
+
   response.writeHead(200, { "Content-Type": "text/plain" });
-  response.end("VisionBot is running\n");
+  response.end(`VisionBot is running\nMode: ${webhookUrl ? "webhook" : "polling"}\n`);
 }).listen(port, "0.0.0.0", () => {
   console.log(`Health server listening on ${port}`);
 });
 
-bot.launch();
-startNotificationWorker();
+startBot().catch((error) => {
+  console.error("Bot startup failed", error);
+  process.exitCode = 1;
+});
+
+async function startBot() {
+  if (webhookUrl) {
+    await bot.telegram.setWebhook(webhookUrl);
+    console.log(`Telegram webhook set to ${webhookUrl}`);
+  } else {
+    await bot.telegram.deleteWebhook();
+    await bot.launch();
+    console.log("Telegram polling started");
+  }
+  startNotificationWorker();
+}
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
