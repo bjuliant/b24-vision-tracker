@@ -28,10 +28,17 @@ const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
 
+bot.use(async (ctx, next) => {
+  const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
+  console.log(`Telegram update ${ctx.updateType || "unknown"} chat=${ctx.chat?.id || "none"} from=${ctx.from?.id || "none"} text=${String(text).slice(0, 120)}`);
+  return next();
+});
+
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
 bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }));
+bot.command("status", (ctx) => ctx.reply(`VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nChat: ${ctx.chat?.id || "unknown"}`));
 bot.command("board", async (ctx) => {
   if (!chatApproved(ctx)) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
   if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
@@ -2604,6 +2611,7 @@ const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
 http.createServer((request, response) => {
   const path = new URL(request.url || "/", "http://localhost").pathname;
   if (webhookHandler && path === webhookPath) {
+    console.log(`Webhook request received: ${request.method} ${path}`);
     return webhookHandler(request, response);
   }
 
