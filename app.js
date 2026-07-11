@@ -44,6 +44,10 @@
   const parsedTotal = document.querySelector("#parsedTotal");
   const parsedStale = document.querySelector("#parsedStale");
   const parsedUnclaimed = document.querySelector("#parsedUnclaimed");
+  const attackWindowStart = document.querySelector("#attackWindowStart");
+  const attackWindowSummary = document.querySelector("#attackWindowSummary");
+  const finalizeAttackButton = document.querySelector("#finalizeAttackButton");
+  const finalizeStatus = document.querySelector("#finalizeStatus");
   const baseList = document.querySelector("#baseList");
   const systemList = document.querySelector("#systemList");
   const template = document.querySelector("#cellTemplate");
@@ -61,6 +65,7 @@
   let storageKey = `vision-intel-${mapId}`;
   const hasSupabase = Boolean(config.SUPABASE_URL && config.SUPABASE_ANON_KEY && window.supabase);
   const user = getTelegramUser();
+  const telegramChatId = getTelegramChatId();
   let selected = `${galaxy}:1`;
   let highlightedSector = "";
   let client = null;
@@ -147,6 +152,12 @@
     importButton.addEventListener("click", importIntel);
     bookmarkletButton.addEventListener("click", copyBookmarklet);
     claimButton.addEventListener("click", createClaim);
+    attackWindowStart.addEventListener("change", () => {
+      populateArrivalOptions();
+      renderWindowSummary();
+      renderBulkTargets();
+    });
+    finalizeAttackButton.addEventListener("click", finalizeParsedAttack);
     bulkTargetText.addEventListener("input", renderBulkTargets);
     bulkClearButton.addEventListener("click", () => {
       bulkTargetText.value = "";
@@ -155,7 +166,9 @@
     parsedTargets.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-claim-target]");
       if (!button) return;
-      await createClaimForTarget(button.dataset.claimTarget, button.dataset.claimNote || "");
+      const row = button.closest(".target-row");
+      const arrivalLabel = row?.querySelector("[data-wave-time]")?.value || "";
+      await createClaimForTarget(button.dataset.claimTarget, button.dataset.claimNote || "", arrivalLabel);
       renderBulkTargets();
     });
     claimList.addEventListener("click", (event) => {
@@ -488,20 +501,25 @@
       return;
     }
 
-    await createClaimForTarget(target, claimNote.value.trim());
+    await createClaimForTarget(target, claimNote.value.trim(), claimArrival.value);
     claimTarget.value = "";
     claimNote.value = "";
   }
 
-  async function createClaimForTarget(target, note = "") {
+  async function createClaimForTarget(target, note = "", arrivalOverride = "") {
     target = normalizeAstro(target);
     if (!target) return;
+    if (!attackWindowStart.value) {
+      claimList.textContent = "Pick a 4 hour landing window before claiming targets.";
+      finalizeStatus.textContent = "Landing window required.";
+      return;
+    }
 
     const region = astroToRegion(target);
     if (region !== selected) selectSector(region);
 
     const now = new Date();
-    const arrivalLabel = claimArrival.value || nearestQuarterHour(now);
+    const arrivalLabel = arrivalOverride || claimArrival.value || nearestQuarterHour(now);
     const arrivalAt = nextTimeOfDay(arrivalLabel).toISOString();
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const stamp = now.toISOString();
@@ -549,6 +567,7 @@
       fleet_label: "",
       note: claim.note,
       status: "active",
+      chat_id: telegramChatId || null,
       created_at: stamp,
       updated_at: stamp
     });
@@ -963,20 +982,49 @@
       return;
     }
 
+    const waveOptions = landingWindowOptions().map((value) => `<option value="${value}">${value}</option>`).join("");
+    const hasWindow = Boolean(attackWindowStart.value);
     parsedTargets.innerHTML = [
-      `<div class="target-row target-head"><span>Coordinate</span><span>Guild Tags</span><span>Player Name</span><span>Intel Age</span><span>Status</span><span>Action</span></div>`,
+      `<div class="target-row target-head"><span>Coordinate</span><span>Guild Tags</span><span>Player Name</span><span>Intel Age</span><span>Wave Time</span><span>Status</span><span>Action</span></div>`,
       ...rows.map((row) => {
         const claimed = activeTargets.has(row.coord);
         const note = [row.guildTags, row.player].filter(Boolean).join(" ");
         const status = claimed ? "CLAIMED" : row.status;
         const statusClass = claimed ? "claimed" : row.status.toLowerCase();
+        const wave = hasWindow
+          ? `<select data-wave-time aria-label="Landing time for ${escapeHtml(row.coord)}">${waveOptions}</select>`
+          : `<select data-wave-time disabled aria-label="Landing time for ${escapeHtml(row.coord)}"><option>Pick window first</option></select>`;
         const action = claimed
           ? `<button class="row-claim-button" type="button" disabled>Claimed</button>`
-          : `<button class="row-claim-button" type="button" data-claim-target="${escapeHtml(row.coord)}" data-claim-note="${escapeHtml(note)}">Claim</button>`;
+          : `<button class="row-claim-button" type="button" ${hasWindow ? "" : "disabled"} data-claim-target="${escapeHtml(row.coord)}" data-claim-note="${escapeHtml(note)}">Claim</button>`;
 
-        return `<div class="target-row"><span><strong>${escapeHtml(row.coord)}</strong></span><span>${escapeHtml(row.guildTags || "-")}</span><span>${escapeHtml(row.player || "Unknown")}</span><span>${escapeHtml(row.age || "Unknown")}</span><span><mark class="${escapeHtml(statusClass)}">${escapeHtml(status)}</mark></span><span>${action}</span></div>`;
+        return `<div class="target-row"><span><strong>${escapeHtml(row.coord)}</strong></span><span>${escapeHtml(row.guildTags || "-")}</span><span>${escapeHtml(row.player || "Unknown")}</span><span>${escapeHtml(row.age || "Unknown")}</span><span>${wave}</span><span><mark class="${escapeHtml(statusClass)}">${escapeHtml(status)}</mark></span><span>${action}</span></div>`;
       })
     ].join("");
+  }
+
+  async function finalizeParsedAttack() {
+    const rows = parseBulkTargets(bulkTargetText.value);
+    if (!rows.length) {
+      finalizeStatus.textContent = "Paste targets before finalizing.";
+      return;
+    }
+    if (!attackWindowStart.value) {
+      finalizeStatus.textContent = "Pick a 4 hour landing window first.";
+      return;
+    }
+
+    const activeTargets = new Set(getAllActiveClaims().map((claim) => claim.target));
+    const rowNodes = Array.from(parsedTargets.querySelectorAll(".target-row:not(.target-head)"));
+    const toClaim = rows.filter((row) => !activeTargets.has(row.coord));
+    for (const row of toClaim) {
+      const node = rowNodes.find((candidate) => candidate.textContent.includes(row.coord));
+      const arrivalLabel = node?.querySelector("[data-wave-time]")?.value || attackWindowStart.value;
+      const note = [row.guildTags, row.player].filter(Boolean).join(" ");
+      await createClaimForTarget(row.coord, note, arrivalLabel);
+    }
+    finalizeStatus.textContent = `Finalized ${toClaim.length} target${toClaim.length === 1 ? "" : "s"} into live claims.`;
+    renderBulkTargets();
   }
 
   function parseBulkTargets(text) {
@@ -1128,19 +1176,54 @@
   }
 
   function populateArrivalOptions() {
-    if (!claimArrival) return;
     const defaultValue = nearestQuarterHour(new Date());
-    const options = [];
+    const allOptions = [];
 
     for (let hour = 0; hour < 24; hour += 1) {
       for (let minute = 0; minute < 60; minute += 15) {
         const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-        options.push(`<option value="${value}">${value}</option>`);
+        allOptions.push(`<option value="${value}">${value}</option>`);
       }
     }
 
-    claimArrival.innerHTML = options.join("");
-    claimArrival.value = defaultValue;
+    if (attackWindowStart && !attackWindowStart.options.length) {
+      attackWindowStart.innerHTML = `<option value="">Pick 4 hour window</option>${allOptions.join("")}`;
+      attackWindowStart.value = "";
+    }
+    if (claimArrival) {
+      const options = landingWindowOptions();
+      claimArrival.disabled = !options.length;
+      claimArrival.innerHTML = options.length
+        ? options.map((value) => `<option value="${value}">${value}</option>`).join("")
+        : `<option value="">Pick landing window first</option>`;
+      claimArrival.value = options.includes(defaultValue) ? defaultValue : options[0] || "";
+    }
+    renderWindowSummary();
+  }
+
+  function landingWindowOptions() {
+    const start = attackWindowStart?.value || "";
+    if (!start) return [];
+    const base = nextTimeOfDay(start);
+    const options = [];
+    for (let offset = 0; offset < 240; offset += 15) {
+      const time = new Date(base.getTime() + offset * 60 * 1000);
+      options.push(`${String(time.getHours()).padStart(2, "0")}:${String(time.getMinutes()).padStart(2, "0")}`);
+    }
+    return options;
+  }
+
+  function renderWindowSummary() {
+    if (!attackWindowSummary) return;
+    const options = landingWindowOptions();
+    if (!options.length) {
+      attackWindowSummary.textContent = "Required before claiming or finalizing";
+      return;
+    }
+    const start = options[0];
+    const endDate = new Date(nextTimeOfDay(start).getTime() + 4 * 60 * 60 * 1000);
+    const end = `${String(endDate.getHours()).padStart(2, "0")}:${String(endDate.getMinutes()).padStart(2, "0")}`;
+    attackWindowSummary.textContent = `${start} to ${end} local/server display`;
   }
 
   function nearestQuarterHour(date) {
@@ -1266,6 +1349,11 @@
     const tgUser = tg?.initDataUnsafe?.user;
     if (!tgUser) return "Local user";
     return tgUser.username ? `@${tgUser.username}` : [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ");
+  }
+
+  function getTelegramChatId() {
+    const chat = tg?.initDataUnsafe?.chat;
+    return chat?.id ? String(chat.id) : "";
   }
 
   function setSync(label, live = false) {

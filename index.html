@@ -101,6 +101,22 @@
         </details>
       </section>
 
+      <section class="attack-setup-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Attack Setup</h2>
+            <p>Pick a 4 hour landing window before creating manual or parsed claims.</p>
+          </div>
+          <div class="setup-controls">
+            <label>
+              Landing Window
+              <select id="attackWindowStart" aria-label="Landing window start"></select>
+            </label>
+            <span id="attackWindowSummary">No landing window selected</span>
+          </div>
+        </div>
+      </section>
+
       <section class="claims-panel">
         <details open>
           <summary>
@@ -142,8 +158,10 @@
             <span id="parsedTotal">Total: 0</span>
             <span id="parsedStale">Stale: 0</span>
             <span id="parsedUnclaimed">Unclaimed: 0</span>
+            <button class="command-button" id="finalizeAttackButton" type="button">Finalize Attack</button>
           </div>
         </div>
+        <div class="finalize-status" id="finalizeStatus">Select a landing window, review waves, then finalize.</div>
         <div class="target-table" id="parsedTargets">Paste target intel above to build a claim list.</div>
       </section>
 
