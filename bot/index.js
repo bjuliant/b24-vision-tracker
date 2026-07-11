@@ -33,13 +33,16 @@ bot.command("board", (ctx) => {
 bot.on("text", handleText);
 bot.on("channel_post", handleText);
 bot.action(/^op:(join|ready|sent|leave|status|close):(.+)$/, handleOperationButton);
+bot.action(/^intel:(B\d{2}:\d{2}:\d{2}(?::\d{2})?)$/, handleIntelButton);
+bot.action(/^bases:(.+)$/, handleBasesButton);
+bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
 
 async function sendMapButton(ctx) {
   const galaxy = await galaxyForContext(ctx);
   return ctx.reply(
     `${galaxy} Vision Tracker`,
     Markup.inlineKeyboard([
-      Markup.button.webApp("Open Map", mapUrl(galaxy))
+      Markup.button.url("Open Map", mapUrl(galaxy))
     ])
   );
 }
@@ -57,6 +60,10 @@ async function handleText(ctx) {
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
+  if (isCommand(lower, "guild")) return handleGuild(ctx, text, mode);
+
+  if (isProtectedOperationalCommand(lower) && !isPrivateChat(ctx)) await rememberActiveChat(ctx);
+
   if (isCommand(lower, "claim")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
@@ -88,10 +95,16 @@ async function handleText(ctx) {
     : await buildAstroReport(lookup.coord);
 
   if (lookupMode === "!") {
-    return respond(ctx, lookupMode, report, { parse_mode: "HTML" });
+    return respond(ctx, lookupMode, report, {
+      parse_mode: "HTML",
+      ...(await intelKeyboard(lookup.coord))
+    });
   }
 
-  await respond(ctx, lookupMode, report, { parse_mode: "HTML" });
+  await respond(ctx, lookupMode, report, {
+    parse_mode: "HTML",
+    ...(await intelKeyboard(lookup.coord))
+  });
 }
 
 async function handleOperationButton(ctx) {
@@ -114,14 +127,15 @@ async function handleOperationButton(ctx) {
       return;
     }
     await updateRows("b24_operations", {
-      status: "closed",
+      status: "stood_down",
       updated_at: new Date().toISOString()
     }, {
       map_id: `eq.${operation.map_id}`,
       operation_id: `eq.${operation.operation_id}`
     });
-    await ctx.answerCbQuery(`${operation.short_id} closed.`);
-    await refreshOperationMessage(ctx, { ...operation, status: "closed" });
+    await closeLinkedOperationRows(operation, "stood_down");
+    await ctx.answerCbQuery(`${operation.short_id} stood down.`);
+    await refreshOperationMessage(ctx, { ...operation, status: "stood_down" });
     return;
   }
 
@@ -129,6 +143,31 @@ async function handleOperationButton(ctx) {
   await upsertOperationMember(ctx, operation, state, "");
   await ctx.answerCbQuery(`${operation.short_id}: ${state}`);
   await refreshOperationMessage(ctx, operation);
+}
+
+async function handleIntelButton(ctx) {
+  const coord = ctx.match?.[1] || "";
+  const report = coord.split(":").length === 3
+    ? await buildSystemReport(coord)
+    : await buildAstroReport(coord);
+  await ctx.answerCbQuery("Intel");
+  return ctx.reply(report, {
+    parse_mode: "HTML",
+    ...(await intelKeyboard(coord))
+  });
+}
+
+async function handleBasesButton(ctx) {
+  const query = decodeButtonValue(ctx.match?.[1] || "");
+  await ctx.answerCbQuery("Bases");
+  return sendBasesReport(ctx, "$", query);
+}
+
+async function handleClaimButton(ctx) {
+  const coord = ctx.match?.[1] || "";
+  const text = `$claim ${coord} 240 button claim`;
+  await ctx.answerCbQuery("Claiming 4h");
+  return handleClaim(ctx, text, "$");
 }
 
 function helpText(input = "") {
@@ -255,6 +294,14 @@ function helpText(input = "") {
       "Examples:",
       "<code>!g B24</code>",
       "<code>!setgalaxy B23</code>"
+    ],
+    guild: [
+      "<b>Guild Scope Help</b>",
+      "",
+      "<code>$guild bind</code> - remember this group as your active operation group",
+      "<code>!guild status</code> - show your active operation group",
+      "",
+      "Group operation commands also remember the group automatically."
     ]
   };
 
@@ -268,6 +315,7 @@ function helpText(input = "") {
     "<code>/map</code> - open your current galaxy map",
     "<code>!g</code> - set your personal galaxy",
     "<code>!setgalaxy</code> - set this chat's galaxy",
+    "<code>$guild bind</code>/<code>!guild status</code> - set/check active operation group",
     "<code>![coord]</code> - DM planet intel to you",
     "<code>$[coord]</code> - post planet intel here",
     "<code>!intel</code>/<code>$intel</code> - coordinate intel lookup",
@@ -288,7 +336,7 @@ function helpText(input = "") {
     "<code>!me</code>/<code>$me</code> - show your saved bases",
     "<code>!save me</code>/<code>$save me</code> - save a note on your base",
     "",
-    "Details: <code>!help claim</code>, <code>!help scout</code>, <code>!help op</code>, <code>!help intel</code>, <code>!help stale</code>, <code>!help score</code>, <code>!help incoming</code>, <code>!help bases</code>, <code>!help board</code>, <code>!help galaxy</code>"
+    "Details: <code>!help claim</code>, <code>!help scout</code>, <code>!help op</code>, <code>!help intel</code>, <code>!help stale</code>, <code>!help score</code>, <code>!help incoming</code>, <code>!help bases</code>, <code>!help board</code>, <code>!help galaxy</code>, <code>!help guild</code>"
   ].join("\n");
 }
 
@@ -298,11 +346,10 @@ function deliveryMode(text) {
 }
 
 function normalizeIncomingText(text) {
-  return String(text || "")
-    .trim()
-    .replace(/^@\w+\s+/, "")
-    .replace(/\s+@\w+$/, "")
-    .trim();
+  let value = String(text || "").trim();
+  value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
+  value = value.replace(/\s+@\w+$/, "").trim();
+  return value.replace(/^@(help|g|setgalaxy|guild|claim|scout|attacked|sos|intel|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function isCommand(lowerText, command) {
@@ -338,7 +385,8 @@ function isProtectedOperationalCommand(lowerText) {
     "claimed",
     "mine",
     "me",
-    "save me"
+    "save me",
+    "guild"
   ].some((command) => isCommand(lowerText, command) || isExactCommand(lowerText, command));
 }
 
@@ -440,6 +488,20 @@ async function handleChatGalaxy(ctx, text, mode) {
   return respond(ctx, mode, `This chat's default galaxy is now ${galaxy}.`);
 }
 
+async function handleGuild(ctx, text, mode) {
+  const action = String(text || "").trim().split(/\s+/)[1]?.toLowerCase() || "status";
+  if (action === "bind") {
+    if (isPrivateChat(ctx)) return respond(ctx, mode, "Use $guild bind in the guild group you want this bot to coordinate.");
+    if (!(await rememberActiveChat(ctx))) return respond(ctx, mode, "Could not bind this group.");
+    return respond(ctx, mode, `Active operation group set to ${escapeHtml(chatTitle(ctx))}.`, { parse_mode: "HTML" });
+  }
+
+  if (!ctx.from?.id) return respond(ctx, mode, "Use this from a user account so I know whose active group to check.");
+  const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
+  if (!settings?.active_chat_id) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  return respond(ctx, mode, `Active operation group: ${escapeHtml(settings.active_chat_label || settings.active_chat_id)}`, { parse_mode: "HTML" });
+}
+
 async function handleClaim(ctx, text, mode) {
   const match = text.trim().match(claimPattern);
   if (!match) return respond(ctx, mode, "Use: !claim B24:24:34:06 10 optional note");
@@ -454,11 +516,18 @@ async function handleClaim(ctx, text, mode) {
 
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const duplicate = await findActiveOperationByTarget(mapIdForCoord(target), scopeId, "attack", "target_coord", target);
+  if (duplicate) {
+    return respond(ctx, mode, `Existing attack ${escapeHtml(duplicate.short_id)} already targets ${escapeHtml(target)}. Use !join ${escapeHtml(duplicate.short_id)} instead.`, { parse_mode: "HTML" });
+  }
   const operation = operationRow(ctx, {
     type: "attack",
     targetCoord: target,
     arrivalAt,
-    note
+    note,
+    chatId: scopeId
   });
   const claim = {
     map_id: mapIdForCoord(target),
@@ -470,7 +539,7 @@ async function handleClaim(ctx, text, mode) {
     system_id: astroToSystem(target),
     claimed_by: telegramName(ctx),
     claimed_by_user_id: telegramUserId(ctx),
-    chat_id: chatScopeId(ctx),
+    chat_id: scopeId,
     arrival_at: arrivalAt.toISOString(),
     arrival_label: "",
     confirmed_sent: false,
@@ -503,11 +572,14 @@ async function handleScout(ctx, text, mode) {
   if (!validMinutes(minutes)) return respond(ctx, mode, "Use minutes from now, 1 to 1440.");
 
   const now = new Date();
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const operation = operationRow(ctx, {
     type: "scout",
     targetCoord: parsed.coord,
     arrivalAt: new Date(now.getTime() + minutes * 60 * 1000),
-    note: timed.note || parsed.remainder.trim()
+    note: timed.note || parsed.remainder.trim(),
+    chatId: scopeId
   });
 
   if (!(await insertRow("b24_operations", operation))) return respond(ctx, mode, "Scout request failed. I could not create the operation.");
@@ -522,19 +594,30 @@ async function handleScout(ctx, text, mode) {
 async function handleTargets(ctx, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !targets in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const claims = await fetchRows("b24_claims", {
     claimed_by_user_id: `eq.${telegramUserId(ctx)}`,
     status: "eq.active",
+    chat_id: `eq.${scopeId}`,
     arrival_at: `gt.${new Date().toISOString()}`
   }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
   const message = claims.length ? claims.map(formatClaimLine).join("\n") : `You have no active claimed targets in ${galaxy}.`;
-  return respond(ctx, mode, message, { parse_mode: "HTML" });
+  return respond(ctx, mode, message, {
+    parse_mode: "HTML",
+    ...claimListKeyboard(claims)
+  });
 }
 
 async function handleClaimed(ctx, mode) {
   const galaxy = await galaxyForContext(ctx);
-  const claims = await fetchActiveClaims(galaxy, chatScopeId(ctx));
-  return respond(ctx, mode, claims.length ? claims.map(formatClaimLine).join("\n") : `No active attacks claimed in ${galaxy}.`, { parse_mode: "HTML" });
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const claims = await fetchActiveClaims(galaxy, scopeId);
+  return respond(ctx, mode, claims.length ? claims.map(formatClaimLine).join("\n") : `No active attacks claimed in ${galaxy}.`, {
+    parse_mode: "HTML",
+    ...claimListKeyboard(claims)
+  });
 }
 
 async function handleAttacked(ctx, text, mode) {
@@ -552,13 +635,20 @@ async function handleAttacked(ctx, text, mode) {
 
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const duplicate = await findActiveOperationByTarget(mapIdForCoord(defended || attacker), scopeId, "defense", "defended_coord", defended);
+  if (duplicate) {
+    return respond(ctx, mode, `Existing defense ${escapeHtml(duplicate.short_id)} already covers ${escapeHtml(defended)}. Use !respond ${escapeHtml(duplicate.short_id)} instead.`, { parse_mode: "HTML" });
+  }
   const operation = operationRow(ctx, {
     type: "defense",
     targetCoord: defended,
     defendedCoord: defended,
     hostileOrigin: attacker,
     arrivalAt,
-    note
+    note,
+    chatId: scopeId
   });
   const incoming = {
     map_id: mapIdForCoord(defended || attacker),
@@ -575,7 +665,7 @@ async function handleAttacked(ctx, text, mode) {
     arrival_at: arrivalAt.toISOString(),
     reported_by: telegramName(ctx),
     reported_by_user_id: telegramUserId(ctx),
-    chat_id: chatScopeId(ctx),
+    chat_id: scopeId,
     hostile_fleet: "",
     severity: "",
     verified: false,
@@ -597,7 +687,9 @@ async function handleAttacked(ctx, text, mode) {
 
 async function handleIncoming(ctx, mode) {
   const galaxy = await galaxyForContext(ctx);
-  const incoming = await fetchActiveIncoming(galaxy, chatScopeId(ctx));
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const incoming = await fetchActiveIncoming(galaxy, scopeId);
   return respond(ctx, mode, incoming.length ? incoming.map(formatIncomingLine).join("\n") : `No active hostile incoming reports in ${galaxy}.`, { parse_mode: "HTML" });
 }
 
@@ -609,7 +701,10 @@ async function handleIntel(ctx, text, mode) {
   const report = parsed.kind === "system"
     ? await buildSystemReport(parsed.coord)
     : await buildAstroReport(parsed.coord);
-  return respond(ctx, mode, report, { parse_mode: "HTML" });
+  return respond(ctx, mode, report, {
+    parse_mode: "HTML",
+    ...(await intelKeyboard(parsed.coord))
+  });
 }
 
 async function handleStale(ctx, text, mode) {
@@ -629,7 +724,10 @@ async function handleScore(ctx, text, mode) {
 async function handleBases(ctx, text, mode) {
   const query = text.replace(/^[!$]bases\s+/i, "").trim().replace(/^@/, "");
   if (!query) return respond(ctx, mode, "Use: !bases playername");
+  return sendBasesReport(ctx, mode, query);
+}
 
+async function sendBasesReport(ctx, mode, query) {
   const galaxy = await galaxyForContext(ctx);
   const [savedRows, importedRows] = await Promise.all([
     fetchRows("b24_user_bases", {
@@ -639,6 +737,16 @@ async function handleBases(ctx, text, mode) {
   ]);
 
   const needle = searchText(query);
+  const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
+  const exactOwner = ownerSuggestions.find((owner) => searchText(owner) === needle);
+  if (!exactOwner && ownerSuggestions.length > 1) {
+    const lines = [`Multiple base owners match ${escapeHtml(query)}:`, ...ownerSuggestions.slice(0, 12).map((owner) => `- ${escapeHtml(owner)}`)];
+    return respond(ctx, mode, lines.join("\n"), {
+      parse_mode: "HTML",
+      ...basesSuggestionKeyboard(ownerSuggestions.slice(0, 8))
+    });
+  }
+
   const savedMatches = savedRows.filter((row) => {
     return searchText(row.owner_label).includes(needle);
   });
@@ -666,13 +774,18 @@ async function handleBases(ctx, text, mode) {
     lines.push("", "<b>Saved By Users</b>");
     savedMatches.forEach((row) => lines.push(formatUserBaseLine(row)));
   }
-  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+  return respond(ctx, mode, lines.join("\n"), {
+    parse_mode: "HTML",
+    ...baseListKeyboard(importedMatches, savedMatches)
+  });
 }
 
 async function handleBoard(ctx, text, mode) {
   const kind = boardKind(text);
   const galaxy = await galaxyForContext(ctx);
-  const operations = await fetchActiveOperations(galaxy, chatScopeId(ctx), kind);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const operations = await fetchActiveOperations(galaxy, scopeId, kind);
   const membersByOperation = await fetchMembersByOperation(operations);
   const attacks = operations.filter((operation) => operation.type === "attack");
   const defenses = operations.filter((operation) => operation.type === "defense");
@@ -698,6 +811,8 @@ async function handleBoard(ctx, text, mode) {
 async function handleNext(ctx, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !next in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const [memberships, bases] = await Promise.all([
     fetchRows("b24_operation_members", {
       user_id: `eq.${telegramUserId(ctx)}`
@@ -707,14 +822,16 @@ async function handleNext(ctx, mode) {
       status: "eq.active"
     }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" })
   ]);
-  const operations = await fetchOperationsForMemberships(galaxy, memberships);
-  const actionOps = operations.filter((operation) => operation.status === "active" && operation.chat_id === chatScopeId(ctx));
+  const activeMemberships = memberships.filter((member) => member.state !== "withdrawn");
+  const operations = await fetchOperationsForMemberships(galaxy, activeMemberships);
+  const actionOps = operations.filter((operation) => operation.status === "active" && operation.chat_id === scopeId);
+  const membersByOperation = await fetchMembersByOperation(actionOps);
 
   const lines = [
     `<b>${galaxy} Next Actions</b>`,
     "",
     `<b>Your Operations</b> (${actionOps.length})`,
-    ...(actionOps.length ? actionOps.slice(0, 8).map((operation) => formatOperationLine(operation)) : ["No active operations need you."]),
+    ...(actionOps.length ? actionOps.slice(0, 8).map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : ["No active operations need you."]),
     "",
     `<b>Your Saved Bases</b> (${bases.length})`
   ];
@@ -739,6 +856,9 @@ async function handleOperationMember(ctx, text, mode, state) {
   if (!operation) return respond(ctx, mode, `No active operation found for ${escapeHtml(parsed.shortId)} in this chat.`, { parse_mode: "HTML" });
 
   const travel = parseTravelNote(parsed.note);
+  if (travel.minutes && launchIsPast(operation, travel.minutes)) {
+    return respond(ctx, mode, `You cannot arrive on time for ${escapeHtml(operation.short_id)}. Your launch time would already be past.`, { parse_mode: "HTML" });
+  }
   await upsertOperationMember(ctx, operation, state, travel.note, travel.minutes);
   if ((state === "joined" || state === "ready") && travel.minutes) await scheduleLaunchReminders(ctx, operation, travel.minutes);
   const label = state === "sent" ? "marked sent for" : state === "withdrawn" ? "left" : `${state} for`;
@@ -760,7 +880,7 @@ async function handleCloseOperation(ctx, text, mode) {
   if (!(await canCloseOperation(ctx, operation))) return respond(ctx, mode, "Only the operation commander or a group admin can close that operation.");
 
   const ok = await updateRows("b24_operations", {
-    status: "closed",
+    status: "stood_down",
     note: parsed.note ? `${operation.note || ""}${operation.note ? " | " : ""}Closed: ${parsed.note}` : operation.note,
     updated_at: new Date().toISOString()
   }, {
@@ -768,7 +888,37 @@ async function handleCloseOperation(ctx, text, mode) {
     operation_id: `eq.${operation.operation_id}`
   });
   if (!ok) return respond(ctx, mode, "Could not close that operation.");
-  return respond(ctx, mode, `${escapeHtml(operation.short_id)} closed${parsed.note ? `: ${escapeHtml(parsed.note)}` : ""}`, { parse_mode: "HTML" });
+  await closeLinkedOperationRows(operation, "stood_down");
+  await refreshOperationMessage(ctx, { ...operation, status: "stood_down" });
+  return respond(ctx, mode, `${escapeHtml(operation.short_id)} stood down${parsed.note ? `: ${escapeHtml(parsed.note)}` : ""}`, { parse_mode: "HTML" });
+}
+
+async function closeLinkedOperationRows(operation, status) {
+  const stamp = new Date().toISOString();
+  await Promise.all([
+    updateRows("b24_claims", {
+      status,
+      updated_at: stamp
+    }, {
+      map_id: `eq.${operation.map_id}`,
+      operation_id: `eq.${operation.operation_id}`
+    }),
+    updateRows("b24_incoming", {
+      status,
+      updated_at: stamp
+    }, {
+      map_id: `eq.${operation.map_id}`,
+      operation_id: `eq.${operation.operation_id}`
+    }),
+    updateRows("b24_scheduled_notifications", {
+      cancelled_at: stamp,
+      updated_at: stamp
+    }, {
+      map_id: `eq.${operation.map_id}`,
+      operation_id: `eq.${operation.operation_id}`,
+      sent_at: "is.null"
+    })
+  ]);
 }
 
 async function handleMine(ctx, text, mode) {
@@ -1034,6 +1184,77 @@ function formatImportedBaseLine(row) {
   return `${escapeHtml(row.coord)} - ${escapeHtml(owner)}${age}`;
 }
 
+function baseOwnerSuggestions(rows, needle) {
+  if (!needle) return [];
+  const owners = new Set();
+  rows.forEach((row) => {
+    const candidates = [
+      row.owner_label,
+      row.guild,
+      row.label,
+      [row.guild, row.label].filter(Boolean).join(" ")
+    ].filter(Boolean);
+    candidates.forEach((owner) => {
+      if (searchText(owner).startsWith(needle)) owners.add(owner);
+    });
+  });
+  return [...owners].sort((a, b) => a.localeCompare(b));
+}
+
+function basesSuggestionKeyboard(owners) {
+  if (!owners.length) return {};
+  return Markup.inlineKeyboard(owners.map((owner) => [
+    Markup.button.callback(owner.slice(0, 40), `bases:${encodeButtonValue(owner)}`)
+  ]));
+}
+
+function baseListKeyboard(importedRows, savedRows) {
+  const coords = [...new Set([
+    ...importedRows.map((row) => row.coord),
+    ...savedRows.map((row) => row.base_coord)
+  ].filter(Boolean))].slice(0, 8);
+  if (!coords.length) return {};
+  return Markup.inlineKeyboard(coords.map((coord) => [
+    Markup.button.callback(`Intel ${coord}`, `intel:${coord}`),
+    Markup.button.callback("Claim 4h", `claim4h:${coord}`),
+    Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord))
+  ]));
+}
+
+function claimListKeyboard(claims) {
+  const coords = [...new Set(claims.map((claim) => claim.target_coord).filter(Boolean))].slice(0, 8);
+  if (!coords.length) return {};
+  return Markup.inlineKeyboard(coords.map((coord) => [
+    Markup.button.callback(`Intel ${coord}`, `intel:${coord}`),
+    Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord))
+  ]));
+}
+
+async function intelKeyboard(coord) {
+  const rows = [[Markup.button.url("Open Map", mapUrl(galaxyFromCoord(coord), coord))]];
+  if (coord.split(":").length === 4) {
+    rows.push([Markup.button.callback("Claim 4h", `claim4h:${coord}`)]);
+    const base = await fetchOne("b24_bases", { coord }, mapIdForCoord(coord));
+    const ownerButtons = [];
+    if (base?.guild) ownerButtons.push(Markup.button.callback(`Bases ${base.guild}`, `bases:${encodeButtonValue(base.guild)}`));
+    if (base?.label) ownerButtons.push(Markup.button.callback(`Bases ${base.label}`.slice(0, 40), `bases:${encodeButtonValue(base.label)}`));
+    if (ownerButtons.length) rows.push(ownerButtons);
+  }
+  return Markup.inlineKeyboard(rows);
+}
+
+function encodeButtonValue(value) {
+  return encodeURIComponent(String(value || "")).slice(0, 48);
+}
+
+function decodeButtonValue(value) {
+  try {
+    return decodeURIComponent(String(value || ""));
+  } catch {
+    return String(value || "");
+  }
+}
+
 function searchText(value) {
   return String(value || "")
     .replace(/^@/, "")
@@ -1111,6 +1332,7 @@ function fetchActiveOperations(galaxy, chatId = "", kind = "all") {
 
 function fetchDueNotifications() {
   return fetchRows("b24_scheduled_notifications", {
+    cancelled_at: "is.null",
     sent_at: "is.null",
     send_at: `lte.${new Date().toISOString()}`
   }, { mapId: null, includeMap: false, order: "send_at.asc", limit: 25 });
@@ -1202,17 +1424,17 @@ async function updateRows(table, row, filters) {
   return true;
 }
 
-function operationRow(ctx, { type, targetCoord = "", defendedCoord = "", hostileOrigin = "", arrivalAt, note = "" }) {
+function operationRow(ctx, { type, targetCoord = "", defendedCoord = "", hostileOrigin = "", arrivalAt, note = "", chatId = "" }) {
   const coord = targetCoord || defendedCoord || hostileOrigin;
   const operationId = randomId();
   const prefixes = { attack: "A", defense: "D", scout: "S" };
-  const shortId = `${prefixes[type] || "O"}-${operationId.slice(-3).toUpperCase()}`;
+  const shortId = `${prefixes[type] || "O"}-${operationId.slice(-5).toUpperCase()}`;
   const stamp = new Date().toISOString();
   return {
     map_id: mapIdForCoord(coord),
     operation_id: operationId,
     short_id: shortId,
-    chat_id: chatScopeId(ctx),
+    chat_id: chatId || chatScopeId(ctx),
     type,
     target_coord: targetCoord || null,
     defended_coord: defendedCoord || null,
@@ -1229,16 +1451,45 @@ function operationRow(ctx, { type, targetCoord = "", defendedCoord = "", hostile
 
 async function upsertOperationMember(ctx, operation, state, note = "", travelMinutes = null) {
   const stamp = new Date().toISOString();
+  const userId = telegramUserId(ctx);
+  const existing = await fetchOne("b24_operation_members", {
+    operation_id: operation.operation_id,
+    user_id: userId
+  }, operation.map_id);
   const launchAt = travelMinutes ? new Date(new Date(operation.arrival_at).getTime() - travelMinutes * 60 * 1000).toISOString() : null;
-  return upsertRow("b24_operation_members", {
+  const patch = {
+    display_name: telegramName(ctx),
+    state,
+    updated_at: stamp
+  };
+  if (note) {
+    if (state === "joined") patch.role = note;
+    else patch.note = note;
+  }
+  if (travelMinutes) {
+    patch.travel_minutes = travelMinutes;
+    patch.launch_at = launchAt;
+  }
+  if (state === "sent") patch.sent_at = stamp;
+  if (state === "withdrawn") patch.withdrawn_at = stamp;
+
+  if (existing) {
+    return updateRows("b24_operation_members", patch, {
+      map_id: `eq.${operation.map_id}`,
+      operation_id: `eq.${operation.operation_id}`,
+      user_id: `eq.${userId}`
+    });
+  }
+
+  return insertRow("b24_operation_members", {
     map_id: operation.map_id,
     operation_id: operation.operation_id,
-    user_id: telegramUserId(ctx),
+    user_id: userId,
     display_name: telegramName(ctx),
     role: state === "joined" && note ? note : "",
     fleet_label: "",
     fleet_value: "",
-    travel_minutes: travelMinutes,
+    travel_minutes: travelMinutes || null,
     launch_at: launchAt,
     state,
     sent_at: state === "sent" ? stamp : null,
@@ -1246,16 +1497,30 @@ async function upsertOperationMember(ctx, operation, state, note = "", travelMin
     note: state !== "joined" ? note : "",
     created_at: stamp,
     updated_at: stamp
-  }, "map_id,operation_id,user_id");
+  });
 }
 
 async function findOperation(ctx, shortId) {
   const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return null;
   return fetchOne("b24_operations", {
     short_id: normalizeShortId(shortId),
-    chat_id: chatScopeId(ctx),
+    chat_id: scopeId,
     status: "active"
   }, galaxyToMapId(galaxy));
+}
+
+async function findActiveOperationByTarget(mapId, chatId, type, column, coord) {
+  if (!coord) return null;
+  const rows = await fetchRows("b24_operations", {
+    chat_id: `eq.${chatId}`,
+    type: `eq.${type}`,
+    [column]: `eq.${coord}`,
+    status: "eq.active",
+    arrival_at: `gt.${new Date().toISOString()}`
+  }, { mapId, order: "arrival_at.asc", limit: 1 });
+  return rows[0] || null;
 }
 
 function findOperationById(operationId) {
@@ -1331,6 +1596,10 @@ async function pollScheduledNotifications() {
   const due = await fetchDueNotifications();
   for (const notification of due) {
     try {
+      if (!(await shouldSendNotification(notification))) {
+        await cancelNotification(notification);
+        continue;
+      }
       const target = notification.user_id || notification.chat_id;
       if (!target) continue;
       await bot.telegram.sendMessage(target, notification.message || "VisionBot reminder");
@@ -1339,6 +1608,30 @@ async function pollScheduledNotifications() {
       console.error("notification send failed", notification.notification_id, error?.message || error);
     }
   }
+}
+
+async function shouldSendNotification(notification) {
+  if (!notification.operation_id) return true;
+  const operation = await findOperationById(notification.operation_id);
+  if (!operation || operation.status !== "active") return false;
+  if (notification.user_id && /^launch_/.test(notification.notification_type || "")) {
+    const member = await fetchOne("b24_operation_members", {
+      operation_id: notification.operation_id,
+      user_id: notification.user_id
+    }, notification.map_id);
+    if (!member || member.state === "withdrawn" || member.state === "sent" || member.state === "arrived") return false;
+  }
+  return true;
+}
+
+function cancelNotification(notification) {
+  return updateRows("b24_scheduled_notifications", {
+    cancelled_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, {
+    map_id: `eq.${notification.map_id}`,
+    notification_id: `eq.${notification.notification_id}`
+  });
 }
 
 function markNotificationSent(notification) {
@@ -1412,7 +1705,7 @@ function operationKeyboard(operation) {
   if (disabled) return {};
   const target = operation.target_coord || operation.defended_coord || operation.hostile_origin || "";
   const rows = [];
-  if (target) rows.push([Markup.button.webApp("Open Target", mapUrl(galaxyFromCoord(target), target))]);
+  if (target) rows.push([Markup.button.url("Open Target", mapUrl(galaxyFromCoord(target), target))]);
   rows.push(
     [
       Markup.button.callback("Join", `op:join:${operation.operation_id}`),
@@ -1438,17 +1731,24 @@ function formatOperationLine(operation, members = []) {
   const target = operation.type === "defense"
     ? `${operation.defended_coord || "?"} <= ${operation.hostile_origin || "?"}`
     : operation.target_coord || "?";
-  const stateCounts = countBy(members, "state");
+  const activeMembers = members.filter((member) => member.state !== "withdrawn");
+  const stateCounts = countBy(activeMembers, "state");
   const sent = stateCounts.sent || 0;
   const ready = stateCounts.ready || 0;
-  const joined = members.length;
+  const joined = activeMembers.length;
   return `${escapeHtml(operation.short_id)} ${escapeHtml(operation.type)} ${escapeHtml(target)} - ${formatEta(new Date(operation.arrival_at))} - ${joined} joined / ${ready} ready / ${sent} sent`;
 }
 
 async function operationIntelSummary(operation) {
-  const coord = operation.type === "defense"
-    ? operation.defended_coord || operation.hostile_origin
-    : operation.target_coord;
+  if (operation.type === "defense") {
+    const defended = operation.defended_coord ? await coordIntelSummary(operation.defended_coord) : "Defended: no coordinate";
+    const hostile = operation.hostile_origin ? await coordIntelSummary(operation.hostile_origin) : "Hostile: no coordinate";
+    return `Defended ${defended}\nIntel: Hostile ${hostile}`;
+  }
+  return coordIntelSummary(operation.target_coord);
+}
+
+async function coordIntelSummary(coord) {
   if (!coord) return "no target coordinate";
 
   if (coord.split(":").length === 3) {
@@ -1483,6 +1783,7 @@ async function operationIntelSummary(operation) {
 
 async function formatOperationStatus(operation, members) {
   const intel = await operationIntelSummary(operation);
+  const activeMembers = members.filter((member) => member.state !== "withdrawn");
   const lines = [
     `<b>${escapeHtml(operation.short_id)} ${escapeHtml(operation.type.toUpperCase())}</b>`,
     operation.type === "defense"
@@ -1493,8 +1794,8 @@ async function formatOperationStatus(operation, members) {
     `Intel: ${escapeHtml(intel)}`
   ];
   if (operation.note) lines.push(`Note: ${escapeHtml(operation.note)}`);
-  lines.push("", `<b>Members</b> (${members.length})`);
-  lines.push(...(members.length ? members.map(formatOperationMemberLine) : ["No one joined yet."]));
+  lines.push("", `<b>Members</b> (${activeMembers.length})`);
+  lines.push(...(activeMembers.length ? activeMembers.map(formatOperationMemberLine) : ["No one joined yet."]));
   return lines.join("\n");
 }
 
@@ -1528,7 +1829,7 @@ function boardKind(text) {
 }
 
 function parseOperationAction(text) {
-  const body = String(text || "").trim().replace(/^[!$](op\s+\w+|join|ready|sent|leave|standdown|cancelop)\s*/i, "").trim();
+  const body = String(text || "").trim().replace(/^[!$](op\s+\w+|join|respond|ready|sent|leave|standdown|cancelop)\s*/i, "").trim();
   const match = body.match(/^([ADS]-?[A-Z0-9]{3,6})(?:\s+([\s\S]+))?$/i);
   if (!match) return { shortId: "", note: "" };
   return {
@@ -1600,6 +1901,11 @@ function parseTravelNote(note) {
   };
 }
 
+function launchIsPast(operation, travelMinutes) {
+  const launchAt = new Date(operation.arrival_at).getTime() - travelMinutes * 60 * 1000;
+  return Number.isFinite(launchAt) && launchAt <= Date.now();
+}
+
 function telegramName(ctx) {
   const from = ctx.from;
   if (!from) return "Telegram channel";
@@ -1615,6 +1921,36 @@ function chatScopeId(ctx) {
   if (ctx.chat?.id) return String(ctx.chat.id);
   if (ctx.from?.id) return `user:${ctx.from.id}`;
   return "unknown";
+}
+
+function isPrivateChat(ctx) {
+  return ctx.chat?.type === "private";
+}
+
+function chatTitle(ctx) {
+  return ctx.chat?.title || ctx.chat?.username || (ctx.chat?.id ? String(ctx.chat.id) : "this chat");
+}
+
+async function rememberActiveChat(ctx) {
+  if (!ctx.from?.id || isPrivateChat(ctx) || !ctx.chat?.id) return false;
+  const galaxy = await galaxyForContext(ctx);
+  return upsertRow("b24_user_settings", {
+    user_id: telegramUserId(ctx),
+    galaxy,
+    map_id: galaxyToMapId(galaxy),
+    active_chat_id: String(ctx.chat.id),
+    active_chat_label: chatTitle(ctx),
+    updated_at: new Date().toISOString()
+  }, "user_id");
+}
+
+async function operationScopeId(ctx) {
+  if (!isPrivateChat(ctx)) return chatScopeId(ctx);
+  if (!ctx.from?.id) return "";
+  const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
+  const activeChatId = settings?.active_chat_id || "";
+  if (approvedChatIds.length && !approvedChatIds.includes(activeChatId)) return "";
+  return activeChatId;
 }
 
 function parseLookupCommand(text, fallbackGalaxy = defaultGalaxy) {
