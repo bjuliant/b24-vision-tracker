@@ -34,6 +34,16 @@
   const confirmFleetText = document.querySelector("#confirmFleetText");
   const confirmFleetButton = document.querySelector("#confirmFleetButton");
   const confirmFleetResult = document.querySelector("#confirmFleetResult");
+  const headerGalaxy = document.querySelector("#headerGalaxy");
+  const headerSector = document.querySelector("#headerSector");
+  const onlineCount = document.querySelector("#onlineCount");
+  const bulkTargetText = document.querySelector("#bulkTargetText");
+  const bulkClearButton = document.querySelector("#bulkClearButton");
+  const bulkLineCount = document.querySelector("#bulkLineCount");
+  const parsedTargets = document.querySelector("#parsedTargets");
+  const parsedTotal = document.querySelector("#parsedTotal");
+  const parsedStale = document.querySelector("#parsedStale");
+  const parsedUnclaimed = document.querySelector("#parsedUnclaimed");
   const baseList = document.querySelector("#baseList");
   const systemList = document.querySelector("#systemList");
   const template = document.querySelector("#cellTemplate");
@@ -76,6 +86,7 @@
     bindControls();
     selectSector(selected);
     renderAttackBoard();
+    renderBulkTargets();
     setInterval(tickClaims, 1000);
 
     if (hasSupabase) {
@@ -95,7 +106,7 @@
     });
     PLAYABLE_SECTORS = SECTORS.slice(1);
     intel = loadLocalState();
-    document.querySelector(".eyebrow").textContent = galaxy;
+    if (headerGalaxy) headerGalaxy.textContent = galaxy;
     document.title = `${galaxy} Vision Tracker`;
     grid.setAttribute("aria-label", `${galaxy} sector map`);
     claimTarget.placeholder = `${galaxy}:44:76:10`;
@@ -136,6 +147,17 @@
     importButton.addEventListener("click", importIntel);
     bookmarkletButton.addEventListener("click", copyBookmarklet);
     claimButton.addEventListener("click", createClaim);
+    bulkTargetText.addEventListener("input", renderBulkTargets);
+    bulkClearButton.addEventListener("click", () => {
+      bulkTargetText.value = "";
+      renderBulkTargets();
+    });
+    parsedTargets.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-claim-target]");
+      if (!button) return;
+      await createClaimForTarget(button.dataset.claimTarget, button.dataset.claimNote || "");
+      renderBulkTargets();
+    });
     claimList.addEventListener("click", (event) => {
       const button = event.target.closest("[data-unclaim]");
       if (button) unclaim(button.dataset.unclaim);
@@ -169,6 +191,7 @@
       paintAll();
       selectSector(selected);
       renderAttackBoard();
+      renderBulkTargets();
       setSync("Live", true);
 
       realtimeChannel = client
@@ -202,6 +225,8 @@
             saveLocalState();
             paintSector(payload.new.region_id);
             if (payload.new.region_id === selected) selectSector(selected);
+            renderAttackBoard();
+            renderBulkTargets();
           }
         )
         .on(
@@ -232,6 +257,7 @@
             paintSector(region);
             if (region === selected) selectSector(selected);
             renderAttackBoard();
+            renderBulkTargets();
           }
         )
         .subscribe();
@@ -462,6 +488,15 @@
       return;
     }
 
+    await createClaimForTarget(target, claimNote.value.trim());
+    claimTarget.value = "";
+    claimNote.value = "";
+  }
+
+  async function createClaimForTarget(target, note = "") {
+    target = normalizeAstro(target);
+    if (!target) return;
+
     const region = astroToRegion(target);
     if (region !== selected) selectSector(region);
 
@@ -482,7 +517,7 @@
       confirmedAt: "",
       confirmedBy: "",
       fleetLabel: "",
-      note: claimNote.value.trim(),
+      note: String(note || "").trim(),
       status: "active",
       createdAt: stamp,
       updatedAt: stamp
@@ -494,8 +529,7 @@
     paintSector(region);
     selectSector(region);
     renderAttackBoard();
-    claimTarget.value = "";
-    claimNote.value = "";
+    renderBulkTargets();
     tg?.HapticFeedback?.impactOccurred("light");
 
     if (!client) return;
@@ -537,6 +571,7 @@
     paintSector(claim.region);
     if (claim.region === selected) renderClaimsPanel(selected);
     renderAttackBoard();
+    renderBulkTargets();
 
     if (!client) return;
 
@@ -804,6 +839,9 @@
       .map((flag) => FLAG_LABELS[flag]);
 
     selectedSector.textContent = id;
+    headerGalaxy.textContent = galaxy;
+    headerSector.textContent = id;
+    onlineCount.textContent = "1";
     selectedStatus.textContent = flags.length ? flags.join(" ") : "None";
     selectedSystems.textContent = `${getSystemCount(id)} known`;
     selectedBases.textContent = `${getBaseCount(id)} known`;
@@ -905,6 +943,69 @@
 
       return `<div class="attack-row"><div><strong>${escapeHtml(attacker)}</strong><span class="attack-meta">${escapeHtml(claim.target)}${note}</span>${fleet}</div><div><strong>${escapeHtml(localTime)}</strong><span class="attack-meta">Lands ${escapeHtml(countdown)}${claimerTime}</span></div><div class="attack-actions"><span class="attack-status ${statusClass}">${status}</span>${action}<button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div></div>`;
     }).join("");
+  }
+
+  function renderBulkTargets() {
+    if (!bulkTargetText || !parsedTargets) return;
+
+    const rows = parseBulkTargets(bulkTargetText.value);
+    const activeTargets = new Set(getAllActiveClaims().map((claim) => claim.target));
+    const stale = rows.filter((row) => row.status === "STALE").length;
+    const unclaimed = rows.filter((row) => !activeTargets.has(row.coord)).length;
+
+    bulkLineCount.textContent = `${rows.length} line${rows.length === 1 ? "" : "s"} detected`;
+    parsedTotal.textContent = `Total: ${rows.length}`;
+    parsedStale.textContent = `Stale: ${stale}`;
+    parsedUnclaimed.textContent = `Unclaimed: ${unclaimed}`;
+
+    if (!rows.length) {
+      parsedTargets.textContent = "Paste target intel above to build a claim list.";
+      return;
+    }
+
+    parsedTargets.innerHTML = [
+      `<div class="target-row target-head"><span>Coordinate</span><span>Guild Tags</span><span>Player Name</span><span>Intel Age</span><span>Status</span><span>Action</span></div>`,
+      ...rows.map((row) => {
+        const claimed = activeTargets.has(row.coord);
+        const note = [row.guildTags, row.player].filter(Boolean).join(" ");
+        const status = claimed ? "CLAIMED" : row.status;
+        const statusClass = claimed ? "claimed" : row.status.toLowerCase();
+        const action = claimed
+          ? `<button class="row-claim-button" type="button" disabled>Claimed</button>`
+          : `<button class="row-claim-button" type="button" data-claim-target="${escapeHtml(row.coord)}" data-claim-note="${escapeHtml(note)}">Claim</button>`;
+
+        return `<div class="target-row"><span><strong>${escapeHtml(row.coord)}</strong></span><span>${escapeHtml(row.guildTags || "-")}</span><span>${escapeHtml(row.player || "Unknown")}</span><span>${escapeHtml(row.age || "Unknown")}</span><span><mark class="${escapeHtml(statusClass)}">${escapeHtml(status)}</mark></span><span>${action}</span></div>`;
+      })
+    ].join("");
+  }
+
+  function parseBulkTargets(text) {
+    const rows = [];
+    const seen = new Set();
+    const coordPattern = new RegExp(`\\b${galaxy}:\\d{2}:\\d{2}:\\d{2}\\b`, "i");
+
+    String(text || "").split(/\r?\n/).forEach((line) => {
+      const match = line.match(coordPattern);
+      if (!match) return;
+
+      const coord = normalizeAstro(match[0]);
+      if (!coord || seen.has(coord)) return;
+      seen.add(coord);
+
+      const afterCoord = line.slice(match.index + match[0].length).replace(/^\s*-\s*/, "").trim();
+      const parts = afterCoord.split(/\s+-\s+/).map((part) => part.trim()).filter(Boolean);
+      const guildTags = ((parts[0] || afterCoord).match(/\[[^\]]+\]/g) || []).join(" ");
+      const player = (parts[0] || "")
+        .replace(/\[[^\]]+\]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      const age = parts.find((part) => /\bold\b/i.test(part)) || "";
+      const status = /\bstale\b/i.test(line) ? "STALE" : "FRESH";
+
+      rows.push({ coord, guildTags, player, age, status });
+    });
+
+    return rows.sort((a, b) => a.coord.localeCompare(b.coord));
   }
 
   function getSector(id) {

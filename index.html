@@ -11,11 +11,24 @@
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">B24</p>
-          <h1>Vision Tracker</h1>
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <h1>Attack Claiming</h1>
+            <p class="subtitle">Guild Operations <span aria-hidden="true">-</span> <strong id="headerGalaxy">B24</strong></p>
+          </div>
         </div>
-        <div class="sync-pill" id="syncStatus">Local</div>
+        <div class="top-stats" aria-label="Current status">
+          <div class="stat-card">
+            <span class="stat-kicker" id="headerSector">B24</span>
+            <strong>Active Sector</strong>
+          </div>
+          <div class="stat-card">
+            <span class="stat-kicker" id="onlineCount">1</span>
+            <strong>Online</strong>
+          </div>
+          <div class="sync-pill" id="syncStatus">Local</div>
+        </div>
       </header>
 
       <section class="toolbar" aria-label="Map tools">
@@ -62,6 +75,10 @@
           <p class="label">Bases</p>
           <strong id="selectedBases">0 known</strong>
         </div>
+        <div>
+          <p class="label">Operations</p>
+          <strong id="selectedOperations">0 active</strong>
+        </div>
       </footer>
 
       <section class="sector-panel" aria-live="polite">
@@ -85,7 +102,7 @@
       </section>
 
       <section class="claims-panel">
-        <details>
+        <details open>
           <summary>
             <span>Claims</span>
             <strong id="claimsPanelTitle">B24:1</strong>
@@ -98,6 +115,46 @@
             <button class="command-button" id="claimButton" type="button">Claim</button>
           </div>
           <div class="claim-list" id="claimList">No active claims for this sector.</div>
+        </details>
+      </section>
+
+      <section class="bulk-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Bulk Target Input</h2>
+            <p>Paste copied intel lines here. The app parses targets automatically.</p>
+          </div>
+          <button class="ghost-button" id="bulkClearButton" type="button">Clear</button>
+        </div>
+        <textarea id="bulkTargetText" spellcheck="false" placeholder="B24:11:70:31 - [ROTC] [ROTC] Konkor - 32h old - STALE"></textarea>
+        <div class="panel-foot">
+          <span id="bulkLineCount">0 lines detected</span>
+        </div>
+      </section>
+
+      <section class="parsed-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Parsed Targets</h2>
+            <p>Claim rows from the paste list without clicking around the AE map.</p>
+          </div>
+          <div class="parsed-counts">
+            <span id="parsedTotal">Total: 0</span>
+            <span id="parsedStale">Stale: 0</span>
+            <span id="parsedUnclaimed">Unclaimed: 0</span>
+          </div>
+        </div>
+        <div class="target-table" id="parsedTargets">Paste target intel above to build a claim list.</div>
+      </section>
+
+      <section class="operations-panel">
+        <details>
+          <summary>
+            <span>Operations</span>
+            <strong id="operationsPanelTitle">B24:1</strong>
+            <em id="operationCounts">0 active</em>
+          </summary>
+          <div class="operation-list" id="operationList">No active operations for this sector.</div>
         </details>
       </section>
 
