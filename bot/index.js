@@ -27,8 +27,9 @@ const staleIntelMs = 24 * 60 * 60 * 1000;
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
+bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }));
 bot.command("board", async (ctx) => {
-  if (!chatApproved(ctx)) return ctx.reply("This chat is not approved for VisionBot operations.");
+  if (!chatApproved(ctx)) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
   if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
   return handleBoard(ctx, ctx.message?.text || "/board", "$");
 });
@@ -56,7 +57,7 @@ async function handleText(ctx) {
   const mode = deliveryMode(text);
 
   if (isProtectedOperationalCommand(lower) && !chatApproved(ctx)) {
-    return respond(ctx, mode, "This chat is not approved for VisionBot operations.");
+    return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
   }
   if (isSensitiveOperationalCommand(lower) && !(await userCanUseSensitiveCommands(ctx))) {
     return respond(ctx, mode, "You do not have permission to use VisionBot operation commands.");
@@ -462,6 +463,24 @@ function chatApproved(ctx) {
   if (ctx.chat?.type === "private") return true;
   const id = ctx.chat?.id ? String(ctx.chat.id) : "";
   return id ? approvedChatIds.includes(id) : false;
+}
+
+function chatIdReport(ctx) {
+  return [
+    "<b>VisionBot IDs</b>",
+    `chat_id: <code>${escapeHtml(ctx.chat?.id || "")}</code>`,
+    `chat_type: <code>${escapeHtml(ctx.chat?.type || "")}</code>`,
+    `chat_title: <code>${escapeHtml(chatTitle(ctx))}</code>`,
+    `user_id: <code>${escapeHtml(ctx.from?.id || "")}</code>`
+  ].join("\n");
+}
+
+function notApprovedMessage(ctx) {
+  const chatId = ctx.chat?.id ? String(ctx.chat.id) : "";
+  return [
+    "This chat is not approved for VisionBot operations.",
+    chatId ? `Add this to <code>APPROVED_CHAT_IDS</code>: <code>${escapeHtml(chatId)}</code>` : ""
+  ].filter(Boolean).join("\n");
 }
 
 async function userCanUseSensitiveCommands(ctx) {
