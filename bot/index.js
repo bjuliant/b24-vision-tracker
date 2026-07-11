@@ -16,7 +16,7 @@ if (!supabaseKey) throw new Error("SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KE
 
 const bot = new Telegraf(token);
 const galaxyPattern = /B\d{2}/i;
-const claimPattern = /^[!$]claim\s+(.+)$/i;
+const claimPattern = /^[!$](claim|attack)\s+(.+)$/i;
 const attackedPattern = /^[!$](attacked|sos)\s+(.+)$/i;
 const minePattern = /^[!$]mine\s+(.+)$/i;
 const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
@@ -24,7 +24,7 @@ const staleIntelMs = 24 * 60 * 60 * 1000;
 
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
-bot.command("help", (ctx) => ctx.reply(helpText(ctx.message?.text || ""), { parse_mode: "HTML" }));
+bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
 bot.command("board", (ctx) => {
   if (!chatApproved(ctx)) return ctx.reply("This chat is not approved for VisionBot operations.");
   return handleBoard(ctx, ctx.message?.text || "/board", "$");
@@ -56,7 +56,7 @@ async function handleText(ctx) {
     return respond(ctx, mode, "This chat is not approved for VisionBot operations.");
   }
 
-  if (isCommand(lower, "help")) return respond(ctx, mode, helpText(text), { parse_mode: "HTML" });
+  if (isCommand(lower, "help")) return handleHelp(ctx, text, mode);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
@@ -64,7 +64,7 @@ async function handleText(ctx) {
 
   if (isProtectedOperationalCommand(lower) && !isPrivateChat(ctx)) await rememberActiveChat(ctx);
 
-  if (isCommand(lower, "claim")) return handleClaim(ctx, text, mode);
+  if (isCommand(lower, "claim") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
@@ -170,30 +170,59 @@ async function handleClaimButton(ctx) {
   return handleClaim(ctx, text, "$");
 }
 
-function helpText(input = "") {
+async function handleHelp(ctx, text, mode) {
+  return respond(ctx, mode, await helpText(ctx, text), { parse_mode: "HTML" });
+}
+
+async function helpText(ctx, input = "") {
   const topic = String(input).trim().split(/\s+/)[1]?.toLowerCase() || "";
   const topics = {
-    claim: [
-      "<b>Claim Help</b>",
+    setup: [
+      "<b>Setup Help</b>",
       "",
-      "<code>!claim [coord] [minutes] [note]</code>",
-      "<code>$claim [coord] [minutes] [note]</code>",
-      "Claim an attack target landing in a number of minutes. Use <code>!</code> for a private confirmation or <code>$</code> to post it publicly.",
+      "<code>/map [coord]</code> - open the map",
+      "<code>$guild bind</code> - bind this group for operations",
+      "<code>!guild status</code> - show your active operation group",
+      "<code>!g B24</code> - set your personal galaxy",
+      "<code>$setgalaxy B24</code> - set the guild chat galaxy"
+    ],
+    attack: [
+      "<b>Attack Help</b>",
       "",
-      "Examples:",
-      "<code>!claim B24:24:34:06 10 fighters</code>",
-      "<code>$claim B23:11:22:30:45 wave 2</code>"
+      "<code>$attack [target] [eta-minutes] [note]</code>",
+      "Creates and announces an attack operation.",
+      "<code>!join A-7K4P9 [travel-minutes] [role]</code>",
+      "<code>!ready A-7K4P9</code>",
+      "<code>!sent A-7K4P9 [note]</code>",
+      "<code>$standdown A-7K4P9 [reason]</code>"
+    ],
+    defense: [
+      "<b>Defense Help</b>",
+      "",
+      "<code>$sos [defended-base] [hostile-origin] [eta-minutes] [note]</code>",
+      "Creates and announces a defense operation.",
+      "<code>!respond D-4M8Q2 [travel-minutes] [role]</code>",
+      "<code>!ready D-4M8Q2</code>",
+      "<code>!sent D-4M8Q2 [note]</code>",
+      "<code>$board defense</code>"
     ],
     scout: [
       "<b>Scout Help</b>",
       "",
-      "<code>!scout [system-or-astro] [minutes] [note]</code>",
-      "<code>$scout [system-or-astro] [minutes] [note]</code>",
-      "Create a scout request operation. If minutes are omitted, it stays active for 4 hours.",
+      "<code>$scout [coord] [due-minutes] [note]</code>",
+      "Requests fresh scouting. If minutes are omitted, it stays active for 4 hours.",
+      "<code>!join S-9R2JD [role]</code>",
+      "<code>!ready S-9R2JD</code>",
+      "<code>!sent S-9R2JD [note]</code>"
+    ],
+    operations: [
+      "<b>Operations Help</b>",
       "",
-      "Examples:",
-      "<code>$scout B24:44:76 120 need eyes before wave 2</code>",
-      "<code>!scout B24:44:76:10 portal check</code>"
+      "<code>$op [operation-ID]</code> - show an operation card",
+      "<code>$board [attack|defense|scout]</code> - show active operations",
+      "<code>/board</code> - slash fallback",
+      "<code>!next</code> - your urgent action list",
+      "<code>$standdown [operation-ID] [reason]</code> - cancel/stand down"
     ],
     intel: [
       "<b>Intel Lookup Help</b>",
@@ -211,8 +240,7 @@ function helpText(input = "") {
       "<code>!24 02 76 10</code>",
       "<code>!24027610</code>",
       "<code>!B24:02:76</code> - list all known astros in a system",
-      "",
-      "Player base lists moved to <code>!bases [name]</code>."
+      "<code>!history [coord]</code> is planned but not implemented yet."
     ],
     stale: [
       "<b>Stale Intel Help</b>",
@@ -251,8 +279,8 @@ function helpText(input = "") {
       "",
       "<code>!mine [coord] [note]</code> - save one of your bases",
       "<code>$mine [coord] [note]</code> - save one publicly",
-      "<code>!me</code> - DM your saved bases",
-      "<code>$me</code> - post your saved bases here",
+      "<code>!me</code> - your personal dashboard",
+      "<code>!me bases</code> - planned base-only view",
       "<code>!save me [coord] [note]</code> - save/update a base note",
       "<code>!bases [name]</code>/<code>$bases [name]</code> - list a player's saved bases",
       "",
@@ -260,40 +288,11 @@ function helpText(input = "") {
       "<code>!save me B24:06:10:20 needs defense</code>",
       "<code>$bases storebo</code>"
     ],
-    board: [
-      "<b>Board Help</b>",
+    alerts: [
+      "<b>Alerts Help</b>",
       "",
-      "<code>$board</code> - public attack and defense board",
-      "<code>$board attack</code> - public active claims",
-      "<code>$board defense</code> - public active incoming/SOS reports",
-      "<code>$board scout</code> - public scout requests",
-      "<code>$op status A-123</code> - public operation status",
-      "<code>!next</code> - DM your personal dashboard",
-      "",
-      "Slash fallback: <code>/board</code> posts publicly even when Telegram privacy hides $ commands."
-    ],
-    op: [
-      "<b>Operation Help</b>",
-      "",
-      "<code>$claim [target] [minutes] [note]</code> creates an attack operation.",
-      "<code>$sos [your base] [attacker] [minutes] [note]</code> creates a defense operation.",
-      "<code>!join A-123 [role/note]</code> joins privately.",
-      "<code>!respond A-123 [role/note]</code> joins a defense.",
-      "<code>!ready A-123</code> marks you ready.",
-      "<code>!sent A-123 [fleet row/note]</code> confirms launch.",
-      "<code>!leave A-123 [reason]</code> withdraws.",
-      "<code>$op status A-123</code> posts status.",
-      "<code>$standdown A-123 [reason]</code> closes it."
-    ],
-    galaxy: [
-      "<b>Galaxy Help</b>",
-      "",
-      "<code>!g [galaxy]</code> - set your personal galaxy",
-      "<code>!setgalaxy [galaxy]</code> - set this chat's galaxy",
-      "",
-      "Examples:",
-      "<code>!g B24</code>",
-      "<code>!setgalaxy B23</code>"
+      "<code>!watch mybases</code>, <code>!watch [coord]</code>, and <code>!digest [hours]</code> are planned but not implemented yet.",
+      "Current reminders are operation launch/arrival reminders."
     ],
     guild: [
       "<b>Guild Scope Help</b>",
@@ -302,41 +301,56 @@ function helpText(input = "") {
       "<code>!guild status</code> - show your active operation group",
       "",
       "Group operation commands also remember the group automatically."
+    ],
+    aliases: [
+      "<b>Legacy Aliases</b>",
+      "",
+      "<code>!claim</code>/<code>$claim</code> - alias for attack creation",
+      "<code>!attacked</code>/<code>$attacked</code> - alias for SOS",
+      "<code>!targets</code>/<code>$targets</code> - alias for personal claims/attack board",
+      "<code>!claimed</code>/<code>$claimed</code> - alias for attack board",
+      "<code>!incoming</code>/<code>$incoming</code> - alias for defense board",
+      "<code>!myops</code> - alias for <code>!next</code>",
+      "<code>!save me</code>/<code>$save me</code> - alias for updating one of your bases"
     ]
   };
 
   if (topics[topic]) return topics[topic].join("\n");
 
+  const status = await helpStatus(ctx);
   return [
     "<b>VisionBot Commands</b>",
     "",
-    "<code>!</code> commands DM you. <code>$</code> commands post in the chat.",
+    "<code>!</code> replies to you privately. In DMs, it uses your active guild.",
+    "<code>$</code> posts in the current approved guild chat.",
+    "Use <code>/start</code> once before private commands.",
     "",
-    "<code>/map</code> - open your current galaxy map",
-    "<code>!g</code> - set your personal galaxy",
-    "<code>!setgalaxy</code> - set this chat's galaxy",
-    "<code>$guild bind</code>/<code>!guild status</code> - set/check active operation group",
-    "<code>![coord]</code> - DM planet intel to you",
-    "<code>$[coord]</code> - post planet intel here",
-    "<code>!intel</code>/<code>$intel</code> - coordinate intel lookup",
-    "<code>!stale</code>/<code>$stale</code> - list stale intel",
-    "<code>!score</code>/<code>$score</code> - score known targets",
-    "<code>!claim</code>/<code>$claim</code> - claim an attack target",
-    "<code>!scout</code>/<code>$scout</code> - request scouting",
-    "<code>!join</code>/<code>!respond</code>/<code>!ready</code>/<code>!sent</code>/<code>!leave</code> - operation participation",
-    "<code>!next</code>/<code>!myops</code> - personal dashboard",
-    "<code>$board</code> or <code>/board</code> - public attack/defense board",
-    "<code>!targets</code>/<code>$targets</code> - old alias for your claims",
-    "<code>!claimed</code>/<code>$claimed</code> - old alias for attack board",
-    "<code>!sos</code>/<code>$sos</code> - report incoming against your base",
-    "<code>!attacked</code>/<code>$attacked</code> - alias for sos",
-    "<code>!incoming</code>/<code>$incoming</code> - list hostile incoming",
-    "<code>!bases</code>/<code>$bases</code> - list a player's saved bases",
-    "<code>!mine</code>/<code>$mine</code> - save one of your bases",
-    "<code>!me</code>/<code>$me</code> - show your saved bases",
-    "<code>!save me</code>/<code>$save me</code> - save a note on your base",
+    status,
     "",
-    "Details: <code>!help claim</code>, <code>!help scout</code>, <code>!help op</code>, <code>!help intel</code>, <code>!help stale</code>, <code>!help score</code>, <code>!help incoming</code>, <code>!help bases</code>, <code>!help board</code>, <code>!help galaxy</code>, <code>!help guild</code>"
+    "<b>CREATE</b>",
+    "<code>$attack [target] [eta-min] [note]</code>",
+    "<code>$sos [defended] [hostile] [eta-min] [note]</code>",
+    "<code>$scout [coord] [due-min] [note]</code>",
+    "",
+    "<b>PARTICIPATE</b>",
+    "<code>!join A-7K4P9 [travel-min] [role]</code>",
+    "<code>!respond D-4M8Q2 [travel-min] [role]</code>",
+    "<code>!ready [ID]</code>  <code>!sent [ID]</code>  <code>!leave [ID]</code>",
+    "",
+    "<b>MANAGE</b>",
+    "<code>$board [attack|defense|scout]</code>  <code>/board</code>",
+    "<code>$op [ID]</code>  <code>$standdown [ID] [reason]</code>",
+    "",
+    "<b>INTEL</b>",
+    "<code>![coord]</code>  <code>$[coord]</code>",
+    "<code>!intel</code>  <code>!stale</code>  <code>!score</code>",
+    "",
+    "<b>PERSONAL</b>",
+    "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
+    "",
+    "<b>HELP</b>",
+    "<code>!help [topic]</code>",
+    "Topics: setup, attack, defense, scout, operations, intel, bases, guild, alerts, aliases"
   ].join("\n");
 }
 
@@ -349,7 +363,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(help|g|setgalaxy|guild|claim|scout|attacked|sos|intel|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(help|g|setgalaxy|guild|claim|attack|scout|attacked|sos|intel|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function isCommand(lowerText, command) {
@@ -365,6 +379,7 @@ function isExactCommand(lowerText, command) {
 function isProtectedOperationalCommand(lowerText) {
   return [
     "claim",
+    "attack",
     "scout",
     "attacked",
     "sos",
@@ -502,11 +517,42 @@ async function handleGuild(ctx, text, mode) {
   return respond(ctx, mode, `Active operation group: ${escapeHtml(settings.active_chat_label || settings.active_chat_id)}`, { parse_mode: "HTML" });
 }
 
+async function helpStatus(ctx) {
+  const galaxy = await galaxyForContext(ctx);
+  const chatLabel = !isPrivateChat(ctx) ? chatTitle(ctx) : "";
+  const settings = ctx.from?.id ? await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false) : null;
+  const activeLabel = chatLabel || settings?.active_chat_label || "";
+  if (!activeLabel) {
+    return [
+      "<b>No active guild selected.</b>",
+      "Use <code>$guild bind</code> in the guild group, then <code>!guild status</code>.",
+      `Galaxy: ${escapeHtml(galaxy)}`,
+      "Your role: Member"
+    ].join("\n");
+  }
+  return [
+    `Active guild: ${escapeHtml(activeLabel)}`,
+    `Operation group: ${escapeHtml(activeLabel)}`,
+    `Galaxy: ${escapeHtml(galaxy)}`,
+    `Your role: ${await userRoleLabel(ctx)}`
+  ].join("\n");
+}
+
+async function userRoleLabel(ctx) {
+  if (!ctx.from?.id || !ctx.chat?.id || isPrivateChat(ctx)) return "Member";
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+    if (member?.status === "creator") return "Owner";
+    if (member?.status === "administrator") return "Officer";
+  } catch {}
+  return "Member";
+}
+
 async function handleClaim(ctx, text, mode) {
   const match = text.trim().match(claimPattern);
   if (!match) return respond(ctx, mode, "Use: !claim B24:24:34:06 10 optional note");
 
-  const parsed = parseTimedCoordinate(match[1], await galaxyForContext(ctx));
+  const parsed = parseTimedCoordinate(match[2], await galaxyForContext(ctx));
   if (!parsed?.coord || parsed.kind !== "astro") return respond(ctx, mode, "Use: !claim [coord] [minutes] [note]");
 
   const target = parsed.coord;
@@ -842,6 +888,7 @@ async function handleNext(ctx, mode) {
 async function handleOp(ctx, text, mode) {
   const parts = String(text || "").trim().split(/\s+/);
   const action = (parts[1] || "").toLowerCase();
+  if (/^[ads]-?[a-z0-9]{3,8}$/i.test(action)) return handleOperationStatus(ctx, action, mode);
   if (action === "status") return handleOperationStatus(ctx, parts.slice(2).join(" "), mode);
   if (action === "close" || action === "cancel" || action === "standdown") return handleCloseOperation(ctx, `${mode}standdown ${parts.slice(2).join(" ")}`, mode);
   return respond(ctx, mode, "Use: $op status A-123 or $op close A-123 reason");
