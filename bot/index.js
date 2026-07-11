@@ -631,20 +631,41 @@ async function handleBases(ctx, text, mode) {
   if (!query) return respond(ctx, mode, "Use: !bases playername");
 
   const galaxy = await galaxyForContext(ctx);
-  const rows = await fetchRows("b24_user_bases", {
-    status: "eq.active"
-  }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
+  const [savedRows, importedRows] = await Promise.all([
+    fetchRows("b24_user_bases", {
+      status: "eq.active"
+    }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" }),
+    fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" })
+  ]);
 
-  const needle = query.toLowerCase();
-  const matches = rows.filter((row) => {
-    return String(row.owner_label || "").replace(/^@/, "").toLowerCase().includes(needle);
+  const needle = searchText(query);
+  const savedMatches = savedRows.filter((row) => {
+    return searchText(row.owner_label).includes(needle);
+  });
+  const importedMatches = importedRows.filter((row) => {
+    return searchText(`${row.guild || ""} ${row.label || ""}`).includes(needle);
   });
 
-  if (!matches.length) return respond(ctx, mode, `No saved bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
+  if (!savedMatches.length && !importedMatches.length) {
+    return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
+  }
 
-  const owners = [...new Set(matches.map((row) => row.owner_label || query))].join(", ");
-  const lines = [`<b>${escapeHtml(owners)}</b>`, `${matches.length} saved bases in ${galaxy}`];
-  matches.forEach((row) => lines.push(formatUserBaseLine(row)));
+  const owners = [...new Set([
+    ...savedMatches.map((row) => row.owner_label || query),
+    ...importedMatches.map((row) => [row.guild, row.label].filter(Boolean).join(" ") || query)
+  ])].join(", ");
+  const lines = [
+    `<b>${escapeHtml(owners)}</b>`,
+    `${importedMatches.length} imported / ${savedMatches.length} saved bases in ${galaxy}`
+  ];
+  if (importedMatches.length) {
+    lines.push("", "<b>Imported Intel</b>");
+    importedMatches.forEach((row) => lines.push(formatImportedBaseLine(row)));
+  }
+  if (savedMatches.length) {
+    lines.push("", "<b>Saved By Users</b>");
+    savedMatches.forEach((row) => lines.push(formatUserBaseLine(row)));
+  }
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
@@ -1005,6 +1026,21 @@ function staleBaseLine(base) {
   const age = intelAgeLabel(base.updated_at);
   const owner = [base.guild, base.label].filter(Boolean).join(" ");
   return `${escapeHtml(base.coord)} - ${escapeHtml(owner || "Unknown base")} - ${age}`;
+}
+
+function formatImportedBaseLine(row) {
+  const owner = [row.guild, row.label].filter(Boolean).join(" ") || "Unknown owner";
+  const age = row.updated_at ? ` - ${intelAgeLabel(row.updated_at)}` : "";
+  return `${escapeHtml(row.coord)} - ${escapeHtml(owner)}${age}`;
+}
+
+function searchText(value) {
+  return String(value || "")
+    .replace(/^@/, "")
+    .replace(/[\[\]]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function intelAgeLabel(value) {
