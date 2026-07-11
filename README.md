@@ -26,18 +26,22 @@ Open `index.html` in a browser. Without Supabase credentials, updates are saved 
 
 The bot can answer coordinate lookups from Supabase:
 
+Prefix a command with `!` to get the reply privately. Prefix the same command with `$` to post the reply in the current group or channel.
+
 - `!g [galaxy]` sets your personal default galaxy.
 - `!setgalaxy [galaxy]` sets the current chat's default galaxy.
 - `![coord]` sends planet intel to the user by private message.
 - `$[coord]` posts planet intel in the current chat.
-- `!claim [coord] [minutes] [note]` claims a target landing in that many minutes.
-- `!targets` sends your active claims privately.
-- `!claimed` posts all active claimed attacks line by line.
-- `!attacked [coord] [minutes] [note]` reports hostile incoming from that coordinate.
-- `!incoming` posts all active hostile incoming reports sorted by ETA.
-- `!mine [coord] [note]` saves one of your bases.
-- `!me` sends your saved bases privately.
-- `!save me [coord] [note]` saves or updates a note on one of your bases.
+- `!claim` or `$claim [coord] [minutes] [note]` claims a target landing in that many minutes.
+- `!targets` or `$targets` shows your active claims.
+- `!claimed` or `$claimed` lists all active claimed attacks line by line.
+- `!attacked` or `$attacked [coord] [minutes] [note]` reports hostile incoming from that coordinate.
+- `!incoming` or `$incoming` lists all active hostile incoming reports sorted by ETA.
+- `!mine` or `$mine [coord] [note]` saves one of your bases.
+- `!me` or `$me` shows your saved bases.
+- `!bases` or `$bases [name]` lists another player's saved bases in the current galaxy.
+- `!intel` or `$intel [name]` is an old alias for player saved bases.
+- `!save me` or `$save me [coord] [note]` saves or updates a note on one of your bases.
 - `!wakeup` runs a 60 second startup countdown.
 - `!help` or `/help` shows available commands. Use `!help claim`, `!help intel`, `!help incoming`, `!help bases`, or `!help galaxy` for examples.
 
