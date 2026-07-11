@@ -24,7 +24,7 @@ const saveMePattern = /^!save\s+me\s+(\S+)(?:\s+(.+))?$/i;
 
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
-bot.command("help", (ctx) => ctx.reply(helpText(), { parse_mode: "HTML" }));
+bot.command("help", (ctx) => ctx.reply(helpText(ctx.message?.text || ""), { parse_mode: "HTML" }));
 
 bot.on("text", handleText);
 bot.on("channel_post", handleText);
@@ -43,7 +43,7 @@ async function handleText(ctx) {
   const text = ctx.message?.text || ctx.channelPost?.text || "";
   const lower = text.trim().toLowerCase();
 
-  if (lower === "!help") return ctx.reply(helpText(), { parse_mode: "HTML" });
+  if (lower.startsWith("!help")) return ctx.reply(helpText(text), { parse_mode: "HTML" });
   if (lower === "!wakeup") return handleWakeup(ctx);
   if (lower.startsWith("!g ")) return handleUserGalaxy(ctx, text);
   if (lower.startsWith("!setgalaxy ")) return handleChatGalaxy(ctx, text);
@@ -77,26 +77,82 @@ async function handleText(ctx) {
   await ctx.reply(report, { parse_mode: "HTML" });
 }
 
-function helpText() {
+function helpText(input = "") {
+  const topic = String(input).trim().split(/\s+/)[1]?.toLowerCase() || "";
+  const topics = {
+    claim: [
+      "<b>Claim Help</b>",
+      "",
+      "<code>!claim [coord] [minutes] [note]</code>",
+      "Claim an attack target landing in a number of minutes.",
+      "",
+      "Examples:",
+      "<code>!claim B24:24:34:06 10 fighters</code>",
+      "<code>!claim B23:11:22:30:45 wave 2</code>"
+    ],
+    intel: [
+      "<b>Intel Lookup Help</b>",
+      "",
+      "<code>![coord]</code> - DM intel to you",
+      "<code>$[coord]</code> - post intel in the current chat",
+      "",
+      "Examples:",
+      "<code>!B24:34:06:10</code>",
+      "<code>$B23:44:76:20</code>"
+    ],
+    incoming: [
+      "<b>Incoming Help</b>",
+      "",
+      "<code>!attacked [attacker coord] [eta minutes] [note]</code>",
+      "Report hostile incoming and sort it by ETA.",
+      "",
+      "Examples:",
+      "<code>!attacked B24:34:06:10 25 incoming dread</code>",
+      "<code>!incoming</code>"
+    ],
+    bases: [
+      "<b>Base List Help</b>",
+      "",
+      "<code>!mine [coord] [note]</code> - save one of your bases",
+      "<code>!me</code> - DM your saved bases",
+      "<code>!save me [coord] [note]</code> - save/update a base note",
+      "",
+      "Example:",
+      "<code>!save me B24:06:10:20 needs defense</code>"
+    ],
+    galaxy: [
+      "<b>Galaxy Help</b>",
+      "",
+      "<code>!g [galaxy]</code> - set your personal galaxy",
+      "<code>!setgalaxy [galaxy]</code> - set this chat's galaxy",
+      "",
+      "Examples:",
+      "<code>!g B24</code>",
+      "<code>!setgalaxy B23</code>"
+    ]
+  };
+
+  if (topics[topic]) return topics[topic].join("\n");
+
   return [
     "<b>VisionBot Commands</b>",
     "",
     "<code>/map</code> - open your current galaxy map",
-    "<code>!g B24</code> - set your personal galaxy",
-    "<code>!setgalaxy B24</code> - set this chat's default galaxy",
-    "<code>!B24:34:06:10</code> - DM planet intel to you",
-    "<code>$B24:34:06:10</code> - post planet intel in this chat",
-    "<code>!claim B24:24:34:06 10 note</code> - claim target landing in 10 minutes",
-    "<code>!claim B24:24:34:06:10 note</code> - same, final :10 is minutes",
-    "<code>!targets</code> - DM your active claims for this galaxy",
-    "<code>!claimed</code> - list active claims for this galaxy",
-    "<code>!attacked B24:34:06:10 25 note</code> - report hostile incoming, ETA 25m",
-    "<code>!incoming</code> - list active hostile incoming for this galaxy",
-    "<code>!mine B24:06:10:20 note</code> - save one of your bases",
-    "<code>!me</code> - list your saved bases for this galaxy",
-    "<code>!save me B24:06:10:20 defense request</code> - save a note on your base",
-    "<code>!wakeup</code> - run a 60 second startup countdown",
-    "<code>!help</code> - show this help"
+    "<code>!g</code> - set your personal galaxy",
+    "<code>!setgalaxy</code> - set this chat's galaxy",
+    "<code>![coord]</code> - DM planet intel to you",
+    "<code>$[coord]</code> - post planet intel here",
+    "<code>!claim</code> - claim an attack target",
+    "<code>!targets</code> - DM your active claims",
+    "<code>!claimed</code> - list active claims",
+    "<code>!attacked</code> - report hostile incoming",
+    "<code>!incoming</code> - list hostile incoming",
+    "<code>!mine</code> - save one of your bases",
+    "<code>!me</code> - DM your saved bases",
+    "<code>!save me</code> - save a note on your base",
+    "<code>!wakeup</code> - run startup countdown",
+    "",
+    "Details: <code>!help claim</code>, <code>!help intel</code>, <code>!help incoming</code>, <code>!help bases</code>, <code>!help galaxy</code>"
   ].join("\n");
 }
 
