@@ -19,6 +19,7 @@ if (!supabaseKey) throw new Error("SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KE
 const bot = new Telegraf(token);
 const galaxyPattern = /B\d{2}/i;
 const claimPattern = /^[!$](claim|attack)\s+(.+)$/i;
+const targetClaimPattern = /^[!$](claim|take)\s+([ADS]-?[A-Z0-9]{3,8})\s+(.+)$/i;
 const attackedPattern = /^[!$](attacked|sos)\s+(.+)$/i;
 const minePattern = /^[!$]mine\s+(.+)$/i;
 const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
@@ -71,7 +72,7 @@ async function handleText(ctx) {
 
   if (isProtectedOperationalCommand(lower) && !isPrivateChat(ctx)) await rememberActiveChat(ctx);
 
-  if (isCommand(lower, "claim") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
+  if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
@@ -209,8 +210,13 @@ async function helpText(ctx, input = "") {
     attack: [
       "<b>Attack Help</b>",
       "",
+      "<code>$attack 02:00 [coord] [coord] [note]</code>",
+      "Creates a target pool for a landing window.",
+      "<code>!take A-7K4P9 [coord] 02:30 [note]</code>",
+      "Claims one target from that pool at your chosen arrival time.",
+      "",
       "<code>$attack [target] [eta-minutes] [note]</code>",
-      "Creates and announces an attack operation.",
+      "Creates and claims one attack target immediately.",
       "<code>!join A-7K4P9 [travel-minutes] [role]</code>",
       "<code>!ready A-7K4P9</code>",
       "<code>!sent A-7K4P9 [note]</code>",
@@ -348,11 +354,13 @@ async function helpText(ctx, input = "") {
     status,
     "",
     "<b>CREATE</b>",
+    "<code>$attack 02:00 [coord] [coord] [note]</code>",
     "<code>$attack [target] [eta-min] [note]</code>",
     "<code>$sos [defended] [hostile] [eta-min] [note]</code>",
     "<code>$scout [coord] [due-min] [note]</code>",
     "",
     "<b>PARTICIPATE</b>",
+    "<code>!take [attack-ID] [coord] [arrival-time]</code>",
     "<code>!join A-7K4P9 [travel-min] [role]</code>",
     "<code>!respond D-4M8Q2 [travel-min] [role]</code>",
     "<code>!ready [ID]</code>  <code>!sent [ID]</code>  <code>!leave [ID]</code>",
@@ -383,7 +391,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(help|g|setgalaxy|guild|claim|attack|scout|attacked|sos|intel|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(help|g|setgalaxy|guild|claim|take|attack|scout|attacked|sos|intel|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function isCommand(lowerText, command) {
@@ -399,6 +407,7 @@ function isExactCommand(lowerText, command) {
 function isProtectedOperationalCommand(lowerText) {
   return [
     "claim",
+    "take",
     "attack",
     "scout",
     "attacked",
@@ -428,6 +437,7 @@ function isProtectedOperationalCommand(lowerText) {
 function isSensitiveOperationalCommand(lowerText) {
   return [
     "claim",
+    "take",
     "attack",
     "scout",
     "attacked",
@@ -662,6 +672,14 @@ async function userRoleLabel(ctx) {
 }
 
 async function handleClaim(ctx, text, mode) {
+  if (/^[!$]attack\b/i.test(text)) {
+    const plan = parseAttackPlan(text, await galaxyForContext(ctx));
+    if (plan) return handleAttackPlan(ctx, plan, mode);
+  }
+
+  const targetClaim = parseTargetClaim(text, await galaxyForContext(ctx));
+  if (targetClaim) return handleTargetClaim(ctx, targetClaim, mode);
+
   const match = text.trim().match(claimPattern);
   if (!match) return respond(ctx, mode, "Use: !claim B24:24:34:06 10 optional note");
 
@@ -719,6 +737,108 @@ async function handleClaim(ctx, text, mode) {
   const message = await respond(ctx, mode, await formatOperationStatus(operation, members), operationMessageOptions(operation));
   await saveOperationMessage(operation, message);
   return message;
+}
+
+async function handleAttackPlan(ctx, plan, mode) {
+  if (!plan.coords.length) return respond(ctx, mode, "Use: $attack 02:00 B24:11:70:31 B24:14:89:10 optional note");
+  if (plan.coords.length > 40) return respond(ctx, mode, "Keep one attack plan to 40 targets or fewer.");
+
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+
+  const now = new Date();
+  const operation = operationRow(ctx, {
+    type: "attack",
+    targetCoord: plan.coords[0],
+    arrivalAt: plan.arrivalAt,
+    note: plan.note || `${plan.coords.length} target attack pool`,
+    chatId: scopeId
+  });
+
+  if (!(await insertRow("b24_operations", operation))) {
+    return respond(ctx, mode, "Attack plan failed. I could not create the operation.");
+  }
+
+  const rows = plan.coords.map((coord) => ({
+    map_id: mapIdForCoord(coord),
+    claim_id: randomId(),
+    operation_id: operation.operation_id,
+    operation_short_id: operation.short_id,
+    target_coord: coord,
+    region_id: astroToRegion(coord),
+    system_id: astroToSystem(coord),
+    claimed_by: null,
+    claimed_by_user_id: null,
+    chat_id: scopeId,
+    arrival_at: plan.arrivalAt.toISOString(),
+    arrival_label: plan.label,
+    confirmed_sent: false,
+    confirmed_at: null,
+    confirmed_by: "",
+    fleet_label: "",
+    note: plan.note,
+    status: "active",
+    created_at: now.toISOString(),
+    updated_at: now.toISOString()
+  }));
+
+  for (const row of rows) {
+    if (!(await insertRow("b24_claims", row))) {
+      return respond(ctx, mode, `Attack plan ${escapeHtml(operation.short_id)} was created, but one target row failed to save.`, { parse_mode: "HTML" });
+    }
+  }
+
+  const message = [
+    `<b>${escapeHtml(operation.short_id)} ATTACK PLAN</b>`,
+    `Landing window starts: ${escapeHtml(plan.label)} (${formatEta(plan.arrivalAt)})`,
+    `Targets: ${rows.length}`,
+    plan.note ? `Note: ${escapeHtml(plan.note)}` : "",
+    "",
+    `Claim with: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(rows[0].target_coord)} ${escapeHtml(plan.label)}</code>`,
+    `Board: <code>$board attack</code>`
+  ].filter(Boolean).join("\n");
+
+  return respond(ctx, mode, message, {
+    parse_mode: "HTML",
+    ...attackPlanKeyboard(operation, rows)
+  });
+}
+
+async function handleTargetClaim(ctx, targetClaim, mode) {
+  const operation = await findOperation(ctx, targetClaim.shortId);
+  if (!operation || operation.type !== "attack") {
+    return respond(ctx, mode, `No active attack operation found for ${escapeHtml(targetClaim.shortId)}.`, { parse_mode: "HTML" });
+  }
+
+  const claim = await fetchOne("b24_claims", {
+    operation_id: operation.operation_id,
+    target_coord: targetClaim.coord,
+    status: "active"
+  }, operation.map_id);
+
+  if (!claim) {
+    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} is not an open target on ${escapeHtml(operation.short_id)}.`, { parse_mode: "HTML" });
+  }
+  if (claim.claimed_by_user_id && claim.claimed_by_user_id !== telegramUserId(ctx)) {
+    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} is already claimed by ${escapeHtml(claim.claimed_by || "someone")}.`, { parse_mode: "HTML" });
+  }
+
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_claims", {
+    claimed_by: telegramName(ctx),
+    claimed_by_user_id: telegramUserId(ctx),
+    arrival_at: targetClaim.arrivalAt.toISOString(),
+    arrival_label: targetClaim.label,
+    note: targetClaim.note || claim.note || "",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    claim_id: `eq.${claim.claim_id}`
+  });
+  if (!ok) return respond(ctx, mode, "Target claim failed. I could not update Supabase.");
+
+  await upsertOperationMember(ctx, operation, "joined", `${targetClaim.coord}${targetClaim.note ? ` ${targetClaim.note}` : ""}`);
+  return respond(ctx, mode, `${escapeHtml(telegramName(ctx))} claimed ${escapeHtml(targetClaim.coord)} for ${escapeHtml(operation.short_id)} at ${escapeHtml(targetClaim.label)}.`, { parse_mode: "HTML" });
 }
 
 async function handleScout(ctx, text, mode) {
@@ -949,6 +1069,7 @@ async function handleBoard(ctx, text, mode) {
     kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId)
   ]);
   const membersByOperation = await fetchMembersByOperation(operations);
+  const claimsByOperation = await fetchClaimsByOperation(operations);
   const attacks = operations.filter((operation) => operation.type === "attack");
   const defenses = operations.filter((operation) => operation.type === "defense");
   const scouts = operations.filter((operation) => operation.type === "scout");
@@ -957,7 +1078,13 @@ async function handleBoard(ctx, text, mode) {
   const lines = [`<b>${galaxy} Board</b>`];
   if (kind !== "defense" && kind !== "scout") {
     lines.push("", `<b>Attacks</b> (${attackCount})`);
-    lines.push(...(attacks.length ? attacks.map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : []));
+    lines.push(...(attacks.length ? attacks.map((operation) => {
+      return formatOperationLine(
+        operation,
+        membersByOperation.get(operation.operation_id) || [],
+        claimsByOperation.get(operation.operation_id) || []
+      );
+    }) : []));
     lines.push(...(appClaims.length ? appClaims.map(formatBoardClaimLine) : []));
     if (!attackCount) lines.push("No active attack operations or app claims.");
   }
@@ -1522,6 +1649,17 @@ async function fetchMembersByOperation(operations) {
   return new Map(entries);
 }
 
+async function fetchClaimsByOperation(operations) {
+  const entries = await Promise.all(operations.map(async (operation) => {
+    const claims = await fetchRows("b24_claims", {
+      operation_id: `eq.${operation.operation_id}`,
+      status: "eq.active"
+    }, { mapId: operation.map_id, order: "target_coord.asc" });
+    return [operation.operation_id, claims];
+  }));
+  return new Map(entries);
+}
+
 async function fetchOperationsForMemberships(galaxy, memberships) {
   if (!memberships.length) return [];
   const ids = new Set(memberships.map((member) => member.operation_id));
@@ -1898,13 +2036,24 @@ function operationKeyboard(operation) {
   return Markup.inlineKeyboard(rows);
 }
 
+function attackPlanKeyboard(operation, claims) {
+  const rows = [];
+  const firstTarget = claims[0]?.target_coord || operation.target_coord || "";
+  if (firstTarget) rows.push([Markup.button.url("Open First Target", mapUrl(galaxyFromCoord(firstTarget), firstTarget))]);
+  rows.push([
+    Markup.button.callback("Status", `op:status:${operation.operation_id}`),
+    Markup.button.callback("Stand down", `op:close:${operation.operation_id}`)
+  ]);
+  return Markup.inlineKeyboard(rows);
+}
+
 function formatClaimLine(claim) {
   const note = claim.note ? ` - ${escapeHtml(claim.note)}` : "";
   const status = claim.confirmed_sent ? "confirmed" : "planned";
   return `${escapeHtml(claim.target_coord)} - ${escapeHtml(claim.claimed_by || "Unknown")} - ${formatEta(new Date(claim.arrival_at))} - ${status}${note}`;
 }
 
-function formatOperationLine(operation, members = []) {
+function formatOperationLine(operation, members = [], claims = []) {
   const target = operation.type === "defense"
     ? `${operation.defended_coord || "?"} <= ${operation.hostile_origin || "?"}`
     : operation.target_coord || "?";
@@ -1913,7 +2062,17 @@ function formatOperationLine(operation, members = []) {
   const sent = stateCounts.sent || 0;
   const ready = stateCounts.ready || 0;
   const joined = activeMembers.length;
-  return `${escapeHtml(operation.short_id)} ${escapeHtml(operation.type)} ${escapeHtml(target)} - ${formatEta(new Date(operation.arrival_at))} - ${joined} joined / ${ready} ready / ${sent} sent`;
+  const targetSummary = claims.length
+    ? ` - ${claims.filter((claim) => claim.claimed_by_user_id).length}/${claims.length} targets claimed`
+    : "";
+  const claimLines = operation.type === "attack" && claims.length
+    ? claims.slice(0, 6).map((claim) => {
+      const claimer = claim.claimed_by ? ` by ${claim.claimed_by}` : " open";
+      return `  ${claim.target_coord}${claimer} - ${formatEta(new Date(claim.arrival_at))}`;
+    }).join("\n")
+    : "";
+  const line = `${escapeHtml(operation.short_id)} ${escapeHtml(operation.type)} ${escapeHtml(target)} - ${formatEta(new Date(operation.arrival_at))} - ${joined} joined / ${ready} ready / ${sent} sent${escapeHtml(targetSummary)}`;
+  return claimLines ? `${line}\n${escapeHtml(claimLines)}` : line;
 }
 
 function formatBoardClaimLine(claim) {
@@ -2011,6 +2170,121 @@ function boardKind(text) {
   if (/\b(attack|attacks|claims|claimed)\b/.test(raw)) return "attack";
   if (/\b(scout|scouts|scouting)\b/.test(raw)) return "scout";
   return "all";
+}
+
+function parseAttackPlan(text, fallbackGalaxy) {
+  const body = String(text || "").trim().replace(/^[!$]attack\s+/i, "").trim();
+  const timeMatch = body.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?\s+([\s\S]+)$/i);
+  if (!timeMatch) return null;
+
+  const start = parseClockTime(timeMatch[1], timeMatch[2], timeMatch[3]);
+  if (!start) return null;
+
+  const rest = timeMatch[7] || "";
+  const coords = extractAstroCoords(rest, fallbackGalaxy);
+  if (coords.length < 2) return null;
+
+  const note = rest
+    .replace(/B?\d{2}[:\s]?\d{1,2}[:\s]\d{1,2}[:\s]\d{1,2}/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return {
+    label: start.label,
+    arrivalAt: nextClockTime(start.label),
+    coords,
+    note
+  };
+}
+
+function parseTargetClaim(text, fallbackGalaxy) {
+  const match = String(text || "").trim().match(targetClaimPattern);
+  if (!match) return null;
+
+  const shortId = normalizeShortId(match[2]);
+  const parsed = parseCoordinate(match[3], fallbackGalaxy);
+  if (!parsed || parsed.kind !== "astro") return null;
+
+  const timed = parseClaimTime(parsed.remainder);
+  if (!timed) return null;
+
+  return {
+    shortId,
+    coord: parsed.coord,
+    arrivalAt: timed.arrivalAt,
+    label: timed.label,
+    note: timed.note
+  };
+}
+
+function parseClaimTime(value) {
+  const raw = String(value || "").trim();
+  const minuteMatch = raw.match(/^:?\s*(\d{1,4})(?:m|min|minutes)?(?:\s+(.+))?$/i);
+  if (minuteMatch) {
+    const minutes = Number(minuteMatch[1]);
+    if (!validMinutes(minutes)) return null;
+    const arrivalAt = new Date(Date.now() + minutes * 60 * 1000);
+    return {
+      arrivalAt,
+      label: formatClockLabel(arrivalAt),
+      note: String(minuteMatch[2] || "").trim()
+    };
+  }
+
+  const timeMatch = raw.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s+(.+))?$/i);
+  if (!timeMatch) return null;
+  const parsed = parseClockTime(timeMatch[1], timeMatch[2], timeMatch[3]);
+  if (!parsed) return null;
+  return {
+    arrivalAt: nextClockTime(parsed.label),
+    label: parsed.label,
+    note: String(timeMatch[4] || "").trim()
+  };
+}
+
+function extractAstroCoords(text, fallbackGalaxy) {
+  const results = [];
+  const seen = new Set();
+  const raw = String(text || "");
+  const regex = /(B\d{2})?\s*:?\s*(\d{1,2})\s*[: ]\s*(\d{1,2})\s*[: ]\s*(\d{1,2})/gi;
+  let match;
+  while ((match = regex.exec(raw))) {
+    const galaxy = normalizeGalaxy(match[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+    const nums = [match[2], match[3], match[4]].map(Number);
+    if (!nums.every(validCoordPart)) continue;
+    const coord = [galaxy, ...nums.map((num) => String(num).padStart(2, "0"))].join(":");
+    if (!seen.has(coord)) {
+      seen.add(coord);
+      results.push(coord);
+    }
+  }
+  return results;
+}
+
+function parseClockTime(hourValue, minuteValue = "00", ampm = "") {
+  let hour = Number(hourValue);
+  const minute = Number(minuteValue || 0);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  const suffix = String(ampm || "").toLowerCase();
+  if (suffix) {
+    if (hour < 1 || hour > 12) return null;
+    if (suffix === "pm" && hour !== 12) hour += 12;
+    if (suffix === "am" && hour === 12) hour = 0;
+  }
+  if (hour < 0 || hour > 23) return null;
+  return { label: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}` };
+}
+
+function nextClockTime(label) {
+  const [hour, minute] = String(label || "").split(":").map(Number);
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1);
+  return date;
+}
+
+function formatClockLabel(date) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 function parseOperationAction(text) {
