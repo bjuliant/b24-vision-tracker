@@ -22,28 +22,41 @@ Open `index.html` in a browser. Without Supabase credentials, updates are saved 
 4. Fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 5. Host the folder on GitHub Pages, Netlify, Vercel, or Cloudflare Pages.
 
+For production hardening, read `SECURITY_MODEL.md` first. After the bot has `SUPABASE_SERVICE_ROLE_KEY`, you can run `supabase-hardening.sql` to remove public writes from operational tables.
+
 ## Telegram Intel Lookups
 
 The bot can answer coordinate lookups from Supabase:
 
-Prefix a command with `!` to get the reply privately. Prefix the same command with `$` to post the reply in the current group or channel.
+Prefix a command with `!` to get the reply privately. Prefix the same command with `$` to post the reply in the current group or channel. If Telegram privacy hides `$help` in a group, use `/help` instead; slash commands are visible to the bot. With privacy enabled, mentioning the bot also works, such as `@b24Visionbot $help`.
 
 - `!g [galaxy]` sets your personal default galaxy.
 - `!setgalaxy [galaxy]` sets the current chat's default galaxy.
 - `![coord]` sends planet intel to the user by private message.
 - `$[coord]` posts planet intel in the current chat.
+- `!intel` or `$intel [coord]` looks up a coordinate.
 - `!claim` or `$claim [coord] [minutes] [note]` claims a target landing in that many minutes.
-- `!targets` or `$targets` shows your active claims.
-- `!claimed` or `$claimed` lists all active claimed attacks line by line.
-- `!attacked` or `$attacked [coord] [minutes] [note]` reports hostile incoming from that coordinate.
+- `!next` or `!myops` sends your personal dashboard.
+- `$board` or `/board` lists active attacks and defenses publicly.
+- `$op status [ID]` posts a public operation summary.
+- `!join [ID] [role/note]` joins an operation.
+- `!respond [ID] [role/note]` joins a defense operation.
+- `!ready [ID]` marks you ready.
+- `!sent [ID] [fleet row/note]` confirms you launched.
+- `!leave [ID] [reason]` withdraws from an operation.
+- `$standdown [ID] [reason]` closes an operation.
+- `$defense` shows the public defense board.
+- `!targets` or `$targets` is an old alias for your active claims.
+- `!claimed` or `$claimed` is an old alias for active attack claims.
+- `!sos` or `$sos [your base] [attacker coord] [minutes] [note]` reports hostile incoming against a defended base.
+- `!attacked` or `$attacked [your base] [attacker coord] [minutes] [note]` is an alias for SOS.
 - `!incoming` or `$incoming` lists all active hostile incoming reports sorted by ETA.
 - `!mine` or `$mine [coord] [note]` saves one of your bases.
 - `!me` or `$me` shows your saved bases.
 - `!bases` or `$bases [name]` lists another player's saved bases in the current galaxy.
-- `!intel` or `$intel [name]` is an old alias for player saved bases.
 - `!save me` or `$save me [coord] [note]` saves or updates a note on one of your bases.
 - `!wakeup` runs a 60 second startup countdown.
-- `!help` or `/help` shows available commands. Use `!help claim`, `!help intel`, `!help incoming`, `!help bases`, or `!help galaxy` for examples.
+- `!help`, `$help`, or `/help` shows available commands. Use `!help claim`, `!help intel`, `!help incoming`, `!help bases`, `!help board`, or `!help galaxy` for examples.
 
 For group lookups, disable bot privacy in `@BotFather` with `/setprivacy`, or Telegram may hide normal `!` and `$` messages from the bot. For channel lookups, add the bot to the channel with permission to post. Users must start the bot privately once before it can DM them.
 
@@ -53,7 +66,9 @@ Bot environment variables:
 - `WEB_APP_URL`
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`, optional for the bot only; use this before running Supabase hardening SQL
 - `DEFAULT_GALAXY`, usually `B24`
+- `APPROVED_CHAT_IDS`, optional comma-separated Telegram group/channel IDs allowed to use operation commands
 
 ## Create The Telegram Bot
 

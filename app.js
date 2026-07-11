@@ -16,10 +16,14 @@
   const selectedStatus = document.querySelector("#selectedStatus");
   const selectedSystems = document.querySelector("#selectedSystems");
   const selectedBases = document.querySelector("#selectedBases");
+  const selectedOperations = document.querySelector("#selectedOperations");
   const sectorPanelTitle = document.querySelector("#sectorPanelTitle");
   const sectorCounts = document.querySelector("#sectorCounts");
   const claimsPanelTitle = document.querySelector("#claimsPanelTitle");
   const claimCounts = document.querySelector("#claimCounts");
+  const operationsPanelTitle = document.querySelector("#operationsPanelTitle");
+  const operationCounts = document.querySelector("#operationCounts");
+  const operationList = document.querySelector("#operationList");
   const claimTarget = document.querySelector("#claimTarget");
   const claimArrival = document.querySelector("#claimArrival");
   const claimNote = document.querySelector("#claimNote");
@@ -39,13 +43,16 @@
   const bookmarkletButton = document.querySelector("#bookmarkletButton");
   const importResult = document.querySelector("#importResult");
 
+  const urlParams = new URLSearchParams(location.search);
   const defaultGalaxy = normalizeGalaxy(config.GALAXY || galaxyFromMapId(config.MAP_ID) || "B24");
-  let galaxy = normalizeGalaxy(new URLSearchParams(location.search).get("gal")) || defaultGalaxy;
+  const initialLocation = normalizeExternalLocation(urlParams.get("loc"));
+  let galaxy = normalizeGalaxy(urlParams.get("gal")) || galaxyFromLocation(initialLocation) || defaultGalaxy;
   let mapId = galaxyToMapId(galaxy);
   let storageKey = `vision-intel-${mapId}`;
   const hasSupabase = Boolean(config.SUPABASE_URL && config.SUPABASE_ANON_KEY && window.supabase);
   const user = getTelegramUser();
   let selected = `${galaxy}:1`;
+  let highlightedSector = "";
   let client = null;
   let realtimeChannel = null;
   let intel = loadLocalState();
@@ -56,7 +63,7 @@
     tg?.ready();
     tg?.expand();
 
-    if (hasSupabase && !new URLSearchParams(location.search).get("gal")) {
+    if (hasSupabase && !urlParams.get("gal") && !initialLocation) {
       client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
       const preferredGalaxy = await loadPreferredGalaxy();
       setGalaxy(preferredGalaxy || galaxy);
@@ -92,6 +99,8 @@
     document.title = `${galaxy} Vision Tracker`;
     grid.setAttribute("aria-label", `${galaxy} sector map`);
     claimTarget.placeholder = `${galaxy}:44:76:10`;
+    highlightedSector = locationToRegion(initialLocation, galaxy);
+    if (highlightedSector) selected = highlightedSector;
   }
 
   function renderGrid() {
@@ -154,7 +163,8 @@
         loadRemoteSystems(),
         loadRemoteBases(),
         loadRemoteAstros(),
-        loadRemoteClaims()
+        loadRemoteClaims(),
+        loadRemoteOperations()
       ]);
       paintAll();
       selectSector(selected);
@@ -212,6 +222,18 @@
             if (payload.new.region_id === selected) selectSector(selected);
           }
         )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "b24_operations", filter: `map_id=eq.${mapId}` },
+          (payload) => {
+            mergeOperationRow(payload.new);
+            saveLocalState();
+            const region = operationRegion(payload.new);
+            paintSector(region);
+            if (region === selected) selectSector(selected);
+            renderAttackBoard();
+          }
+        )
         .subscribe();
     } catch (error) {
       console.error(error);
@@ -255,6 +277,13 @@
     saveLocalState();
   }
 
+  async function loadRemoteOperations() {
+    const { data, error } = await client.from("b24_operations").select("*").eq("map_id", mapId);
+    if (error) return;
+    data.forEach(mergeOperationRow);
+    saveLocalState();
+  }
+
   async function loadPreferredGalaxy() {
     const tgUser = tg?.initDataUnsafe?.user;
     if (!tgUser?.id || !client) return "";
@@ -278,6 +307,24 @@
       ...legacy,
       updatedBy: row.updated_by || "",
       updatedAt: row.updated_at || ""
+    };
+  }
+
+  function mergeOperationRow(row) {
+    if (!row?.operation_id) return;
+    intel.operations ||= {};
+    intel.operations[row.operation_id] = {
+      id: row.operation_id,
+      shortId: row.short_id || "",
+      type: row.type || "",
+      target: row.target_coord || "",
+      defended: row.defended_coord || "",
+      hostile: row.hostile_origin || "",
+      arrivalAt: row.arrival_at || "",
+      commander: row.commander_label || "",
+      status: row.status || "active",
+      note: row.note || "",
+      region: operationRegion(row)
     };
   }
 
@@ -725,6 +772,7 @@
     cell.classList.toggle("has-enemy", sector.enemy);
     cell.classList.toggle("has-scout", sector.scout);
     cell.classList.toggle("has-reserved", sector.reserved);
+    cell.classList.toggle("highlighted-target", id === highlightedSector);
 
     setFlag(cell, "F", sector.friendly, "on-f");
     setFlag(cell, "E", sector.enemy, "on-e");
@@ -734,8 +782,9 @@
     const systems = getSystemCount(id);
     const bases = getBaseCount(id);
     const claims = getClaimCount(id);
+    const operations = getOperationCount(id);
     const count = cell.querySelector(".intel-count");
-    count.textContent = systems || bases || claims ? `${systems}s ${bases}b ${claims}c` : "";
+    count.textContent = systems || bases || claims || operations ? `${systems}s ${bases}b ${claims}c ${operations}o` : "";
   }
 
   function setFlag(cell, letter, enabled, className) {
@@ -758,6 +807,7 @@
     selectedStatus.textContent = flags.length ? flags.join(" ") : "None";
     selectedSystems.textContent = `${getSystemCount(id)} known`;
     selectedBases.textContent = `${getBaseCount(id)} known`;
+    selectedOperations.textContent = `${getOperationCount(id)} active`;
     renderSectorPanel(id);
   }
 
@@ -769,6 +819,7 @@
     sectorCounts.textContent = `${systems.length} systems / ${bases.length} bases`;
     claimsPanelTitle.textContent = id;
     renderClaimsPanel(id);
+    renderOperationsPanel(id);
 
     if (bases.length) {
       baseList.innerHTML = bases.map((base) => {
@@ -806,6 +857,26 @@
       const note = claim.note ? ` - ${escapeHtml(claim.note)}` : "";
       const by = claim.claimedBy ? ` by ${escapeHtml(claim.claimedBy)}` : "";
       return `<div class="claim-row"><div><strong>${escapeHtml(claim.target)}</strong><span class="claim-meta">Claimed${by}${note}</span><button class="unclaim-button" type="button" data-unclaim="${escapeHtml(claim.id)}">Unclaim</button></div><div class="claim-time">Lands ${escapeHtml(arrival)}<br><span>${escapeHtml(localTime)}${claimerTime ? " / " + claimerTime : ""}</span></div></div>`;
+    }).join("");
+  }
+
+  function renderOperationsPanel(id) {
+    const activeOperations = getOperationsForRegion(id);
+    operationsPanelTitle.textContent = id;
+    operationCounts.textContent = `${activeOperations.length} active`;
+
+    if (!activeOperations.length) {
+      operationList.textContent = "No active operations for this sector.";
+      return;
+    }
+
+    operationList.innerHTML = activeOperations.map((operation) => {
+      const countdown = operation.arrivalAt ? formatCountdown(operation.arrivalAt, "arrived") : "No arrival";
+      const target = operation.type === "defense"
+        ? `${escapeHtml(operation.defended || "?")} <= ${escapeHtml(operation.hostile || "?")}`
+        : escapeHtml(operation.target || "?");
+      const note = operation.note ? ` - ${escapeHtml(operation.note)}` : "";
+      return `<div class="operation-row"><div><strong>${escapeHtml(operation.shortId || operation.id)} ${escapeHtml(operation.type)}</strong><span>${target}${note}</span></div><div class="operation-time">${escapeHtml(countdown)}</div></div>`;
     }).join("");
   }
 
@@ -860,6 +931,10 @@
     return getClaimsForRegion(region).length;
   }
 
+  function getOperationCount(region) {
+    return getOperationsForRegion(region).length;
+  }
+
   function getSystemsForRegion(region) {
     return [...(intel.systems[region] || [])].sort();
   }
@@ -882,14 +957,26 @@
       .sort((a, b) => String(a.arrivalAt).localeCompare(String(b.arrivalAt)) || a.target.localeCompare(b.target));
   }
 
+  function getOperationsForRegion(region) {
+    return Object.values(intel.operations || {})
+      .filter((operation) => operation.region === region && isOperationActive(operation))
+      .sort((a, b) => String(a.arrivalAt).localeCompare(String(b.arrivalAt)) || a.shortId.localeCompare(b.shortId));
+  }
+
   function isClaimActive(claim) {
     if (!claim || claim.status !== "active") return false;
     if (!claim.arrivalAt) return true;
     return new Date(claim.arrivalAt).getTime() > Date.now();
   }
 
+  function isOperationActive(operation) {
+    if (!operation || operation.status !== "active") return false;
+    if (!operation.arrivalAt) return true;
+    return new Date(operation.arrivalAt).getTime() > Date.now();
+  }
+
   function loadLocalState() {
-    const blank = { sectors: {}, systems: {}, bases: {}, astros: {}, claims: {} };
+    const blank = { sectors: {}, systems: {}, bases: {}, astros: {}, claims: {}, operations: {} };
     try {
       return { ...blank, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
     } catch {
@@ -925,6 +1012,14 @@
 
   function astroToRegion(astro) {
     return normalizeRegionId(astro.split(":").slice(0, 2).join(":"));
+  }
+
+  function operationRegion(row) {
+    const value = row?.target_coord || row?.defended_coord || row?.hostile_origin || row?.target || row?.defended || row?.hostile || "";
+    const astro = normalizeAstro(value);
+    if (astro) return astroToRegion(astro);
+    const system = normalizeSystem(value);
+    return system ? systemToRegion(system) : "";
   }
 
   function astroToSystem(astro) {
@@ -1007,6 +1102,23 @@
   function normalizeGalaxy(value) {
     const match = String(value || "").toUpperCase().match(/^B\d{2}$/);
     return match ? match[0] : "";
+  }
+
+  function normalizeExternalLocation(value) {
+    const match = String(value || "").toUpperCase().match(/^(B\d{2})(?::(\d{1,2}))?(?::(\d{1,2}))?(?::(\d{1,2}))?$/);
+    if (!match) return "";
+    const parts = [match[1], match[2], match[3], match[4]].filter(Boolean);
+    return [parts[0], ...parts.slice(1).map((part) => String(Number(part)).padStart(2, "0"))].join(":");
+  }
+
+  function galaxyFromLocation(value) {
+    return normalizeGalaxy(String(value || "").split(":")[0]);
+  }
+
+  function locationToRegion(value, activeGalaxy) {
+    const parts = String(value || "").split(":");
+    if (parts.length < 2 || normalizeGalaxy(parts[0]) !== activeGalaxy) return "";
+    return normalizeRegionId(`${parts[0]}:${Number(parts[1])}`);
   }
 
   function galaxyToMapId(value) {
