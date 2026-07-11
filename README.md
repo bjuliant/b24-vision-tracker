@@ -73,6 +73,17 @@ Bot environment variables:
 - `SUPABASE_SERVICE_ROLE_KEY`, optional for the bot only; use this before running Supabase hardening SQL
 - `DEFAULT_GALAXY`, usually `B24`
 - `APPROVED_CHAT_IDS`, optional comma-separated Telegram group/channel IDs allowed to use operation commands
+- `ACCESS_CHAT_IDS`, optional comma-separated Telegram group/channel IDs whose members may use sensitive operation commands
+- `OFFICER_USER_IDS`, optional comma-separated Telegram user IDs that always have sensitive command access
+
+Recommended hostile-use setup:
+
+1. Create a private Telegram access group for guild command staff.
+2. Add VisionBot to that access group, preferably as admin so membership checks work reliably.
+3. Put that group ID in `ACCESS_CHAT_IDS`.
+4. Put your actual operation room/group ID in `APPROVED_CHAT_IDS`.
+
+Public coordinate intel commands still work for anyone, but commands like `$board`, `@board`, `$attack`, `$sos`, `!targets`, and `!incoming` require access.
 
 ## Create The Telegram Bot
 

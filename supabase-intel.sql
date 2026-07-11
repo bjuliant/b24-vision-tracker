@@ -141,6 +141,7 @@ create table if not exists public.b24_operation_members (
   state text not null default 'joined',
   sent_at timestamptz,
   arrived_at timestamptz,
+  withdrawn_at timestamptz,
   note text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -165,6 +166,9 @@ create table if not exists public.b24_scheduled_notifications (
 
 alter table public.b24_scheduled_notifications
 add column if not exists cancelled_at timestamptz;
+
+alter table public.b24_operation_members
+add column if not exists withdrawn_at timestamptz;
 
 alter table public.b24_operations
 add column if not exists message_chat_id text,

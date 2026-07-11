@@ -48,12 +48,18 @@ Ordered so each step supports the next one.
 ## Security
 
 - [x] Decide the guild/chat isolation model.
-- [x] Restrict operational reads/writes by approved chat or guild.
+- [x] Restrict operational commands by approved chat or guild.
+- [x] Add user permission gate for sensitive operation commands with `ACCESS_CHAT_IDS` / `OFFICER_USER_IDS`.
+- [x] Keep coordinate intel lookup commands open for public use.
 - [x] Restrict close/standdown to commander/officers.
 - [x] Revisit public anon Supabase policies before hostile use.
+- [ ] Remove anonymous reads from operational Supabase tables before hostile/multi-guild production use.
+- [ ] Route Mini App operation writes through the backend instead of direct public Supabase writes.
 
 ## Stabilization Review
 
+- [x] Add missing `withdrawn_at` schema column for `!leave`.
+- [x] Stop reporting operation member updates as successful when Supabase rejects the write.
 - [x] Replace group Mini App `webApp` buttons with normal URL buttons.
 - [x] Fix `!respond` operation parsing.
 - [x] Add active guild/chat scope so DM commands can operate on group operations.
@@ -66,6 +72,21 @@ Ordered so each step supports the next one.
 - [x] Increase short operation ID length.
 - [x] Reject impossible travel times that would launch in the past.
 - [x] Warn before duplicate active target/defense operations.
+- [x] Include Mini App claims on `$board` / `@board`.
+- [x] Guard operation callback buttons with permission and operation-scope checks.
+- [ ] Make `$` commands sent in DM post to the active guild group, or explicitly reject them.
+- [ ] Make operation creation and closure transactional.
+- [ ] Add atomic reminder claiming to avoid duplicate reminders if multiple bot instances run.
+
+## Hostile-Use Review
+
+- [x] Public coordinate lookup remains available to anyone.
+- [x] Sensitive commands such as `@board`, `$board`, `$attack`, `$sos`, `$incoming`, and `$targets` require permission.
+- [x] Permission can be granted by membership in a configured Telegram access group/channel.
+- [ ] Validate Mini App Telegram `initData` on the backend before trusting app actions.
+- [ ] Give the Mini App a backend operation creation endpoint so app claims create full operations.
+- [ ] Restrict Mini App reads by verified active guild/chat scope.
+- [ ] Remove `supabase-miniapp-claims.sql` once backend claim creation exists.
 
 ## Later
 
