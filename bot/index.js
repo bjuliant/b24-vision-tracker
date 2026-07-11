@@ -8,6 +8,8 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABAS
 const defaultGalaxy = normalizeGalaxy(process.env.DEFAULT_GALAXY || process.env.GALAXY || "B24");
 const port = Number(process.env.PORT || 10000);
 const approvedChatIds = parseCsv(process.env.APPROVED_CHAT_IDS);
+const accessChatIds = parseCsv(process.env.ACCESS_CHAT_IDS || process.env.COMMAND_STAFF_CHAT_IDS);
+const officerUserIds = parseCsv(process.env.OFFICER_USER_IDS);
 
 if (!token) throw new Error("BOT_TOKEN is required");
 if (!webAppUrl) throw new Error("WEB_APP_URL is required");
@@ -25,8 +27,9 @@ const staleIntelMs = 24 * 60 * 60 * 1000;
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
-bot.command("board", (ctx) => {
+bot.command("board", async (ctx) => {
   if (!chatApproved(ctx)) return ctx.reply("This chat is not approved for VisionBot operations.");
+  if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
   return handleBoard(ctx, ctx.message?.text || "/board", "$");
 });
 
@@ -54,6 +57,9 @@ async function handleText(ctx) {
 
   if (isProtectedOperationalCommand(lower) && !chatApproved(ctx)) {
     return respond(ctx, mode, "This chat is not approved for VisionBot operations.");
+  }
+  if (isSensitiveOperationalCommand(lower) && !(await userCanUseSensitiveCommands(ctx))) {
+    return respond(ctx, mode, "You do not have permission to use VisionBot operation commands.");
   }
 
   if (isCommand(lower, "help")) return handleHelp(ctx, text, mode);
@@ -110,10 +116,15 @@ async function handleText(ctx) {
 async function handleOperationButton(ctx) {
   const [, action, operationId] = ctx.match || [];
   const operation = await findOperationById(operationId);
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for operation controls.");
+    return;
+  }
   if (!operation) {
     await ctx.answerCbQuery("That operation is no longer active.");
     return;
   }
+  if (!(await validateOperationCallback(ctx, operation))) return;
 
   if (action === "status") {
     await ctx.answerCbQuery("Refreshing status.");
@@ -140,7 +151,11 @@ async function handleOperationButton(ctx) {
   }
 
   const state = action === "leave" ? "withdrawn" : action === "join" ? "joined" : action;
-  await upsertOperationMember(ctx, operation, state, "");
+  const saved = await upsertOperationMember(ctx, operation, state, "");
+  if (!saved) {
+    await ctx.answerCbQuery("Could not update your operation status.");
+    return;
+  }
   await ctx.answerCbQuery(`${operation.short_id}: ${state}`);
   await refreshOperationMessage(ctx, operation);
 }
@@ -164,6 +179,10 @@ async function handleBasesButton(ctx) {
 }
 
 async function handleClaimButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to claim targets.");
+    return;
+  }
   const coord = ctx.match?.[1] || "";
   const text = `$claim ${coord} 240 button claim`;
   await ctx.answerCbQuery("Claiming 4h");
@@ -405,11 +424,86 @@ function isProtectedOperationalCommand(lowerText) {
   ].some((command) => isCommand(lowerText, command) || isExactCommand(lowerText, command));
 }
 
+function isSensitiveOperationalCommand(lowerText) {
+  return [
+    "claim",
+    "attack",
+    "scout",
+    "attacked",
+    "sos",
+    "op",
+    "join",
+    "respond",
+    "ready",
+    "sent",
+    "leave",
+    "standdown",
+    "cancelop",
+    "board",
+    "defense",
+    "next",
+    "myops",
+    "incoming",
+    "targets",
+    "claimed",
+    "bases",
+    "mine",
+    "me",
+    "save me",
+    "setgalaxy",
+    "guild",
+    "stale",
+    "score"
+  ].some((command) => isCommand(lowerText, command) || isExactCommand(lowerText, command));
+}
+
 function chatApproved(ctx) {
   if (!approvedChatIds.length) return true;
   if (ctx.chat?.type === "private") return true;
   const id = ctx.chat?.id ? String(ctx.chat.id) : "";
   return id ? approvedChatIds.includes(id) : false;
+}
+
+async function userCanUseSensitiveCommands(ctx) {
+  if (!ctx.from?.id) return false;
+  const userId = telegramUserId(ctx);
+  if (officerUserIds.includes(userId)) return true;
+
+  if (accessChatIds.length) {
+    return isMemberOfAnyAccessChat(ctx, userId);
+  }
+
+  if (isPrivateChat(ctx)) return true;
+  return chatApproved(ctx);
+}
+
+async function isMemberOfAnyAccessChat(ctx, userId) {
+  for (const chatId of accessChatIds) {
+    try {
+      const member = await ctx.telegram.getChatMember(chatId, userId);
+      if (member && member.status !== "left" && member.status !== "kicked") return true;
+    } catch (error) {
+      console.error(`Access chat lookup failed for ${chatId}`, error.message);
+    }
+  }
+  return false;
+}
+
+async function validateOperationCallback(ctx, operation) {
+  if (!operation || operation.status !== "active") {
+    await ctx.answerCbQuery("That operation is no longer active.");
+    return false;
+  }
+  if (!chatApproved(ctx)) {
+    await ctx.answerCbQuery("This chat is not approved.");
+    return false;
+  }
+  const currentChatId = ctx.chat?.id ? String(ctx.chat.id) : "";
+  if (currentChatId && !isPrivateChat(ctx) && String(operation.chat_id || "") !== currentChatId) {
+    await ctx.answerCbQuery("That operation belongs to another guild group.");
+    return false;
+  }
+  return true;
 }
 
 async function respond(ctx, mode, message, options = {}) {
@@ -831,16 +925,22 @@ async function handleBoard(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const operations = await fetchActiveOperations(galaxy, scopeId, kind);
+  const [operations, appClaims] = await Promise.all([
+    fetchActiveOperations(galaxy, scopeId, kind),
+    kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId)
+  ]);
   const membersByOperation = await fetchMembersByOperation(operations);
   const attacks = operations.filter((operation) => operation.type === "attack");
   const defenses = operations.filter((operation) => operation.type === "defense");
   const scouts = operations.filter((operation) => operation.type === "scout");
+  const attackCount = attacks.length + appClaims.length;
 
   const lines = [`<b>${galaxy} Board</b>`];
   if (kind !== "defense" && kind !== "scout") {
-    lines.push("", `<b>Attacks</b> (${attacks.length})`);
-    lines.push(...(attacks.length ? attacks.map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : ["No active attack operations."]));
+    lines.push("", `<b>Attacks</b> (${attackCount})`);
+    lines.push(...(attacks.length ? attacks.map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : []));
+    lines.push(...(appClaims.length ? appClaims.map(formatBoardClaimLine) : []));
+    if (!attackCount) lines.push("No active attack operations or app claims.");
   }
   if (kind !== "attack" && kind !== "scout") {
     lines.push("", `<b>Defense</b> (${defenses.length})`);
@@ -906,7 +1006,8 @@ async function handleOperationMember(ctx, text, mode, state) {
   if (travel.minutes && launchIsPast(operation, travel.minutes)) {
     return respond(ctx, mode, `You cannot arrive on time for ${escapeHtml(operation.short_id)}. Your launch time would already be past.`, { parse_mode: "HTML" });
   }
-  await upsertOperationMember(ctx, operation, state, travel.note, travel.minutes);
+  const saved = await upsertOperationMember(ctx, operation, state, travel.note, travel.minutes);
+  if (!saved) return respond(ctx, mode, `Could not update your status for ${escapeHtml(operation.short_id)}.`, { parse_mode: "HTML" });
   if ((state === "joined" || state === "ready") && travel.minutes) await scheduleLaunchReminders(ctx, operation, travel.minutes);
   const label = state === "sent" ? "marked sent for" : state === "withdrawn" ? "left" : `${state} for`;
   return respond(ctx, mode, `${escapeHtml(telegramName(ctx))} ${label} ${escapeHtml(operation.short_id)}.`, { parse_mode: "HTML" });
@@ -1358,6 +1459,15 @@ function fetchActiveClaims(galaxy, chatId = "") {
   return fetchRows("b24_claims", filters, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
 }
 
+async function fetchBoardClaims(galaxy, chatId = "") {
+  const allClaims = await fetchActiveClaims(galaxy);
+  return allClaims.filter((claim) => {
+    if (claim.operation_id) return false;
+    if (!claim.chat_id) return true;
+    return chatId && String(claim.chat_id) === String(chatId);
+  });
+}
+
 function fetchActiveIncoming(galaxy, chatId = "") {
   const filters = {
     status: "eq.active",
@@ -1541,6 +1651,7 @@ async function upsertOperationMember(ctx, operation, state, note = "", travelMin
     state,
     sent_at: state === "sent" ? stamp : null,
     arrived_at: null,
+    withdrawn_at: state === "withdrawn" ? stamp : null,
     note: state !== "joined" ? note : "",
     created_at: stamp,
     updated_at: stamp
@@ -1784,6 +1895,14 @@ function formatOperationLine(operation, members = []) {
   const ready = stateCounts.ready || 0;
   const joined = activeMembers.length;
   return `${escapeHtml(operation.short_id)} ${escapeHtml(operation.type)} ${escapeHtml(target)} - ${formatEta(new Date(operation.arrival_at))} - ${joined} joined / ${ready} ready / ${sent} sent`;
+}
+
+function formatBoardClaimLine(claim) {
+  const target = claim.target_coord || "?";
+  const claimer = claim.claimed_by ? ` by ${claim.claimed_by}` : "";
+  const note = claim.note ? ` - ${claim.note}` : "";
+  const sent = claim.confirmed_sent ? " - sent confirmed" : "";
+  return `App claim ${escapeHtml(target)} - ${formatEta(new Date(claim.arrival_at))}${escapeHtml(claimer)}${escapeHtml(note)}${sent}`;
 }
 
 async function operationIntelSummary(operation) {
