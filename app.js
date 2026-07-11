@@ -510,8 +510,8 @@
     target = normalizeAstro(target);
     if (!target) return;
     if (!attackWindowStart.value) {
-      claimList.textContent = "Pick a 4 hour landing window before claiming targets.";
-      finalizeStatus.textContent = "Landing window required.";
+      claimList.textContent = "Step 1: pick the 4 hour landing window above before claiming targets.";
+      finalizeStatus.textContent = "Step 1 required: pick a landing window above.";
       return;
     }
 
@@ -993,7 +993,7 @@
         const statusClass = claimed ? "claimed" : row.status.toLowerCase();
         const wave = hasWindow
           ? `<select data-wave-time aria-label="Landing time for ${escapeHtml(row.coord)}">${waveOptions}</select>`
-          : `<select data-wave-time disabled aria-label="Landing time for ${escapeHtml(row.coord)}"><option>Pick window first</option></select>`;
+          : `<select data-wave-time disabled aria-label="Landing time for ${escapeHtml(row.coord)}"><option>Step 1 first</option></select>`;
         const action = claimed
           ? `<button class="row-claim-button" type="button" disabled>Claimed</button>`
           : `<button class="row-claim-button" type="button" ${hasWindow ? "" : "disabled"} data-claim-target="${escapeHtml(row.coord)}" data-claim-note="${escapeHtml(note)}">Claim</button>`;
@@ -1010,7 +1010,7 @@
       return;
     }
     if (!attackWindowStart.value) {
-      finalizeStatus.textContent = "Pick a 4 hour landing window first.";
+      finalizeStatus.textContent = "Step 1 required: pick a 4 hour landing window above.";
       return;
     }
 
@@ -1195,7 +1195,7 @@
       claimArrival.disabled = !options.length;
       claimArrival.innerHTML = options.length
         ? options.map((value) => `<option value="${value}">${value}</option>`).join("")
-        : `<option value="">Pick landing window first</option>`;
+        : `<option value="">Step 1: pick window above</option>`;
       claimArrival.value = options.includes(defaultValue) ? defaultValue : options[0] || "";
     }
     renderWindowSummary();
@@ -1217,7 +1217,7 @@
     if (!attackWindowSummary) return;
     const options = landingWindowOptions();
     if (!options.length) {
-      attackWindowSummary.textContent = "Required before claiming or finalizing";
+      attackWindowSummary.textContent = "Step 1 required before Claim or Finalize";
       return;
     }
     const start = options[0];
