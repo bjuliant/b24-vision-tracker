@@ -1,10 +1,12 @@
 import { Telegraf, Markup } from "telegraf";
+import http from "node:http";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
 const defaultGalaxy = normalizeGalaxy(process.env.DEFAULT_GALAXY || process.env.GALAXY || "B24");
+const port = Number(process.env.PORT || 10000);
 
 if (!token) throw new Error("BOT_TOKEN is required");
 if (!webAppUrl) throw new Error("WEB_APP_URL is required");
@@ -42,6 +44,7 @@ async function handleText(ctx) {
   const lower = text.trim().toLowerCase();
 
   if (lower === "!help") return ctx.reply(helpText(), { parse_mode: "HTML" });
+  if (lower === "!wakeup") return handleWakeup(ctx);
   if (lower.startsWith("!g ")) return handleUserGalaxy(ctx, text);
   if (lower.startsWith("!setgalaxy ")) return handleChatGalaxy(ctx, text);
   if (lower.startsWith("!claim")) return handleClaim(ctx, text);
@@ -92,8 +95,40 @@ function helpText() {
     "<code>!mine B24:06:10:20 note</code> - save one of your bases",
     "<code>!me</code> - list your saved bases for this galaxy",
     "<code>!save me B24:06:10:20 defense request</code> - save a note on your base",
+    "<code>!wakeup</code> - run a 60 second startup countdown",
     "<code>!help</code> - show this help"
   ].join("\n");
+}
+
+async function handleWakeup(ctx) {
+  const checkpoints = [60, 45, 30, 15, 5];
+  const message = await ctx.reply("VisionBot startup sequence: 60s");
+
+  for (const seconds of checkpoints.slice(1)) {
+    await wait((checkpoints[checkpoints.indexOf(seconds) - 1] - seconds) * 1000);
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        message.message_id,
+        undefined,
+        `VisionBot startup sequence: ${seconds}s`
+      );
+    } catch {
+      await ctx.reply(`VisionBot startup sequence: ${seconds}s`);
+    }
+  }
+
+  await wait(5000);
+  try {
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      message.message_id,
+      undefined,
+      "VisionBot is awake. Use !help for commands."
+    );
+  } catch {
+    await ctx.reply("VisionBot is awake. Use !help for commands.");
+  }
 }
 
 async function handleUserGalaxy(ctx, text) {
@@ -499,9 +534,20 @@ function mapUrl(galaxy) {
   return `${webAppUrl}${separator}gal=${encodeURIComponent(galaxy)}`;
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function escapeHtml(value) {
   return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+http.createServer((request, response) => {
+  response.writeHead(200, { "Content-Type": "text/plain" });
+  response.end("VisionBot is running\n");
+}).listen(port, "0.0.0.0", () => {
+  console.log(`Health server listening on ${port}`);
+});
 
 bot.launch();
 
