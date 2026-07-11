@@ -15,12 +15,10 @@ if (!supabaseKey) throw new Error("SUPABASE_ANON_KEY is required");
 
 const bot = new Telegraf(token);
 const galaxyPattern = /B\d{2}/i;
-const astroPattern = /(B\d{2}:\d{2}:\d{2}:\d{2})/i;
-const coordPattern = /([!$])\s*(B\d{2}:\d{2}:\d{2}:\d{2})\b/i;
-const claimPattern = /^!claim\s+(B\d{2}:\d{2}:\d{2}:\d{2})(?::(\d{1,4}))?(?:\s+(\d{1,4}))?(?:\s+(.+))?$/i;
-const attackedPattern = /^!attacked\s+(B\d{2}:\d{2}:\d{2}:\d{2})(?::(\d{1,4}))?(?:\s+(\d{1,4}))?(?:\s+(.+))?$/i;
-const minePattern = /^!mine\s+(\S+)(?:\s+(.+))?$/i;
-const saveMePattern = /^!save\s+me\s+(\S+)(?:\s+(.+))?$/i;
+const claimPattern = /^[!$]claim\s+(.+)$/i;
+const attackedPattern = /^[!$]attacked\s+(.+)$/i;
+const minePattern = /^[!$]mine\s+(.+)$/i;
+const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 
 bot.start(sendMapButton);
 bot.command("map", sendMapButton);
@@ -42,39 +40,35 @@ async function sendMapButton(ctx) {
 async function handleText(ctx) {
   const text = ctx.message?.text || ctx.channelPost?.text || "";
   const lower = text.trim().toLowerCase();
+  const mode = deliveryMode(text);
 
-  if (lower.startsWith("!help")) return ctx.reply(helpText(text), { parse_mode: "HTML" });
-  if (lower === "!wakeup") return handleWakeup(ctx);
-  if (lower.startsWith("!g ")) return handleUserGalaxy(ctx, text);
-  if (lower.startsWith("!setgalaxy ")) return handleChatGalaxy(ctx, text);
-  if (lower.startsWith("!claim")) return handleClaim(ctx, text);
-  if (lower.startsWith("!attacked")) return handleAttacked(ctx, text);
-  if (lower === "!incoming") return handleIncoming(ctx);
-  if (lower === "!targets") return handleTargets(ctx);
-  if (lower === "!claimed") return handleClaimed(ctx);
-  if (lower.startsWith("!mine")) return handleMine(ctx, text);
-  if (lower === "!me") return handleMe(ctx);
-  if (lower.startsWith("!save me")) return handleSaveMe(ctx, text);
+  if (isCommand(lower, "help")) return respond(ctx, mode, helpText(text), { parse_mode: "HTML" });
+  if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
+  if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
+  if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
+  if (isCommand(lower, "claim")) return handleClaim(ctx, text, mode);
+  if (isCommand(lower, "attacked")) return handleAttacked(ctx, text, mode);
+  if (isCommand(lower, "intel") || isCommand(lower, "bases")) return handlePlayerIntel(ctx, text, mode);
+  if (isExactCommand(lower, "incoming")) return handleIncoming(ctx, mode);
+  if (isExactCommand(lower, "targets")) return handleTargets(ctx, mode);
+  if (isExactCommand(lower, "claimed")) return handleClaimed(ctx, mode);
+  if (isCommand(lower, "mine")) return handleMine(ctx, text, mode);
+  if (isExactCommand(lower, "me")) return handleMe(ctx, mode);
+  if (isCommand(lower, "save me")) return handleSaveMe(ctx, text, mode);
 
-  const match = text.match(coordPattern);
-  if (!match) return;
+  const lookup = parseLookupCommand(text, await galaxyForContext(ctx));
+  if (!lookup) return;
 
-  const mode = match[1];
-  const coord = normalizeAstro(match[2]);
-  const report = await buildAstroReport(coord);
+  const lookupMode = lookup.mode;
+  const report = lookup.kind === "system"
+    ? await buildSystemReport(lookup.coord)
+    : await buildAstroReport(lookup.coord);
 
-  if (mode === "!") {
-    if (!ctx.from?.id) return;
-    try {
-      await ctx.telegram.sendMessage(ctx.from.id, report, { parse_mode: "HTML" });
-      if (ctx.chat.type !== "private") await ctx.reply(`Sent ${coord} intel privately.`);
-    } catch {
-      await ctx.reply(`I could not DM you. Open the bot privately first, then try ${mode}${coord} again.`);
-    }
-    return;
+  if (lookupMode === "!") {
+    return respond(ctx, lookupMode, report, { parse_mode: "HTML" });
   }
 
-  await ctx.reply(report, { parse_mode: "HTML" });
+  await respond(ctx, lookupMode, report, { parse_mode: "HTML" });
 }
 
 function helpText(input = "") {
@@ -84,11 +78,12 @@ function helpText(input = "") {
       "<b>Claim Help</b>",
       "",
       "<code>!claim [coord] [minutes] [note]</code>",
-      "Claim an attack target landing in a number of minutes.",
+      "<code>$claim [coord] [minutes] [note]</code>",
+      "Claim an attack target landing in a number of minutes. Use <code>!</code> for a private confirmation or <code>$</code> to post it publicly.",
       "",
       "Examples:",
       "<code>!claim B24:24:34:06 10 fighters</code>",
-      "<code>!claim B23:11:22:30:45 wave 2</code>"
+      "<code>$claim B23:11:22:30:45 wave 2</code>"
     ],
     intel: [
       "<b>Intel Lookup Help</b>",
@@ -98,27 +93,37 @@ function helpText(input = "") {
       "",
       "Examples:",
       "<code>!B24:34:06:10</code>",
-      "<code>$B23:44:76:20</code>"
+      "<code>$B23:44:76:20</code>",
+      "<code>!B24 02 76 10</code>",
+      "<code>!24 02 76 10</code>",
+      "<code>!24027610</code>",
+      "<code>!B24:02:76</code> - list all known astros in a system"
     ],
     incoming: [
       "<b>Incoming Help</b>",
       "",
       "<code>!attacked [attacker coord] [eta minutes] [note]</code>",
-      "Report hostile incoming and sort it by ETA.",
+      "<code>$attacked [attacker coord] [eta minutes] [note]</code>",
+      "Report hostile incoming and sort it by ETA. Use <code>!</code> privately or <code>$</code> publicly.",
       "",
       "Examples:",
       "<code>!attacked B24:34:06:10 25 incoming dread</code>",
-      "<code>!incoming</code>"
+      "<code>$incoming</code>"
     ],
     bases: [
       "<b>Base List Help</b>",
       "",
       "<code>!mine [coord] [note]</code> - save one of your bases",
+      "<code>$mine [coord] [note]</code> - save one publicly",
       "<code>!me</code> - DM your saved bases",
+      "<code>$me</code> - post your saved bases here",
       "<code>!save me [coord] [note]</code> - save/update a base note",
+      "<code>!bases [name]</code>/<code>$bases [name]</code> - list a player's saved bases",
+      "<code>!intel [name]</code>/<code>$intel [name]</code> - list a player's saved bases",
       "",
       "Example:",
-      "<code>!save me B24:06:10:20 needs defense</code>"
+      "<code>!save me B24:06:10:20 needs defense</code>",
+      "<code>$bases storebo</code>"
     ],
     galaxy: [
       "<b>Galaxy Help</b>",
@@ -137,60 +142,107 @@ function helpText(input = "") {
   return [
     "<b>VisionBot Commands</b>",
     "",
+    "<code>!</code> commands DM you. <code>$</code> commands post in the chat.",
+    "",
     "<code>/map</code> - open your current galaxy map",
     "<code>!g</code> - set your personal galaxy",
     "<code>!setgalaxy</code> - set this chat's galaxy",
     "<code>![coord]</code> - DM planet intel to you",
     "<code>$[coord]</code> - post planet intel here",
-    "<code>!claim</code> - claim an attack target",
-    "<code>!targets</code> - DM your active claims",
-    "<code>!claimed</code> - list active claims",
-    "<code>!attacked</code> - report hostile incoming",
-    "<code>!incoming</code> - list hostile incoming",
-    "<code>!mine</code> - save one of your bases",
-    "<code>!me</code> - DM your saved bases",
-    "<code>!save me</code> - save a note on your base",
+    "<code>!claim</code>/<code>$claim</code> - claim an attack target",
+    "<code>!targets</code>/<code>$targets</code> - show your active claims",
+    "<code>!claimed</code>/<code>$claimed</code> - list active claims",
+    "<code>!attacked</code>/<code>$attacked</code> - report hostile incoming",
+    "<code>!incoming</code>/<code>$incoming</code> - list hostile incoming",
+    "<code>!bases</code>/<code>$bases</code> - list a player's saved bases",
+    "<code>!intel</code>/<code>$intel</code> - old alias for player bases",
+    "<code>!mine</code>/<code>$mine</code> - save one of your bases",
+    "<code>!me</code>/<code>$me</code> - show your saved bases",
+    "<code>!save me</code>/<code>$save me</code> - save a note on your base",
     "<code>!wakeup</code> - run startup countdown",
     "",
     "Details: <code>!help claim</code>, <code>!help intel</code>, <code>!help incoming</code>, <code>!help bases</code>, <code>!help galaxy</code>"
   ].join("\n");
 }
 
-async function handleWakeup(ctx) {
+function deliveryMode(text) {
+  const first = String(text || "").trim()[0];
+  return first === "$" ? "$" : "!";
+}
+
+function isCommand(lowerText, command) {
+  const lower = String(lowerText || "").trim();
+  return lower === `!${command}` || lower === `$${command}` || lower.startsWith(`!${command} `) || lower.startsWith(`$${command} `);
+}
+
+function isExactCommand(lowerText, command) {
+  const lower = String(lowerText || "").trim();
+  return lower === `!${command}` || lower === `$${command}`;
+}
+
+async function respond(ctx, mode, message, options = {}) {
+  if (mode === "$" || ctx.chat?.type === "private") return ctx.reply(message, options);
+  if (!ctx.from?.id) return ctx.reply("Use $ for public channel commands. I cannot privately reply to channel posts.");
+  try {
+    return await ctx.telegram.sendMessage(ctx.from.id, message, options);
+  } catch {
+    return ctx.reply("I could not DM you. Open the bot privately first, then try the command again.");
+  }
+}
+
+async function sendCountdownMessage(ctx, mode, message) {
+  if (mode === "$" || ctx.chat?.type === "private") {
+    const sent = await ctx.reply(message);
+    return { chatId: ctx.chat.id, messageId: sent.message_id };
+  }
+  if (!ctx.from?.id) {
+    const sent = await ctx.reply("Use $wakeup in channels. I cannot privately reply to channel posts.");
+    return { chatId: ctx.chat.id, messageId: sent.message_id };
+  }
+  try {
+    const sent = await ctx.telegram.sendMessage(ctx.from.id, message);
+    return { chatId: ctx.from.id, messageId: sent.message_id };
+  } catch {
+    const sent = await ctx.reply("I could not DM you. Open the bot privately first, then try !wakeup again.");
+    return { chatId: ctx.chat.id, messageId: sent.message_id };
+  }
+}
+
+async function handleWakeup(ctx, mode) {
   const checkpoints = [60, 45, 30, 15, 5];
-  const message = await ctx.reply("VisionBot startup sequence: 60s");
+  const message = await sendCountdownMessage(ctx, mode, "VisionBot startup sequence: 60s");
 
   for (const seconds of checkpoints.slice(1)) {
     await wait((checkpoints[checkpoints.indexOf(seconds) - 1] - seconds) * 1000);
     try {
       await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        message.message_id,
+        message.chatId,
+        message.messageId,
         undefined,
         `VisionBot startup sequence: ${seconds}s`
       );
     } catch {
-      await ctx.reply(`VisionBot startup sequence: ${seconds}s`);
+      await respond(ctx, mode, `VisionBot startup sequence: ${seconds}s`);
     }
   }
 
   await wait(5000);
   try {
     await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      message.message_id,
+      message.chatId,
+      message.messageId,
       undefined,
       "VisionBot is awake. Use !help for commands."
     );
   } catch {
-    await ctx.reply("VisionBot is awake. Use !help for commands.");
+    await respond(ctx, mode, "VisionBot is awake. Use !help for commands.");
   }
 }
 
-async function handleUserGalaxy(ctx, text) {
-  if (!ctx.from?.id) return ctx.reply("Use !g in a group or private chat so I know who to save.");
+async function handleUserGalaxy(ctx, text, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !g in a group or private chat so I know who to save.");
   const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
-  if (!galaxy) return ctx.reply("Use: !g B24");
+  if (!galaxy) return respond(ctx, mode, "Use: !g B24");
 
   const saved = await upsertRow("b24_user_settings", {
     user_id: telegramUserId(ctx),
@@ -199,14 +251,14 @@ async function handleUserGalaxy(ctx, text) {
     updated_at: new Date().toISOString()
   }, "user_id");
 
-  if (!saved) return ctx.reply("Could not save your galaxy setting.");
-  return ctx.reply(`Your default galaxy is now ${galaxy}.`);
+  if (!saved) return respond(ctx, mode, "Could not save your galaxy setting.");
+  return respond(ctx, mode, `Your default galaxy is now ${galaxy}.`);
 }
 
-async function handleChatGalaxy(ctx, text) {
+async function handleChatGalaxy(ctx, text, mode) {
   if (!ctx.chat?.id) return;
   const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
-  if (!galaxy) return ctx.reply("Use: !setgalaxy B24");
+  if (!galaxy) return respond(ctx, mode, "Use: !setgalaxy B24");
 
   const saved = await upsertRow("b24_chat_settings", {
     chat_id: String(ctx.chat.id),
@@ -215,18 +267,21 @@ async function handleChatGalaxy(ctx, text) {
     updated_at: new Date().toISOString()
   }, "chat_id");
 
-  if (!saved) return ctx.reply("Could not save this chat's galaxy setting.");
-  return ctx.reply(`This chat's default galaxy is now ${galaxy}.`);
+  if (!saved) return respond(ctx, mode, "Could not save this chat's galaxy setting.");
+  return respond(ctx, mode, `This chat's default galaxy is now ${galaxy}.`);
 }
 
-async function handleClaim(ctx, text) {
+async function handleClaim(ctx, text, mode) {
   const match = text.trim().match(claimPattern);
-  if (!match) return ctx.reply("Use: !claim B24:24:34:06 10 optional note");
+  if (!match) return respond(ctx, mode, "Use: !claim B24:24:34:06 10 optional note");
 
-  const target = normalizeAstro(match[1]);
-  const minutes = Number(match[2] || match[3]);
-  const note = (match[4] || "").trim();
-  if (!validMinutes(minutes)) return ctx.reply("Use minutes from now, 1 to 1440.");
+  const parsed = parseTimedCoordinate(match[1], await galaxyForContext(ctx));
+  if (!parsed?.coord || parsed.kind !== "astro") return respond(ctx, mode, "Use: !claim [coord] [minutes] [note]");
+
+  const target = parsed.coord;
+  const minutes = parsed.minutes;
+  const note = parsed.note;
+  if (!validMinutes(minutes)) return respond(ctx, mode, "Use minutes from now, 1 to 1440.");
 
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
@@ -249,12 +304,12 @@ async function handleClaim(ctx, text) {
     updated_at: now.toISOString()
   };
 
-  if (!(await insertRow("b24_claims", claim))) return ctx.reply("Claim failed. I could not reach Supabase.");
-  return ctx.reply(`Claimed ${escapeHtml(target)} for ${escapeHtml(claim.claimed_by)}\nLanding in ${minutes}m at ${escapeHtml(formatLocalSummary(arrivalAt))}${note ? `\nNote: ${escapeHtml(note)}` : ""}`, { parse_mode: "HTML" });
+  if (!(await insertRow("b24_claims", claim))) return respond(ctx, mode, "Claim failed. I could not reach Supabase.");
+  return respond(ctx, mode, `Claimed ${escapeHtml(target)} for ${escapeHtml(claim.claimed_by)}\nLanding in ${minutes}m at ${escapeHtml(formatLocalSummary(arrivalAt))}${note ? `\nNote: ${escapeHtml(note)}` : ""}`, { parse_mode: "HTML" });
 }
 
-async function handleTargets(ctx) {
-  if (!ctx.from?.id) return ctx.reply("Use !targets in a group or private chat so I know who to look up.");
+async function handleTargets(ctx, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !targets in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const claims = await fetchRows("b24_claims", {
     claimed_by: `eq.${telegramName(ctx)}`,
@@ -262,33 +317,29 @@ async function handleTargets(ctx) {
     arrival_at: `gt.${new Date().toISOString()}`
   }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
   const message = claims.length ? claims.map(formatClaimLine).join("\n") : `You have no active claimed targets in ${galaxy}.`;
-
-  if (ctx.chat?.type === "private") return ctx.reply(message, { parse_mode: "HTML" });
-  try {
-    await ctx.telegram.sendMessage(ctx.from.id, message, { parse_mode: "HTML" });
-    await ctx.reply(`Sent your ${galaxy} active targets privately.`);
-  } catch {
-    await ctx.reply("I could not DM you. Open the bot privately first, then try !targets again.");
-  }
+  return respond(ctx, mode, message, { parse_mode: "HTML" });
 }
 
-async function handleClaimed(ctx) {
+async function handleClaimed(ctx, mode) {
   const galaxy = await galaxyForContext(ctx);
   const claims = await fetchRows("b24_claims", {
     status: "eq.active",
     arrival_at: `gt.${new Date().toISOString()}`
   }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
-  return ctx.reply(claims.length ? claims.map(formatClaimLine).join("\n") : `No active attacks claimed in ${galaxy}.`, { parse_mode: "HTML" });
+  return respond(ctx, mode, claims.length ? claims.map(formatClaimLine).join("\n") : `No active attacks claimed in ${galaxy}.`, { parse_mode: "HTML" });
 }
 
-async function handleAttacked(ctx, text) {
+async function handleAttacked(ctx, text, mode) {
   const match = text.trim().match(attackedPattern);
-  if (!match) return ctx.reply("Use: !attacked B24:34:06:10 25 optional note");
+  if (!match) return respond(ctx, mode, "Use: !attacked B24:34:06:10 25 optional note");
 
-  const attacker = normalizeAstro(match[1]);
-  const minutes = Number(match[2] || match[3]);
-  const note = (match[4] || "").trim();
-  if (!validMinutes(minutes)) return ctx.reply("Use ETA minutes from now, 1 to 1440.");
+  const parsed = parseTimedCoordinate(match[1], await galaxyForContext(ctx));
+  if (!parsed?.coord || parsed.kind !== "astro") return respond(ctx, mode, "Use: !attacked [coord] [eta minutes] [note]");
+
+  const attacker = parsed.coord;
+  const minutes = parsed.minutes;
+  const note = parsed.note;
+  if (!validMinutes(minutes)) return respond(ctx, mode, "Use ETA minutes from now, 1 to 1440.");
 
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
@@ -307,27 +358,50 @@ async function handleAttacked(ctx, text) {
     updated_at: now.toISOString()
   };
 
-  if (!(await insertRow("b24_incoming", incoming))) return ctx.reply("Incoming report failed. I could not reach Supabase.");
-  return ctx.reply(`Incoming reported from ${escapeHtml(attacker)}\nETA ${minutes}m at ${escapeHtml(formatLocalSummary(arrivalAt))}${note ? `\nNote: ${escapeHtml(note)}` : ""}`, { parse_mode: "HTML" });
+  if (!(await insertRow("b24_incoming", incoming))) return respond(ctx, mode, "Incoming report failed. I could not reach Supabase.");
+  return respond(ctx, mode, `Incoming reported from ${escapeHtml(attacker)}\nETA ${minutes}m at ${escapeHtml(formatLocalSummary(arrivalAt))}${note ? `\nNote: ${escapeHtml(note)}` : ""}`, { parse_mode: "HTML" });
 }
 
-async function handleIncoming(ctx) {
+async function handleIncoming(ctx, mode) {
   const galaxy = await galaxyForContext(ctx);
   const incoming = await fetchRows("b24_incoming", {
     status: "eq.active",
     arrival_at: `gt.${new Date().toISOString()}`
   }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
-  return ctx.reply(incoming.length ? incoming.map(formatIncomingLine).join("\n") : `No active hostile incoming reports in ${galaxy}.`, { parse_mode: "HTML" });
+  return respond(ctx, mode, incoming.length ? incoming.map(formatIncomingLine).join("\n") : `No active hostile incoming reports in ${galaxy}.`, { parse_mode: "HTML" });
 }
 
-async function handleMine(ctx, text) {
-  if (!ctx.from?.id) return ctx.reply("Use !mine in a group or private chat so I know who owns the base.");
-  const match = text.trim().match(minePattern);
-  if (!match) return ctx.reply("Use: !mine B24:06:10:20 optional note");
+async function handlePlayerIntel(ctx, text, mode) {
+  const query = text.replace(/^[!$](intel|bases)\s+/i, "").trim().replace(/^@/, "");
+  if (!query) return respond(ctx, mode, "Use: !bases playername");
 
-  const location = normalizeLocation(match[1]);
-  const note = (match[2] || "").trim();
-  if (!location) return ctx.reply("Use an AE location like B24:06:10:20, B24:06:10, or B24:06.");
+  const galaxy = await galaxyForContext(ctx);
+  const rows = await fetchRows("b24_user_bases", {
+    status: "eq.active"
+  }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
+
+  const needle = query.toLowerCase();
+  const matches = rows.filter((row) => {
+    return String(row.owner_label || "").replace(/^@/, "").toLowerCase().includes(needle);
+  });
+
+  if (!matches.length) return respond(ctx, mode, `No saved bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
+
+  const owners = [...new Set(matches.map((row) => row.owner_label || query))].join(", ");
+  const lines = [`<b>${escapeHtml(owners)}</b>`, `${matches.length} saved bases in ${galaxy}`];
+  matches.forEach((row) => lines.push(formatUserBaseLine(row)));
+  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function handleMine(ctx, text, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !mine in a group or private chat so I know who owns the base.");
+  const match = text.trim().match(minePattern);
+  if (!match) return respond(ctx, mode, "Use: !mine B24:06:10:20 optional note");
+
+  const parsed = parseCoordinate(match[1], await galaxyForContext(ctx));
+  const location = parsed ? normalizeLocation(parsed.coord) : null;
+  const note = parsed?.remainder.trim() || "";
+  if (!location) return respond(ctx, mode, "Use an AE location like B24:06:10:20, B24:06:10, or B24:06.");
 
   const stamp = new Date().toISOString();
   const row = {
@@ -342,35 +416,30 @@ async function handleMine(ctx, text) {
     created_at: stamp,
     updated_at: stamp
   };
-  if (!(await upsertRow("b24_user_bases", row, "map_id,user_id,base_coord"))) return ctx.reply("Base save failed. I could not reach Supabase.");
-  return ctx.reply(`Saved ${escapeHtml(location.coord)} to your ${location.galaxy} base list${note ? `\nNote: ${escapeHtml(note)}` : ""}.`, { parse_mode: "HTML" });
+  if (!(await upsertRow("b24_user_bases", row, "map_id,user_id,base_coord"))) return respond(ctx, mode, "Base save failed. I could not reach Supabase.");
+  return respond(ctx, mode, `Saved ${escapeHtml(location.coord)} to your ${location.galaxy} base list${note ? `\nNote: ${escapeHtml(note)}` : ""}.`, { parse_mode: "HTML" });
 }
 
-async function handleMe(ctx) {
-  if (!ctx.from?.id) return ctx.reply("Use !me in a group or private chat so I know who to look up.");
+async function handleMe(ctx, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !me in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const rows = await fetchRows("b24_user_bases", {
     user_id: `eq.${telegramUserId(ctx)}`,
     status: "eq.active"
   }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
   const message = rows.length ? rows.map(formatUserBaseLine).join("\n") : `You have no saved bases in ${galaxy}. Add one with !mine ${galaxy}:06:10:20`;
-  if (ctx.chat?.type === "private") return ctx.reply(message, { parse_mode: "HTML" });
-  try {
-    await ctx.telegram.sendMessage(ctx.from.id, message, { parse_mode: "HTML" });
-    await ctx.reply(`Sent your ${galaxy} base list privately.`);
-  } catch {
-    await ctx.reply("I could not DM you. Open the bot privately first, then try !me again.");
-  }
+  return respond(ctx, mode, message, { parse_mode: "HTML" });
 }
 
-async function handleSaveMe(ctx, text) {
-  if (!ctx.from?.id) return ctx.reply("Use !save me in a group or private chat so I know who owns the note.");
+async function handleSaveMe(ctx, text, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !save me in a group or private chat so I know who owns the note.");
   const match = text.trim().match(saveMePattern);
-  if (!match) return ctx.reply("Use: !save me B24:06:10:20 defense request");
+  if (!match) return respond(ctx, mode, "Use: !save me B24:06:10:20 defense request");
 
-  const location = normalizeLocation(match[1]);
-  const note = (match[2] || "").trim();
-  if (!location || !note) return ctx.reply("Use: !save me B24:06:10:20 defense request");
+  const parsed = parseCoordinate(match[1], await galaxyForContext(ctx));
+  const location = parsed ? normalizeLocation(parsed.coord) : null;
+  const note = parsed?.remainder.trim() || "";
+  if (!location || !note) return respond(ctx, mode, "Use: !save me B24:06:10:20 defense request");
 
   const stamp = new Date().toISOString();
   const row = {
@@ -385,17 +454,21 @@ async function handleSaveMe(ctx, text) {
     created_at: stamp,
     updated_at: stamp
   };
-  if (!(await upsertRow("b24_user_bases", row, "map_id,user_id,base_coord"))) return ctx.reply("Save failed. I could not reach Supabase.");
-  return ctx.reply(`Saved note for ${escapeHtml(location.coord)}:\n${escapeHtml(note)}`, { parse_mode: "HTML" });
+  if (!(await upsertRow("b24_user_bases", row, "map_id,user_id,base_coord"))) return respond(ctx, mode, "Save failed. I could not reach Supabase.");
+  return respond(ctx, mode, `Saved note for ${escapeHtml(location.coord)}:\n${escapeHtml(note)}`, { parse_mode: "HTML" });
 }
 
 async function buildAstroReport(coord) {
-  const [astro, base] = await Promise.all([
+  const [astro, base, savedBases] = await Promise.all([
     fetchOne("b24_astros", { coord }, mapIdForCoord(coord)),
-    fetchOne("b24_bases", { coord }, mapIdForCoord(coord))
+    fetchOne("b24_bases", { coord }, mapIdForCoord(coord)),
+    fetchRows("b24_user_bases", {
+      base_coord: `eq.${coord}`,
+      status: "eq.active"
+    }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" })
   ]);
 
-  if (!astro && !base) return `No intel found for ${escapeHtml(coord)} yet.`;
+  if (!astro && !base && !savedBases.length) return `No intel found for ${escapeHtml(coord)} yet.`;
 
   const lines = [`<b>${escapeHtml(coord)}</b>`];
   if (astro) {
@@ -408,6 +481,52 @@ async function buildAstroReport(coord) {
     if (base.guild) lines.push(`Guild: ${escapeHtml(base.guild)}`);
     if (base.label) lines.push(`Owner: ${escapeHtml(base.label)}`);
   }
+  if (savedBases.length) {
+    lines.push("Saved by:");
+    savedBases.forEach((saved) => {
+      const note = saved.note ? ` - ${escapeHtml(saved.note)}` : "";
+      lines.push(`${escapeHtml(saved.owner_label || "Unknown")}${note}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+async function buildSystemReport(systemCoord) {
+  const [rows, savedBases] = await Promise.all([
+    fetchRows("b24_astros", {
+      system_id: `eq.${systemCoord}`
+    }, { mapId: mapIdForCoord(systemCoord), order: "coord.asc" }),
+    fetchRows("b24_user_bases", {
+      system_id: `eq.${systemCoord}`,
+      status: "eq.active"
+    }, { mapId: mapIdForCoord(systemCoord), order: "base_coord.asc" })
+  ]);
+
+  if (!rows.length && !savedBases.length) return `No astros found for ${escapeHtml(systemCoord)} yet.`;
+
+  const savedByCoord = new Map();
+  savedBases.forEach((saved) => {
+    if (!savedByCoord.has(saved.base_coord)) savedByCoord.set(saved.base_coord, []);
+    savedByCoord.get(saved.base_coord).push(saved);
+  });
+
+  const lines = [`<b>${escapeHtml(systemCoord)}</b>`, `${rows.length} known astros`];
+  rows.forEach((astro) => {
+    const attrs = Array.isArray(astro.attributes) ? astro.attributes.join("/") : "";
+    const saved = savedByCoord.get(astro.coord) || [];
+    const savedText = saved.length ? ` - saved by ${escapeHtml(saved.map((base) => base.owner_label || "Unknown").join(", "))}` : "";
+    const base = astro.has_base || saved.length ? " base" : "";
+    lines.push(`${escapeHtml(astro.coord)} - ${escapeHtml(astro.terrain || "?")} ${escapeHtml(astro.astro_type || "?")}${attrs ? ` - ${escapeHtml(attrs)}` : ""}${base}${savedText}`);
+  });
+
+  const listed = new Set(rows.map((astro) => astro.coord));
+  savedBases
+    .filter((saved) => !listed.has(saved.base_coord))
+    .forEach((saved) => {
+      const note = saved.note ? ` - ${escapeHtml(saved.note)}` : "";
+      lines.push(`${escapeHtml(saved.base_coord)} - saved by ${escapeHtml(saved.owner_label || "Unknown")}${note}`);
+    });
+
   return lines.join("\n");
 }
 
@@ -529,6 +648,76 @@ function telegramName(ctx) {
 
 function telegramUserId(ctx) {
   return ctx.from?.id ? String(ctx.from.id) : "unknown";
+}
+
+function parseLookupCommand(text, fallbackGalaxy = defaultGalaxy) {
+  const trimmed = String(text || "").trim();
+  const mode = trimmed[0];
+  if (mode !== "!" && mode !== "$") return null;
+  if (/^[!$]help\b/i.test(trimmed)) return null;
+
+  const parsed = parseCoordinate(trimmed.slice(1), fallbackGalaxy);
+  if (!parsed) return null;
+  return { mode, ...parsed };
+}
+
+function parseTimedCoordinate(value, fallbackGalaxy) {
+  const parsed = parseCoordinate(value, fallbackGalaxy);
+  if (!parsed) return null;
+  const remainder = parsed.remainder.trim();
+  const minuteMatch = remainder.match(/^:?\s*(\d{1,4})(?:\s+(.+))?$/);
+  if (!minuteMatch) return { ...parsed, minutes: NaN, note: "" };
+  return {
+    ...parsed,
+    minutes: Number(minuteMatch[1]),
+    note: (minuteMatch[2] || "").trim()
+  };
+}
+
+function parseCoordinate(value, fallbackGalaxy) {
+  const raw = String(value || "").trim().toUpperCase();
+  const galaxy = normalizeGalaxy((raw.match(/B\d{2}/) || [])[0]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  let working = raw.replace(/^!|\$/g, "").trim();
+
+  if (working.startsWith(galaxy)) working = working.slice(galaxy.length).trim();
+  else if (working.startsWith(galaxy.slice(1))) working = working.slice(2).trim();
+
+  const colon = working.match(/^:?\s*(\d{1,2})(?::|\s+)(\d{1,2})(?::|\s+)?(\d{1,2})?([\s\S]*)$/);
+  if (colon) {
+    const nums = [colon[1], colon[2], colon[3]].filter(Boolean).map(Number);
+    if (nums.every(validCoordPart) && (nums.length === 2 || nums.length === 3)) {
+      return coordinateResult(galaxy, nums, colon[4] || "");
+    }
+  }
+
+  const compact = working.replace(/\D/g, "");
+  if (compact.length >= 4) {
+    const withoutGalaxy = compact.startsWith(galaxy.slice(1)) ? compact.slice(2) : compact;
+    if (withoutGalaxy.length === 4 || withoutGalaxy.length >= 6) {
+      const nums = [withoutGalaxy.slice(0, 2), withoutGalaxy.slice(2, 4)];
+      if (withoutGalaxy.length >= 6) nums.push(withoutGalaxy.slice(4, 6));
+      const rest = working.slice(working.indexOf(withoutGalaxy) + withoutGalaxy.length);
+      const parsedNums = nums.map(Number);
+      if (parsedNums.every(validCoordPart)) return coordinateResult(galaxy, parsedNums, rest || "");
+    }
+  }
+
+  return null;
+}
+
+function coordinateResult(galaxy, nums, remainder) {
+  const padded = nums.map((num) => String(num).padStart(2, "0"));
+  const coord = [galaxy, ...padded].join(":");
+  return {
+    kind: nums.length === 3 ? "astro" : "system",
+    coord,
+    galaxy,
+    remainder: remainder || ""
+  };
+}
+
+function validCoordPart(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 99;
 }
 
 function normalizeLocation(value) {
