@@ -26,22 +26,20 @@ Open `index.html` in a browser. Without Supabase credentials, updates are saved 
 
 The bot can answer coordinate lookups from Supabase:
 
-- `!g B24` sets your personal default galaxy.
-- `!setgalaxy B24` sets the current chat's default galaxy.
-- `!B24:34:06:10` sends the planet intel to the user by private message.
-- `$B24:34:06:10` posts the planet intel in the current chat.
-- `!claim B24:24:34:06 10 optional note` claims a target landing 10 minutes from now.
-- `!claim B24:24:34:06:10 optional note` also works; the final `:10` is treated as minutes from now.
+- `!g [galaxy]` sets your personal default galaxy.
+- `!setgalaxy [galaxy]` sets the current chat's default galaxy.
+- `![coord]` sends planet intel to the user by private message.
+- `$[coord]` posts planet intel in the current chat.
+- `!claim [coord] [minutes] [note]` claims a target landing in that many minutes.
 - `!targets` sends your active claims privately.
 - `!claimed` posts all active claimed attacks line by line.
-- `!attacked B24:34:06:10 25 optional note` reports hostile incoming from that coordinate, ETA 25 minutes.
-- `!attacked B24:34:06:10:25 optional note` also works; final `:25` is treated as ETA minutes.
+- `!attacked [coord] [minutes] [note]` reports hostile incoming from that coordinate.
 - `!incoming` posts all active hostile incoming reports sorted by ETA.
-- `!mine B24:06:10:20 optional note` saves one of your bases.
-- `!mine B24:06:` also works as a rough region-level save until you add exact coordinates.
+- `!mine [coord] [note]` saves one of your bases.
 - `!me` sends your saved bases privately.
-- `!save me B24:06:10:20 defense request` saves or updates a note on one of your bases.
-- `!help` or `/help` shows available commands.
+- `!save me [coord] [note]` saves or updates a note on one of your bases.
+- `!wakeup` runs a 60 second startup countdown.
+- `!help` or `/help` shows available commands. Use `!help claim`, `!help intel`, `!help incoming`, `!help bases`, or `!help galaxy` for examples.
 
 For group lookups, disable bot privacy in `@BotFather` with `/setprivacy`, or Telegram may hide normal `!` and `$` messages from the bot. For channel lookups, add the bot to the channel with permission to post. Users must start the bot privately once before it can DM them.
 
