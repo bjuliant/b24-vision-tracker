@@ -24,6 +24,8 @@ Open `index.html` in a browser. Without Supabase credentials, updates are saved 
 
 For production hardening, read `SECURITY_MODEL.md` first. After the bot has `SUPABASE_SERVICE_ROLE_KEY`, you can run `supabase-hardening.sql` to remove public writes from operational tables.
 
+When updating an existing project, rerun `supabase-intel.sql` after uploading this version. It adds the `active_chat_id`, `active_chat_label`, and `cancelled_at` columns used by DM-to-group operation scope and reminder cleanup.
+
 ## Telegram Intel Lookups
 
 The bot can answer coordinate lookups from Supabase:
@@ -32,6 +34,8 @@ Prefix a command with `!` to get the reply privately. Prefix the same command wi
 
 - `!g [galaxy]` sets your personal default galaxy.
 - `!setgalaxy [galaxy]` sets the current chat's default galaxy.
+- `$guild bind` remembers the current group as your active operation group for later DM commands.
+- `!guild status` shows your active operation group.
 - `![coord]` sends planet intel to the user by private message.
 - `$[coord]` posts planet intel in the current chat.
 - `!intel` or `$intel [coord]` looks up a coordinate.

@@ -70,23 +70,113 @@ alter table public.b24_claims
 add column if not exists confirmed_sent boolean not null default false,
 add column if not exists confirmed_at timestamptz,
 add column if not exists confirmed_by text,
-add column if not exists fleet_label text;
+add column if not exists fleet_label text,
+add column if not exists claimed_by_user_id text,
+add column if not exists chat_id text;
 
 create table if not exists public.b24_incoming (
   map_id text not null,
   incoming_id text not null,
+  defended_coord text,
+  defended_region_id text,
+  defended_system_id text,
   attacker_coord text not null,
   region_id text not null,
   system_id text not null,
   eta_minutes integer,
   arrival_at timestamptz not null,
   reported_by text,
+  hostile_fleet text,
+  severity text,
+  verified boolean not null default false,
   note text,
   status text not null default 'active',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (map_id, incoming_id)
 );
+
+alter table public.b24_incoming
+add column if not exists defended_coord text,
+add column if not exists defended_region_id text,
+add column if not exists defended_system_id text,
+add column if not exists hostile_fleet text,
+add column if not exists severity text,
+add column if not exists verified boolean not null default false,
+add column if not exists reported_by_user_id text,
+add column if not exists chat_id text;
+
+create table if not exists public.b24_operations (
+  map_id text not null,
+  operation_id text not null,
+  short_id text not null,
+  chat_id text,
+  type text not null,
+  target_coord text,
+  defended_coord text,
+  hostile_origin text,
+  arrival_at timestamptz,
+  commander_user_id text,
+  commander_label text,
+  message_chat_id text,
+  message_id text,
+  status text not null default 'active',
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (map_id, operation_id),
+  unique (map_id, short_id)
+);
+
+create table if not exists public.b24_operation_members (
+  map_id text not null,
+  operation_id text not null,
+  user_id text not null,
+  display_name text,
+  role text,
+  fleet_label text,
+  fleet_value text,
+  travel_minutes integer,
+  launch_at timestamptz,
+  state text not null default 'joined',
+  sent_at timestamptz,
+  arrived_at timestamptz,
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (map_id, operation_id, user_id)
+);
+
+create table if not exists public.b24_scheduled_notifications (
+  map_id text not null,
+  notification_id text not null,
+  operation_id text,
+  user_id text,
+  chat_id text,
+  notification_type text not null,
+  send_at timestamptz not null,
+  sent_at timestamptz,
+  cancelled_at timestamptz,
+  message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (map_id, notification_id)
+);
+
+alter table public.b24_scheduled_notifications
+add column if not exists cancelled_at timestamptz;
+
+alter table public.b24_operations
+add column if not exists message_chat_id text,
+add column if not exists message_id text;
+
+alter table public.b24_claims
+add column if not exists operation_id text,
+add column if not exists operation_short_id text;
+
+alter table public.b24_incoming
+add column if not exists operation_id text,
+add column if not exists operation_short_id text;
 
 create table if not exists public.b24_user_bases (
   map_id text not null,
@@ -106,8 +196,14 @@ create table if not exists public.b24_user_settings (
   user_id text primary key,
   galaxy text not null default 'B24',
   map_id text not null default 'b24-main',
+  active_chat_id text,
+  active_chat_label text,
   updated_at timestamptz not null default now()
 );
+
+alter table public.b24_user_settings
+add column if not exists active_chat_id text,
+add column if not exists active_chat_label text;
 
 create table if not exists public.b24_chat_settings (
   chat_id text primary key,
@@ -121,6 +217,9 @@ alter table public.b24_astros enable row level security;
 alter table public.b24_bases enable row level security;
 alter table public.b24_claims enable row level security;
 alter table public.b24_incoming enable row level security;
+alter table public.b24_operations enable row level security;
+alter table public.b24_operation_members enable row level security;
+alter table public.b24_scheduled_notifications enable row level security;
 alter table public.b24_user_bases enable row level security;
 alter table public.b24_user_settings enable row level security;
 alter table public.b24_chat_settings enable row level security;
@@ -216,6 +315,63 @@ with check (true);
 drop policy if exists "Anyone can update B24 incoming" on public.b24_incoming;
 create policy "Anyone can update B24 incoming"
 on public.b24_incoming
+for update
+using (true)
+with check (true);
+
+drop policy if exists "Anyone can read B24 operations" on public.b24_operations;
+create policy "Anyone can read B24 operations"
+on public.b24_operations
+for select
+using (true);
+
+drop policy if exists "Anyone can write B24 operations" on public.b24_operations;
+create policy "Anyone can write B24 operations"
+on public.b24_operations
+for insert
+with check (true);
+
+drop policy if exists "Anyone can update B24 operations" on public.b24_operations;
+create policy "Anyone can update B24 operations"
+on public.b24_operations
+for update
+using (true)
+with check (true);
+
+drop policy if exists "Anyone can read B24 operation members" on public.b24_operation_members;
+create policy "Anyone can read B24 operation members"
+on public.b24_operation_members
+for select
+using (true);
+
+drop policy if exists "Anyone can write B24 operation members" on public.b24_operation_members;
+create policy "Anyone can write B24 operation members"
+on public.b24_operation_members
+for insert
+with check (true);
+
+drop policy if exists "Anyone can update B24 operation members" on public.b24_operation_members;
+create policy "Anyone can update B24 operation members"
+on public.b24_operation_members
+for update
+using (true)
+with check (true);
+
+drop policy if exists "Anyone can read B24 scheduled notifications" on public.b24_scheduled_notifications;
+create policy "Anyone can read B24 scheduled notifications"
+on public.b24_scheduled_notifications
+for select
+using (true);
+
+drop policy if exists "Anyone can write B24 scheduled notifications" on public.b24_scheduled_notifications;
+create policy "Anyone can write B24 scheduled notifications"
+on public.b24_scheduled_notifications
+for insert
+with check (true);
+
+drop policy if exists "Anyone can update B24 scheduled notifications" on public.b24_scheduled_notifications;
+create policy "Anyone can update B24 scheduled notifications"
+on public.b24_scheduled_notifications
 for update
 using (true)
 with check (true);
@@ -322,6 +478,33 @@ begin
       and tablename = 'b24_incoming'
   ) then
     alter publication supabase_realtime add table public.b24_incoming;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'b24_operations'
+  ) then
+    alter publication supabase_realtime add table public.b24_operations;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'b24_operation_members'
+  ) then
+    alter publication supabase_realtime add table public.b24_operation_members;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'b24_scheduled_notifications'
+  ) then
+    alter publication supabase_realtime add table public.b24_scheduled_notifications;
   end if;
 
   if not exists (

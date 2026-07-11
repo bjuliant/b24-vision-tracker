@@ -52,6 +52,21 @@ Ordered so each step supports the next one.
 - [x] Restrict close/standdown to commander/officers.
 - [x] Revisit public anon Supabase policies before hostile use.
 
+## Stabilization Review
+
+- [x] Replace group Mini App `webApp` buttons with normal URL buttons.
+- [x] Fix `!respond` operation parsing.
+- [x] Add active guild/chat scope so DM commands can operate on group operations.
+- [x] Preserve member details when ready/sent/leave updates state.
+- [x] Close linked claims, incoming reports, and reminders when standing down.
+- [x] Skip reminders when operation/member state makes them obsolete.
+- [x] Show real member counts in `!next`.
+- [x] Exclude withdrawn members from joined counts.
+- [x] Show hostile-origin intel on defense operation cards.
+- [x] Increase short operation ID length.
+- [x] Reject impossible travel times that would launch in the past.
+- [x] Warn before duplicate active target/defense operations.
+
 ## Later
 
 - [ ] Battle calculators.
