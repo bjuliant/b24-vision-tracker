@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.35";
+const botBuild = "2026-07-12.36";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -286,7 +286,12 @@ async function handleClaimButton(ctx) {
 }
 
 async function handleHelp(ctx, text, mode) {
-  return respond(ctx, mode, await helpText(ctx, text), { parse_mode: "HTML" });
+  try {
+    return await respond(ctx, mode, await helpText(ctx, text), { parse_mode: "HTML" });
+  } catch (error) {
+    console.error("help command failed", error?.message || error);
+    return ctx.reply(basicHelpText());
+  }
 }
 
 async function handleOfficerHelp(ctx, mode) {
@@ -523,6 +528,23 @@ function officerHelpText() {
     "<code>/id</code> - show chat/user IDs for setup",
     "",
     "Tip: reply to someone's message with <code>$approve</code>, <code>$officer</code>, <code>$demote</code>, <code>$ban</code>, or <code>$access</code>."
+  ].join("\n");
+}
+
+function basicHelpText() {
+  return [
+    "Lysander Commands",
+    "",
+    "/status - check bot status",
+    "/map - open the map",
+    "$help - public help in an approved group",
+    "!help - private help",
+    "$incoming - show incoming",
+    "$report attacker defended eta size - report incoming",
+    "$astros B24 craters a85 m4 c2 - search astros",
+    "$bases [TAG] - list known bases",
+    "",
+    "Full help had a temporary problem. Check Render logs for the line after: help command failed."
   ].join("\n");
 }
 
