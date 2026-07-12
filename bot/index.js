@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.17";
+const botBuild = "2026-07-12.22";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -134,7 +134,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "standdown") || isCommand(lower, "cancelop")) return handleCloseOperation(ctx, text, mode);
   if (isCommand(lower, "board") || isExactCommand(lower, "defense")) return handleBoard(ctx, text, mode);
   if (isExactCommand(lower, "next") || isExactCommand(lower, "myops")) return handleNext(ctx, mode);
-  if (isExactCommand(lower, "incoming")) return handleIncoming(ctx, mode);
+  if (isCommand(lower, "incoming")) return handleIncoming(ctx, text, mode);
   if (isExactCommand(lower, "targets")) return handleTargets(ctx, mode);
   if (isExactCommand(lower, "claimed")) return handleClaimed(ctx, mode);
   if (isCommand(lower, "mine")) return handleMine(ctx, text, mode);
@@ -353,10 +353,16 @@ async function helpText(ctx, input = "") {
       "<code>!sos [your base] [attacker coord] [eta minutes] [note]</code>",
       "<code>$sos [your base] [attacker coord] [eta minutes] [note]</code>",
       "Report hostile incoming against a defended base and sort it by ETA. Use <code>!</code> privately or <code>$</code> publicly.",
+      "<code>$incoming [coord|system|region|tag]</code>",
+      "Show active hostile incoming for a base, system, sector, or guild tag.",
+      "<code>$incoming [pasted rows]</code>",
+      "Import copied incoming rows that contain source, destination, ETA, and optional size.",
       "",
       "Examples:",
       "<code>$sos B24:45:10:30 B24:34:06:10 25 incoming dread</code>",
       "<code>!attacked B24:45:10:30 B24:34:06:10 25 incoming dread</code>",
+      "<code>$incoming B24:36</code>",
+      "<code>$incoming [APP]</code>",
       "<code>$incoming</code>"
     ],
     bases: [
@@ -1085,8 +1091,27 @@ async function handleAttacked(ctx, text, mode) {
   const match = text.trim().match(attackedPattern);
   if (!match) return respond(ctx, mode, "Use: $sos B24:45:10:30 B24:34:06:10 25 optional note");
 
-  const parsed = parseIncomingReport(match[2], await galaxyForContext(ctx));
-  if (!parsed?.attackerCoord) return respond(ctx, mode, "Use: $sos [your base] [attacker coord] [eta minutes] [note]");
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+
+  const imported = parseIncomingExportRows(match[2], galaxy);
+  if (imported.length > 1) {
+    const saved = await insertIncomingRows(ctx, imported, scopeId);
+    return respond(ctx, mode, `Imported ${saved}/${imported.length} incoming reports. Use <code>$incoming</code>, <code>$incoming B24:36</code>, or <code>$incoming [APP]</code>.`, { parse_mode: "HTML" });
+  }
+
+  const parsed = parseIncomingReport(match[2], galaxy);
+  if (!parsed?.attackerCoord) {
+    const generic = parseGenericIncomingReport(match[2], galaxy);
+    if (generic) {
+      const saved = await insertIncomingRows(ctx, [generic], scopeId);
+      return respond(ctx, mode, saved
+        ? `Reported generic incoming: ETA ${formatEta(generic.arrivalAt)}${generic.note ? ` - ${escapeHtml(generic.note)}` : ""}`
+        : "Incoming report failed. I could not reach Supabase.", { parse_mode: "HTML" });
+    }
+    return respond(ctx, mode, "Use: $sos [your base] [attacker coord] [eta minutes] [note], or $sos 1:30 4500 rotc");
+  }
 
   const defended = parsed.defendedCoord;
   const attacker = parsed.attackerCoord;
@@ -1096,8 +1121,6 @@ async function handleAttacked(ctx, text, mode) {
 
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
-  const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const duplicate = await findActiveOperationByTarget(mapIdForCoord(defended || attacker), scopeId, "defense", "defended_coord", defended);
   if (duplicate) {
     return respond(ctx, mode, `Existing defense ${escapeHtml(duplicate.short_id)} already covers ${escapeHtml(defended)}. Use !respond ${escapeHtml(duplicate.short_id)} instead.`, { parse_mode: "HTML" });
@@ -1146,12 +1169,56 @@ async function handleAttacked(ctx, text, mode) {
   return message;
 }
 
-async function handleIncoming(ctx, mode) {
+async function handleIncoming(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const query = commandBody(text);
+  const imported = parseIncomingExportRows(query, galaxy);
+  if (imported.length) {
+    const saved = await insertIncomingRows(ctx, imported, scopeId);
+    return respond(ctx, mode, `Imported ${saved}/${imported.length} incoming reports. Use <code>$incoming</code>, <code>$incoming B24:36</code>, or <code>$incoming [APP]</code>.`, { parse_mode: "HTML" });
+  }
+
   const incoming = await fetchActiveIncoming(galaxy, scopeId);
-  return respond(ctx, mode, incoming.length ? incoming.map(formatIncomingLine).join("\n") : `No active hostile incoming reports in ${galaxy}.`, { parse_mode: "HTML" });
+  const filtered = filterIncomingReports(incoming, query, galaxy);
+  const enriched = await enrichIncomingReports(filtered, galaxy);
+  const label = query ? ` matching ${escapeHtml(query)}` : "";
+  return respond(ctx, mode, enriched.length ? enriched.map(formatIncomingLine).join("\n") : `No active hostile incoming reports${label} in ${galaxy}.`, { parse_mode: "HTML" });
+}
+
+async function insertIncomingRows(ctx, rows, scopeId) {
+  const now = new Date().toISOString();
+  let saved = 0;
+  for (const row of rows) {
+    const coord = row.defendedCoord || row.attackerCoord || "";
+    const incoming = {
+      map_id: coord ? mapIdForCoord(coord) : galaxyToMapId(row.galaxy || defaultGalaxy),
+      incoming_id: randomId(),
+      operation_id: null,
+      operation_short_id: null,
+      defended_coord: row.defendedCoord || null,
+      defended_region_id: row.defendedCoord ? astroToRegion(row.defendedCoord) : null,
+      defended_system_id: row.defendedCoord ? astroToSystem(row.defendedCoord) : null,
+      attacker_coord: row.attackerCoord || null,
+      region_id: row.attackerCoord ? astroToRegion(row.attackerCoord) : null,
+      system_id: row.attackerCoord ? astroToSystem(row.attackerCoord) : null,
+      eta_minutes: row.etaMinutes,
+      arrival_at: row.arrivalAt.toISOString(),
+      reported_by: telegramName(ctx),
+      reported_by_user_id: telegramUserId(ctx),
+      chat_id: scopeId,
+      hostile_fleet: row.rawLine,
+      severity: "",
+      verified: false,
+      note: row.note,
+      status: "active",
+      created_at: now,
+      updated_at: now
+    };
+    if (await insertRow("b24_incoming", incoming)) saved += 1;
+  }
+  return saved;
 }
 
 async function handleIntel(ctx, text, mode) {
@@ -2891,10 +2958,38 @@ function formatIncomingLine(incoming) {
   const note = incoming.note ? ` - ${escapeHtml(incoming.note)}` : "";
   const eta = formatEta(new Date(incoming.arrival_at));
   const reporter = escapeHtml(incoming.reported_by || "Unknown");
+  const fleet = incoming.hostile_fleet ? ` - ${escapeHtml(incoming.hostile_fleet)}` : "";
   if (incoming.defended_coord) {
-    return `${escapeHtml(incoming.defended_coord)} <= ${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}`;
+    return `${escapeHtml(incoming.defended_coord)} <= ${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}${fleet}`;
   }
-  return `${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}`;
+  if (!incoming.attacker_coord) {
+    const bases = incoming.reporter_base_hint ? ` (${escapeHtml(incoming.reporter_base_hint)})` : " (base unknown)";
+    return `${reporter}${bases} - ETA ${eta}${note}${fleet}`;
+  }
+  return `${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}${fleet}`;
+}
+
+async function enrichIncomingReports(incoming, galaxy) {
+  const genericUserIds = [...new Set(incoming
+    .filter((row) => !row.defended_coord && !row.attacker_coord && row.reported_by_user_id)
+    .map((row) => row.reported_by_user_id))];
+  if (!genericUserIds.length) return incoming;
+  const bases = await fetchRows("b24_user_bases", {
+    status: "eq.active"
+  }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
+  const basesByUser = new Map();
+  bases.forEach((base) => {
+    if (!genericUserIds.includes(String(base.user_id))) return;
+    if (!basesByUser.has(String(base.user_id))) basesByUser.set(String(base.user_id), []);
+    basesByUser.get(String(base.user_id)).push(base.base_coord);
+  });
+  return incoming.map((row) => {
+    const userBases = basesByUser.get(String(row.reported_by_user_id || "")) || [];
+    return {
+      ...row,
+      reporter_base_hint: userBases.length ? userBases.slice(0, 3).join(", ") + (userBases.length > 3 ? ` +${userBases.length - 3}` : "") : ""
+    };
+  });
 }
 
 function formatUserBaseLine(base) {
@@ -3214,6 +3309,17 @@ function parseTimedCoordinate(value, fallbackGalaxy) {
 }
 
 function parseIncomingReport(value, fallbackGalaxy) {
+  const exported = parseIncomingExportRows(value, fallbackGalaxy);
+  if (exported.length === 1) {
+    const row = exported[0];
+    return {
+      defendedCoord: row.defendedCoord,
+      attackerCoord: row.attackerCoord,
+      minutes: row.etaMinutes,
+      note: row.note || row.rawLine
+    };
+  }
+
   const first = parseCoordinate(value, fallbackGalaxy);
   if (!first || first.kind !== "astro") return null;
 
@@ -3229,6 +3335,140 @@ function parseIncomingReport(value, fallbackGalaxy) {
   }
 
   return null;
+}
+
+function parseGenericIncomingReport(value, fallbackGalaxy) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{1,4}(?::\d{2}){0,2})(?:\s+([\d,]+))?(?:\s+(.+))?$/i);
+  if (!match) return null;
+  const duration = parseIncomingDuration(match[1]);
+  if (!duration) return null;
+  const size = match[2] ? `size ${match[2]}` : "";
+  const note = [size, match[3] || ""].filter(Boolean).join(" | ");
+  return {
+    galaxy: normalizeGalaxy(fallbackGalaxy) || defaultGalaxy,
+    attackerCoord: null,
+    defendedCoord: null,
+    etaMinutes: Math.max(1, Math.ceil(duration.ms / 60000)),
+    arrivalAt: new Date(Date.now() + duration.ms),
+    note,
+    rawLine: raw
+  };
+}
+
+function parseIncomingExportRows(value, fallbackGalaxy) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  const streamRows = parseIncomingExportStream(normalized, fallbackGalaxy);
+  if (streamRows.length) return streamRows;
+
+  const lines = String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const rows = [];
+  for (const line of lines) {
+    const coords = [...line.matchAll(/\bB\d{2}:\d{2}:\d{2}:\d{2}\b/gi)].map((match) => normalizeCoordText(match[0], fallbackGalaxy));
+    if (coords.length < 2) continue;
+    const eta = parseEtaDuration(line);
+    if (!eta) continue;
+    const sizeMatch = line.match(/\bsize\s+([\d,]+)/i);
+    const tags = [...line.matchAll(/\[[^\]]{1,24}\]/g)].map((match) => match[0]);
+    const attackerCoord = coords[0];
+    const defendedCoord = coords[1];
+    rows.push({
+      attackerCoord,
+      defendedCoord,
+      etaMinutes: Math.max(1, Math.ceil(eta.ms / 60000)),
+      arrivalAt: new Date(Date.now() + eta.ms),
+      note: [
+        tags[0] ? `from ${tags[0]}` : "",
+        tags[1] ? `to ${tags[1]}` : "",
+        sizeMatch ? `size ${sizeMatch[1]}` : ""
+      ].filter(Boolean).join(" | "),
+      rawLine: line
+    });
+  }
+  return rows;
+}
+
+function parseIncomingExportStream(value, fallbackGalaxy) {
+  const rows = [];
+  const rowPattern = /\b(B\d{2}:\d{2}:\d{2}:\d{2})\b\s+(.{0,120}?)\s*->\s*\b(B\d{2}:\d{2}:\d{2}:\d{2})\b\s+(.{0,120}?)\s+ETA\s+(\d{1,3}:\d{2}(?::\d{2})?)(?:\s+Size\s+([\d,]+))?/gi;
+  for (const match of String(value || "").matchAll(rowPattern)) {
+    const attackerCoord = normalizeCoordText(match[1], fallbackGalaxy);
+    const defendedCoord = normalizeCoordText(match[3], fallbackGalaxy);
+    const eta = parseEtaDuration(`ETA ${match[5]}`);
+    if (!eta) continue;
+    const sourceLabel = match[2].trim();
+    const defendedLabel = match[4].trim();
+    const tags = [...`${sourceLabel} ${defendedLabel}`.matchAll(/\[[^\]]{1,24}\]/g)].map((tagMatch) => tagMatch[0]);
+    rows.push({
+      attackerCoord,
+      defendedCoord,
+      etaMinutes: Math.max(1, Math.ceil(eta.ms / 60000)),
+      arrivalAt: new Date(Date.now() + eta.ms),
+      note: [
+        tags[0] ? `from ${tags[0]}` : "",
+        tags[1] ? `to ${tags[1]}` : "",
+        match[6] ? `size ${match[6]}` : ""
+      ].filter(Boolean).join(" | "),
+      rawLine: `${attackerCoord} ${sourceLabel} -> ${defendedCoord} ${defendedLabel} ETA ${match[5]}${match[6] ? ` Size ${match[6]}` : ""}`
+    });
+  }
+  return rows;
+}
+
+function parseEtaDuration(value) {
+  const match = String(value || "").match(/\bETA\s+(\d{1,3}):(\d{2})(?::(\d{2}))?\b/i);
+  if (!match) return null;
+  return parseIncomingDuration(match[3] ? `${match[1]}:${match[2]}:${match[3]}` : `${match[1]}:${match[2]}`);
+}
+
+function parseIncomingDuration(value) {
+  const parts = String(value || "").trim().split(":").map(Number);
+  if (!parts.length || parts.length > 3 || !parts.every(Number.isFinite)) return null;
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
+  if (parts.length === 1) {
+    minutes = parts[0];
+  } else if (parts.length === 2) {
+    hours = parts[0];
+    minutes = parts[1];
+  } else {
+    hours = parts[0];
+    minutes = parts[1];
+    seconds = parts[2];
+  }
+  if (![hours, minutes, seconds].every(Number.isFinite)) return null;
+  if (minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 || hours < 0) return null;
+  return { ms: ((hours * 60 + minutes) * 60 + seconds) * 1000 };
+}
+
+function normalizeCoordText(coord, fallbackGalaxy) {
+  const parsed = parseCoordinate(coord, fallbackGalaxy);
+  return parsed?.coord || String(coord || "").toUpperCase();
+}
+
+function filterIncomingReports(incoming, query, fallbackGalaxy) {
+  const raw = String(query || "").trim();
+  if (!raw) return incoming;
+  const parsed = parseLocation(raw, fallbackGalaxy);
+  if (parsed?.kind === "astro") {
+    return incoming.filter((row) => row.defended_coord === parsed.coord || row.attacker_coord === parsed.coord);
+  }
+  if (parsed?.kind === "system") {
+    return incoming.filter((row) => row.defended_system_id === parsed.coord || row.system_id === parsed.coord);
+  }
+  if (parsed?.kind === "region") {
+    return incoming.filter((row) => row.defended_region_id === parsed.coord || row.region_id === parsed.coord);
+  }
+  const tag = normalizeStanceTarget(raw);
+  const needle = searchText(tag || raw);
+  return incoming.filter((row) => {
+    const haystack = searchText([row.hostile_fleet, row.note, row.reported_by, row.attacker_coord, row.defended_coord].filter(Boolean).join(" "));
+    return haystack.includes(needle);
+  });
 }
 
 function parseTimedRemainder(value) {
