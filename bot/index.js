@@ -27,19 +27,21 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.10";
+const botBuild = "2026-07-12.13";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
   scout: ["sc", "scout"],
-  astros: ["as", "ast", "astr", "astro", "astros"]
+  astros: ["as", "ast", "astr", "astro", "astros"],
+  friend: ["fr", "fri", "frie", "frien", "friend"],
+  enemy: ["e", "en", "ene", "enem", "enemy"]
 };
 const canonicalCommands = [
   "help", "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming",
-  "targets", "claimed", "mine", "me"
+  "targets", "claimed", "mine", "me", "friend", "enemy"
 ];
 
 bot.use(async (ctx, next) => {
@@ -122,6 +124,8 @@ async function handleText(ctx) {
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
   if (isCommand(lower, "score")) return handleScore(ctx, text, mode);
   if (isCommand(lower, "bases")) return handleBases(ctx, text, mode);
+  if (isCommand(lower, "friend")) return handleStance(ctx, text, mode, "friend");
+  if (isCommand(lower, "enemy")) return handleStance(ctx, text, mode, "enemy");
   if (isCommand(lower, "op")) return handleOp(ctx, text, mode);
   if (isCommand(lower, "join") || isCommand(lower, "respond")) return handleOperationMember(ctx, text, mode, "joined");
   if (isCommand(lower, "ready")) return handleOperationMember(ctx, text, mode, "ready");
@@ -310,6 +314,8 @@ async function helpText(ctx, input = "") {
       "<code>$[coord]</code> - post intel in the current chat",
       "<code>!intel [coord]</code> - DM intel to you",
       "<code>$intel [coord]</code> - post intel in the current chat",
+      "<code>!friend [tag|coord]</code> - show matching intel with a green dot",
+      "<code>!enemy [tag|coord]</code> - show matching intel with a red dot",
       "",
       "Examples:",
       "<code>!B24:34:06:10</code>",
@@ -425,6 +431,7 @@ async function helpText(ctx, input = "") {
     "<b>INTEL</b>",
     "<code>![coord]</code>  <code>$[coord]</code>",
     "<code>!intel</code>  <code>!stale</code>  <code>!score</code>",
+    "<code>!friend [tag|coord]</code>  <code>!enemy [tag|coord]</code>",
     "",
     "<b>PERSONAL</b>",
     "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
@@ -444,7 +451,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|intel|as|ast|astr|astro|astros|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -551,6 +558,8 @@ function isProtectedOperationalCommand(lowerText) {
     "astros",
     "mine",
     "me",
+    "friend",
+    "enemy",
     "save me",
     "guild"
   ].some((command) => isCommand(lowerText, command) || isExactCommand(lowerText, command));
@@ -590,6 +599,8 @@ function isSensitiveOperationalCommand(lowerText) {
     "astros",
     "mine",
     "me",
+    "friend",
+    "enemy",
     "save me",
     "setgalaxy",
     "guild",
@@ -1144,9 +1155,12 @@ async function handleIncoming(ctx, mode) {
 }
 
 async function handleIntel(ctx, text, mode) {
-  const query = text.replace(/^[!$]intel\s+/i, "").trim();
+  const query = commandBody(text);
   const parsed = parseLocation(query, await galaxyForContext(ctx));
-  if (!parsed) return respond(ctx, mode, "Use: !intel B24, B24:34, B24:34:06, or B24:34:06:10");
+  if (!parsed) {
+    if (query) return sendBasesReport(ctx, mode, query);
+    return respond(ctx, mode, "Use: !intel B24, B24:34, B24:34:06, B24:34:06:10, or !intel [player/guild]");
+  }
 
   const includeSavedBases = await userCanUseSensitiveCommands(ctx);
   const report = await buildLocationReport(parsed, { includeSavedBases });
@@ -1203,19 +1217,55 @@ async function handleUnknownCommand(ctx, text, mode) {
 }
 
 async function handleBases(ctx, text, mode) {
-  const query = text.replace(/^[!$]bases\s+/i, "").trim().replace(/^@/, "");
+  const query = commandBody(text).replace(/^@/, "");
   if (!query) return respond(ctx, mode, "Use: !bases playername");
   return sendBasesReport(ctx, mode, query);
 }
 
+async function handleStance(ctx, text, mode, stance) {
+  const raw = commandBody(text);
+  if (!raw) return respond(ctx, mode, `Use: !${stance} [tag] or !${stance} B24:92:15:10`);
+  const galaxy = await galaxyForContext(ctx);
+  const parsed = parseLocation(raw, galaxy);
+  const mapId = parsed?.coord ? mapIdForCoord(parsed.coord) : galaxyToMapId(galaxy);
+  const now = new Date().toISOString();
+  const rows = [];
+
+  if (parsed?.kind === "astro") {
+    rows.push(stanceRow(mapId, "coord", parsed.coord, stance, ctx, now));
+    if (stance === "enemy") {
+      const base = await fetchOne("b24_bases", { coord: parsed.coord }, mapId);
+      const tag = normalizeStanceTarget(base?.guild);
+      if (tag) rows.push(stanceRow(mapId, "tag", tag, "enemy", ctx, now));
+    }
+  } else {
+    const tag = normalizeStanceTarget(raw);
+    if (!tag) return respond(ctx, mode, `Use a coordinate or tag, like <code>!${stance} [ROTC]</code>.`, { parse_mode: "HTML" });
+    rows.push(stanceRow(mapId, "tag", tag, stance, ctx, now));
+  }
+
+  const saved = [];
+  for (const row of rows) {
+    if (await upsertRow("b24_stances", row, "map_id,scope_type,scope_value")) saved.push(row);
+  }
+  if (!saved.length) return respond(ctx, mode, "Stance update failed. I could not reach Supabase.");
+
+  const icon = stanceIcon(stance);
+  const lines = saved.map((row) => `${icon} ${escapeHtml(row.scope_value)} marked ${escapeHtml(row.stance)}`);
+  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
 async function sendBasesReport(ctx, mode, query) {
   const galaxy = await galaxyForContext(ctx);
+  const pageInfo = parsePageFromQuery(query);
+  query = pageInfo.query;
   const [savedRows, importedRows] = await Promise.all([
     fetchRows("b24_user_bases", {
       status: "eq.active"
     }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" }),
     fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" })
   ]);
+  const stances = await fetchStanceMap(galaxy);
 
   const needle = searchText(query);
   const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
@@ -1249,15 +1299,22 @@ async function sendBasesReport(ctx, mode, query) {
   ];
   if (importedMatches.length) {
     lines.push("", "<b>Imported Intel</b>");
-    importedMatches.forEach((row) => lines.push(formatImportedBaseLine(row)));
+    importedMatches.forEach((row) => lines.push(formatImportedBaseLine(row, stances)));
   }
   if (savedMatches.length) {
     lines.push("", "<b>Saved By Users</b>");
     savedMatches.forEach((row) => lines.push(formatUserBaseLine(row)));
   }
+  const totalActionable = uniqueBaseCoords(importedMatches, savedMatches).length;
+  const shownFrom = Math.min(totalActionable, (pageInfo.page - 1) * 8 + 1);
+  const shownTo = Math.min(totalActionable, pageInfo.page * 8);
+  if (totalActionable > 8) {
+    lines.push("", `Buttons: ${shownFrom}-${shownTo} of ${totalActionable}`);
+    if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(query)} page ${pageInfo.page + 1}</code>`);
+  }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...baseListKeyboard(importedMatches, savedMatches)
+    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page)
   });
 }
 
@@ -1502,18 +1559,20 @@ async function handleSaveMe(ctx, text, mode) {
 
 async function buildAstroReport(coord, options = {}) {
   const includeSavedBases = Boolean(options.includeSavedBases);
-  const [astro, base, savedBases] = await Promise.all([
+  const [astro, base, savedBases, stances] = await Promise.all([
     fetchOne("b24_astros", { coord }, mapIdForCoord(coord)),
     fetchOne("b24_bases", { coord }, mapIdForCoord(coord)),
     includeSavedBases ? fetchRows("b24_user_bases", {
       base_coord: `eq.${coord}`,
       status: "eq.active"
-    }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" }) : []
+    }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" }) : [],
+    fetchStanceMap(galaxyFromCoord(coord))
   ]);
 
   if (!astro && !base && !savedBases.length) return `No intel found for ${escapeHtml(coord)} yet.`;
 
-  const lines = [`<b>${escapeHtml(coord)}</b>`];
+  const icon = base ? stanceIcon(resolveBaseStance(base, stances)) : "";
+  const lines = [`<b>${escapeHtml(`${icon ? `${icon} ` : ""}${coord}`)}</b>`];
   if (astro) {
     const attrs = Array.isArray(astro.attributes) ? astro.attributes.join(" / ") : "";
     lines.push(`${escapeHtml(astro.terrain || "Unknown")} ${escapeHtml(astro.astro_type || "Astro")}`);
@@ -1521,6 +1580,8 @@ async function buildAstroReport(coord, options = {}) {
     lines.push(`Base: ${astro.has_base ? "Yes" : "No"}`);
   }
   if (base) {
+    const stance = resolveBaseStance(base, stances);
+    if (stance) lines.push(`Stance: ${escapeHtml(stance)}`);
     if (base.guild) lines.push(`Guild: ${escapeHtml(base.guild)}`);
     if (base.label) lines.push(`Owner: ${escapeHtml(base.label)}`);
   }
@@ -1745,15 +1806,21 @@ async function buildAstroSearch(parsed) {
   const from = (page - 1) * pageSize;
   let rows = [];
   let count = 0;
-  if (parsed.attrFilters.length) {
+  if (parsed.attrFilters.length || parsed.excludedTags.length) {
     const allRows = await fetchAllRows("b24_astros", filters, {
       mapId: galaxyToMapId(parsed.galaxy),
       order: "coord.asc"
     });
-    const matched = allRows.filter((astro) => astroMatchesAttributeFilters(astro, parsed.attrFilters));
+    const excludedBaseCoords = await excludedTagBaseCoords(parsed);
+    const matched = allRows.filter((astro) => {
+      return astroMatchesAttributeFilters(astro, parsed.attrFilters) && !excludedBaseCoords.has(astro.coord);
+    });
     count = matched.length;
     rows = matched.slice(from, from + pageSize);
-    titleParts.push(parsed.attrFilters.map(attributeFilterLabel).join(", "));
+    titleParts.push([
+      ...parsed.attrFilters.map(attributeFilterLabel),
+      ...parsed.excludedTags.map((tag) => `without ${tag.value}`)
+    ].join(", "));
   } else {
     const result = await fetchRowsWithCount("b24_astros", filters, {
       mapId: galaxyToMapId(parsed.galaxy),
@@ -1784,7 +1851,11 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   const original = String(query || "").trim();
   const pageMatch = original.match(/(?:^|\s)(?:page\s*|p)(\d+)(?=\s|$)/i);
   const page = pageMatch ? Math.max(1, Number(pageMatch[1])) : 1;
-  const withoutPage = original.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim();
+  let withoutPage = original.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim();
+  const excludedTags = parseExcludedTags(withoutPage);
+  excludedTags.forEach((tag) => {
+    withoutPage = withoutPage.replace(tag.regex, " ");
+  });
   const attrFilters = parseAttributeFilters(withoutPage);
   const raw = attrFilters.reduce((value, filter) => value.replace(filter.tokenRegex, " "), withoutPage).trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
@@ -1804,12 +1875,12 @@ function parseAstrosQuery(query, fallbackGalaxy) {
     .replace(/^[:\s]+/, "")
     .trim()
     .toLowerCase();
-  return { galaxy, region, filter, page, attrFilters };
+  return { galaxy, region, filter, page, attrFilters, excludedTags };
 }
 
 function astrosNextQuery(parsed, page) {
   const scope = parsed.region || parsed.galaxy;
-  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), `page ${page}`].filter(Boolean).join(" ");
+  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
 }
 
 function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
@@ -1878,6 +1949,29 @@ function parseAttributeFilters(raw) {
   }).filter((filter) => Number.isFinite(filter.value));
 }
 
+function parseExcludedTags(raw) {
+  return [...String(raw || "").matchAll(/(?:^|\s)(?:no|not|without)\s+(\[[^\]]{1,24}\]|[a-z0-9 _-]{1,24})(?=\s|$)/gi)].map((match) => {
+    const value = normalizeStanceTarget(match[1]);
+    return {
+      value,
+      regex: new RegExp(`(?:^|\\s)(?:no|not|without)\\s+${escapeRegExp(match[1])}(?=\\s|$)`, "i")
+    };
+  }).filter((tag) => tag.value);
+}
+
+async function excludedTagBaseCoords(parsed) {
+  if (!parsed.excludedTags.length) return new Set();
+  const rows = await fetchRows("b24_bases", {}, {
+    mapId: galaxyToMapId(parsed.galaxy),
+    order: "coord.asc"
+  });
+  const excluded = new Set(parsed.excludedTags.map((tag) => tag.value));
+  return new Set(rows
+    .filter((row) => excluded.has(normalizeStanceTarget(row.guild)))
+    .map((row) => row.coord)
+    .filter(Boolean));
+}
+
 function astroMatchesAttributeFilters(astro, attrFilters) {
   const attrs = Array.isArray(astro?.attributes) ? astro.attributes.map(Number) : [];
   return attrFilters.every((filter) => attrs[filter.index] >= filter.value);
@@ -1928,10 +2022,25 @@ function staleBaseLine(base) {
   return `${escapeHtml(base.coord)} - ${escapeHtml(owner || "Unknown base")} - ${age}`;
 }
 
-function formatImportedBaseLine(row) {
+function formatImportedBaseLine(row, stances = null) {
   const owner = [row.guild, row.label].filter(Boolean).join(" ") || "Unknown owner";
   const age = row.updated_at ? ` - ${intelAgeLabel(row.updated_at)}` : "";
-  return `${escapeHtml(row.coord)} - ${escapeHtml(owner)}${age}`;
+  const icon = stanceIcon(resolveBaseStance(row, stances));
+  return `${icon}${icon ? " " : ""}${escapeHtml(row.coord)} - ${escapeHtml(owner)}${age}`;
+}
+
+function resolveBaseStance(row, stances = null) {
+  if (!stances) return "";
+  const coordStance = stances.coord.get(row.coord);
+  if (coordStance) return coordStance;
+  const tag = normalizeStanceTarget(row.guild);
+  return tag ? stances.tag.get(tag) || "" : "";
+}
+
+function stanceIcon(stance) {
+  if (stance === "friend") return "🟢";
+  if (stance === "enemy") return "🔴";
+  return "";
 }
 
 function baseOwnerSuggestions(rows, needle) {
@@ -1958,17 +2067,65 @@ function basesSuggestionKeyboard(owners) {
   ]));
 }
 
-function baseListKeyboard(importedRows, savedRows) {
-  const coords = [...new Set([
-    ...importedRows.map((row) => row.coord),
-    ...savedRows.map((row) => row.base_coord)
-  ].filter(Boolean))].slice(0, 8);
+function baseListKeyboard(importedRows, savedRows, page = 1) {
+  const pageSize = 8;
+  const coords = uniqueBaseCoords(importedRows, savedRows).slice((page - 1) * pageSize, page * pageSize);
   if (!coords.length) return {};
   return Markup.inlineKeyboard(coords.map((coord) => [
     Markup.button.callback(`Intel ${coord}`, `intel:${coord}`),
     Markup.button.callback("Claim 4h", `claim4h:${coord}`),
     Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord))
   ]));
+}
+
+function uniqueBaseCoords(importedRows, savedRows) {
+  return [...new Set([
+    ...importedRows.map((row) => row.coord),
+    ...savedRows.map((row) => row.base_coord)
+  ].filter(Boolean))];
+}
+
+function parsePageFromQuery(query) {
+  const raw = String(query || "").trim();
+  const match = raw.match(/(?:^|\s)(?:page\s*|p)(\d+)(?=\s|$)/i);
+  const page = match ? Math.max(1, Number(match[1])) : 1;
+  return {
+    page,
+    query: raw.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim()
+  };
+}
+
+async function fetchStanceMap(galaxy) {
+  const rows = await fetchRows("b24_stances", {}, {
+    mapId: galaxyToMapId(galaxy),
+    order: "scope_type.asc,scope_value.asc"
+  });
+  return {
+    coord: new Map(rows.filter((row) => row.scope_type === "coord").map((row) => [row.scope_value, row.stance])),
+    tag: new Map(rows.filter((row) => row.scope_type === "tag").map((row) => [normalizeStanceTarget(row.scope_value), row.stance]))
+  };
+}
+
+function stanceRow(mapId, scopeType, scopeValue, stance, ctx, timestamp) {
+  return {
+    map_id: mapId,
+    scope_type: scopeType,
+    scope_value: scopeType === "tag" ? normalizeStanceTarget(scopeValue) : scopeValue,
+    stance,
+    updated_by: telegramName(ctx),
+    updated_by_user_id: telegramUserId(ctx),
+    updated_at: timestamp
+  };
+}
+
+function normalizeStanceTarget(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const bracket = raw.match(/\[[^\]]{1,24}\]/);
+  if (bracket) return bracket[0].toUpperCase();
+  const clean = raw.replace(/[^a-z0-9 _-]/gi, "").trim();
+  if (!clean) return "";
+  return `[${clean.toUpperCase()}]`;
 }
 
 function claimListKeyboard(claims) {
@@ -3162,6 +3319,10 @@ function wait(ms) {
 
 function escapeHtml(value) {
   return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
