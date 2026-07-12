@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.2";
+const botBuild = "2026-07-12.4";
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -116,6 +116,15 @@ async function handleText(ctx) {
   if (isCommand(lower, "mine")) return handleMine(ctx, text, mode);
   if (isExactCommand(lower, "me")) return handleMe(ctx, mode);
   if (isCommand(lower, "save me")) return handleSaveMe(ctx, text, mode);
+
+  const astroShortcut = parseAstrosShortcutCommand(text, await galaxyForContext(ctx));
+  if (astroShortcut) {
+    if (!chatApproved(ctx) || !(await userCanUseSensitiveCommands(ctx))) {
+      return respond(ctx, mode, "You do not have permission to use VisionBot intel commands.");
+    }
+    const report = await buildAstrosReport(astroShortcut.query, astroShortcut.galaxy);
+    return respond(ctx, mode, report, { parse_mode: "HTML" });
+  }
 
   const lookup = parseLookupCommand(text, await galaxyForContext(ctx));
   if (!lookup) return handleUnknownCommand(ctx, text, mode);
@@ -1623,7 +1632,7 @@ async function buildRegionReport(region) {
 
 async function buildAstrosReport(query, fallbackGalaxy) {
   const parsed = parseAstrosQuery(query, fallbackGalaxy);
-  if (!parsed.filter) return buildAstroBreakdown(parsed.galaxy, parsed.region);
+  if (!parsed.filter && !parsed.attrFilters.length) return buildAstroBreakdown(parsed.galaxy, parsed.region);
   return buildAstroSearch(parsed);
 }
 
@@ -1645,19 +1654,34 @@ async function buildAstroBreakdown(galaxy, region = "") {
 
 async function buildAstroSearch(parsed) {
   const filters = {};
-  const titleParts = [parsed.filter, parsed.region || parsed.galaxy].filter(Boolean);
+  const titleParts = [parsed.filter || "astros", parsed.region || parsed.galaxy].filter(Boolean);
   if (parsed.region) filters.region_id = `eq.${parsed.region}`;
-  filters.terrain = `ilike.*${parsed.filter}*`;
+  if (parsed.filter) filters.terrain = `ilike.*${parsed.filter}*`;
   const pageSize = 50;
   const page = Math.max(1, parsed.page || 1);
   const from = (page - 1) * pageSize;
-  const { rows, count } = await fetchRowsWithCount("b24_astros", filters, {
-    mapId: galaxyToMapId(parsed.galaxy),
-    order: "coord.asc",
-    from,
-    to: from + pageSize - 1
-  });
-  if (!rows.length) return `No ${escapeHtml(parsed.filter)} astros found in ${escapeHtml(parsed.region || parsed.galaxy)}.`;
+  let rows = [];
+  let count = 0;
+  if (parsed.attrFilters.length) {
+    const allRows = await fetchAllRows("b24_astros", filters, {
+      mapId: galaxyToMapId(parsed.galaxy),
+      order: "coord.asc"
+    });
+    const matched = allRows.filter((astro) => astroMatchesAttributeFilters(astro, parsed.attrFilters));
+    count = matched.length;
+    rows = matched.slice(from, from + pageSize);
+    titleParts.push(parsed.attrFilters.map(attributeFilterLabel).join(", "));
+  } else {
+    const result = await fetchRowsWithCount("b24_astros", filters, {
+      mapId: galaxyToMapId(parsed.galaxy),
+      order: "coord.asc",
+      from,
+      to: from + pageSize - 1
+    });
+    rows = result.rows;
+    count = result.count;
+  }
+  if (!rows.length) return `No ${escapeHtml(parsed.filter || "matching")} astros found in ${escapeHtml(parsed.region || parsed.galaxy)}.`;
   const lines = [`<b>${escapeHtml(titleParts.join(" in "))}</b>`];
   rows.forEach((astro) => {
     const attrs = Array.isArray(astro.attributes) ? astro.attributes.join("/") : "";
@@ -1677,10 +1701,12 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   const original = String(query || "").trim();
   const pageMatch = original.match(/(?:^|\s)(?:page\s*|p)(\d+)(?=\s|$)/i);
   const page = pageMatch ? Math.max(1, Number(pageMatch[1])) : 1;
-  const raw = original.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim();
+  const withoutPage = original.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim();
+  const attrFilters = parseAttributeFilters(withoutPage);
+  const raw = attrFilters.reduce((value, filter) => value.replace(filter.tokenRegex, " "), withoutPage).trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
   const fallback = normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  const location = parseLocation(raw, fallbackGalaxy);
+  const location = parseAstrosLocation(raw, fallbackGalaxy);
   let remainder = raw;
   let galaxy = explicitGalaxy || fallback;
   let region = "";
@@ -1695,12 +1721,67 @@ function parseAstrosQuery(query, fallbackGalaxy) {
     .replace(/^[:\s]+/, "")
     .trim()
     .toLowerCase();
-  return { galaxy, region, filter, page };
+  return { galaxy, region, filter, page, attrFilters };
 }
 
 function astrosNextQuery(parsed, page) {
   const scope = parsed.region || parsed.galaxy;
-  return [scope, parsed.filter, `page ${page}`].filter(Boolean).join(" ");
+  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), `page ${page}`].filter(Boolean).join(" ");
+}
+
+function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
+  const trimmed = String(text || "").trim();
+  const mode = trimmed[0];
+  if (mode !== "!" && mode !== "$") return null;
+  const body = trimmed.slice(1).trim();
+  const match = body.match(/^(B\d{2}(?::\d{1,2})?)\s+([A-Za-z][\s\S]*)$/i);
+  if (!match) return null;
+  const galaxy = normalizeGalaxy(match[1].split(":")[0]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  return { mode, galaxy, query: body };
+}
+
+function parseAstrosLocation(raw, fallbackGalaxy) {
+  const locationMatch = String(raw || "").trim().match(/^(B\d{2})(?::(\d{1,2}))?(?=\s|:|$)/i);
+  if (!locationMatch) return null;
+  const galaxy = normalizeGalaxy(locationMatch[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  const region = locationMatch[2] ? `${galaxy}:${Number(locationMatch[2])}` : "";
+  return {
+    galaxy,
+    region,
+    remainder: String(raw || "").slice(locationMatch[0].length).trim()
+  };
+}
+
+function parseAttributeFilters(raw) {
+  const attrMap = {
+    a: { index: 0, name: "area" },
+    s: { index: 1, name: "solar" },
+    f: { index: 2, name: "fertility" },
+    m: { index: 3, name: "metal" },
+    c: { index: 4, name: "crystal" },
+    g: { index: 5, name: "gas" }
+  };
+  return [...String(raw || "").matchAll(/(?:^|\s)([asfmcg])\s*(\d{1,3})(?=\s|$)/gi)].map((match) => {
+    const key = match[1].toLowerCase();
+    const value = Number(match[2]);
+    const token = `${key}${value}`;
+    return {
+      ...attrMap[key],
+      key,
+      value,
+      token,
+      tokenRegex: new RegExp(`(?:^|\\s)${key}\\s*${value}(?=\\s|$)`, "i")
+    };
+  }).filter((filter) => Number.isFinite(filter.value));
+}
+
+function astroMatchesAttributeFilters(astro, attrFilters) {
+  const attrs = Array.isArray(astro?.attributes) ? astro.attributes.map(Number) : [];
+  return attrFilters.every((filter) => attrs[filter.index] >= filter.value);
+}
+
+function attributeFilterLabel(filter) {
+  return `${filter.name} ${filter.value}+`;
 }
 
 function scoreLine(astro, base) {
