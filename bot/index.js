@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.30";
+const botBuild = "2026-07-12.31";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -75,10 +75,11 @@ async function sendMapButton(ctx) {
     return ctx.reply("You do not have permission to open the VisionBot map.");
   }
   const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
   return ctx.reply(
     `${galaxy} Vision Tracker`,
     Markup.inlineKeyboard([
-      Markup.button.url("Open Map", mapUrl(galaxy))
+      Markup.button.url("Open Map", mapUrl(galaxy, "", scopeId))
     ])
   );
 }
@@ -3155,19 +3156,15 @@ function parseAttackPlan(text, fallbackGalaxy) {
   if (!start) return null;
 
   const rest = timeMatch[7] || "";
-  const coords = extractAstroCoords(rest, fallbackGalaxy);
-  if (coords.length < 2) return null;
-
-  const note = rest
-    .replace(/B?\d{2}[:\s]?\d{1,2}[:\s]\d{1,2}[:\s]\d{1,2}/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const extracted = extractAstroCoordsWithRemainder(rest, fallbackGalaxy);
+  const coords = extracted.coords;
+  if (!coords.length) return null;
 
   return {
     label: start.label,
     arrivalAt: nextClockTime(start.label),
     coords,
-    note
+    note: extracted.note
   };
 }
 
@@ -3217,22 +3214,46 @@ function parseClaimTime(value) {
 }
 
 function extractAstroCoords(text, fallbackGalaxy) {
+  return extractAstroCoordsWithRemainder(text, fallbackGalaxy).coords;
+}
+
+function extractAstroCoordsWithRemainder(text, fallbackGalaxy) {
   const results = [];
   const seen = new Set();
-  const raw = String(text || "");
-  const regex = /(B\d{2})?\s*:?\s*(\d{1,2})\s*[: ]\s*(\d{1,2})\s*[: ]\s*(\d{1,2})/gi;
-  let match;
-  while ((match = regex.exec(raw))) {
-    const galaxy = normalizeGalaxy(match[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-    const nums = [match[2], match[3], match[4]].map(Number);
-    if (!nums.every(validCoordPart)) continue;
-    const coord = [galaxy, ...nums.map((num) => String(num).padStart(2, "0"))].join(":");
-    if (!seen.has(coord)) {
-      seen.add(coord);
-      results.push(coord);
+  const noteParts = [];
+  let rest = String(text || "").trim();
+
+  while (rest) {
+    const parsed = parseCoordinate(rest, fallbackGalaxy);
+    if (parsed?.kind === "astro") {
+      if (!seen.has(parsed.coord)) {
+        seen.add(parsed.coord);
+        results.push(parsed.coord);
+      }
+      rest = String(parsed.remainder || "").trim();
+      continue;
     }
+
+    const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+    if (!tokenMatch) break;
+    const token = tokenMatch[1];
+    const cleaned = token.replace(/^[\[(]+/, "").replace(/[\]),.;]+$/, "");
+    const tokenParsed = parseCoordinate(cleaned, fallbackGalaxy);
+    if (tokenParsed?.kind === "astro") {
+      if (!seen.has(tokenParsed.coord)) {
+        seen.add(tokenParsed.coord);
+        results.push(tokenParsed.coord);
+      }
+    } else {
+      noteParts.push(token);
+    }
+    rest = String(tokenMatch[2] || "").trim();
   }
-  return results;
+
+  return {
+    coords: results,
+    note: noteParts.join(" ").replace(/\s+/g, " ").trim()
+  };
 }
 
 function parseClockTime(hourValue, minuteValue = "00", ampm = "") {
@@ -3707,6 +3728,18 @@ function parseCoordinate(value, fallbackGalaxy) {
     }
   }
 
+  const compactAstro = working.match(/^:?\s*(\d{2})(\d{2})(\d{2})(?!\d)([\s\S]*)$/);
+  if (compactAstro) {
+    const nums = [compactAstro[1], compactAstro[2], compactAstro[3]].map(Number);
+    if (nums.every(validCoordPart)) return coordinateResult(galaxy, nums, compactAstro[4] || "");
+  }
+
+  const compactSystem = working.match(/^:?\s*(\d{2})(\d{2})(?!\d)([\s\S]*)$/);
+  if (compactSystem) {
+    const nums = [compactSystem[1], compactSystem[2]].map(Number);
+    if (nums.every(validCoordPart)) return coordinateResult(galaxy, nums, compactSystem[3] || "");
+  }
+
   const compact = working.replace(/\D/g, "");
   if (compact.length >= 4) {
     const withoutGalaxy = compact.startsWith(galaxy.slice(1)) ? compact.slice(2) : compact;
@@ -3818,10 +3851,12 @@ function parseCsv(value) {
     .filter(Boolean);
 }
 
-function mapUrl(galaxy, loc = "") {
+function mapUrl(galaxy, loc = "", chatId = "") {
   const separator = webAppUrl.includes("?") ? "&" : "?";
-  const base = `${webAppUrl}${separator}gal=${encodeURIComponent(galaxy)}`;
-  return loc ? `${base}&loc=${encodeURIComponent(loc)}` : base;
+  const params = new URLSearchParams({ gal: galaxy });
+  if (loc) params.set("loc", loc);
+  if (chatId) params.set("chat_id", String(chatId));
+  return `${webAppUrl}${separator}${params.toString()}`;
 }
 
 function wait(ms) {
