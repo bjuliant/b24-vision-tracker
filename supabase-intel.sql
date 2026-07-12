@@ -46,6 +46,17 @@ create table if not exists public.b24_bases (
   primary key (map_id, coord)
 );
 
+create table if not exists public.b24_stances (
+  map_id text not null,
+  scope_type text not null check (scope_type in ('coord', 'tag')),
+  scope_value text not null,
+  stance text not null check (stance in ('friend', 'enemy')),
+  updated_by text,
+  updated_by_user_id text,
+  updated_at timestamptz not null default now(),
+  primary key (map_id, scope_type, scope_value)
+);
+
 create table if not exists public.b24_claims (
   map_id text not null,
   claim_id text not null,
@@ -80,9 +91,9 @@ create table if not exists public.b24_incoming (
   defended_coord text,
   defended_region_id text,
   defended_system_id text,
-  attacker_coord text not null,
-  region_id text not null,
-  system_id text not null,
+  attacker_coord text,
+  region_id text,
+  system_id text,
   eta_minutes integer,
   arrival_at timestamptz not null,
   reported_by text,
@@ -105,6 +116,11 @@ add column if not exists severity text,
 add column if not exists verified boolean not null default false,
 add column if not exists reported_by_user_id text,
 add column if not exists chat_id text;
+
+alter table public.b24_incoming
+alter column attacker_coord drop not null,
+alter column region_id drop not null,
+alter column system_id drop not null;
 
 create table if not exists public.b24_operations (
   map_id text not null,
@@ -219,6 +235,7 @@ create table if not exists public.b24_chat_settings (
 alter table public.b24_systems enable row level security;
 alter table public.b24_astros enable row level security;
 alter table public.b24_bases enable row level security;
+alter table public.b24_stances enable row level security;
 alter table public.b24_claims enable row level security;
 alter table public.b24_incoming enable row level security;
 alter table public.b24_operations enable row level security;
@@ -281,6 +298,25 @@ with check (true);
 drop policy if exists "Anyone can update B24 bases" on public.b24_bases;
 create policy "Anyone can update B24 bases"
 on public.b24_bases
+for update
+using (true)
+with check (true);
+
+drop policy if exists "Anyone can read B24 stances" on public.b24_stances;
+create policy "Anyone can read B24 stances"
+on public.b24_stances
+for select
+using (true);
+
+drop policy if exists "Anyone can write B24 stances" on public.b24_stances;
+create policy "Anyone can write B24 stances"
+on public.b24_stances
+for insert
+with check (true);
+
+drop policy if exists "Anyone can update B24 stances" on public.b24_stances;
+create policy "Anyone can update B24 stances"
+on public.b24_stances
 for update
 using (true)
 with check (true);
