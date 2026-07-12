@@ -2872,6 +2872,14 @@ function astroToRegion(coord) {
   return `${parts[0]}:${Number(parts[1])}`;
 }
 
+function operationRegion(operation) {
+  if (!operation) return "";
+  if (operation.region_id) return operation.region_id;
+  if (operation.defended_region_id) return operation.defended_region_id;
+  const coord = operation.target_coord || operation.defended_coord || operation.attacker_coord || operation.hostile_origin || "";
+  return coord ? astroToRegion(coord) : "";
+}
+
 function astroToSystem(coord) {
   return coord.split(":").slice(0, 3).join(":");
 }
