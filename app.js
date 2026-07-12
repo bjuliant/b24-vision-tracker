@@ -520,7 +520,7 @@
       saveLocalState();
       paintAll();
       selectSector(selected);
-      importResult.textContent = `Imported ${parsed.systems.length} systems, ${parsed.bases.length} bases, ${parsed.astros.length} astros`;
+      importResult.textContent = `Imported ${parsed.systems.length} systems, ${parsed.bases.length} bases, ${parsed.astros.length} astros, ${parsed.incoming.length} incoming`;
       importText.value = "";
 
       if (client) await syncImportedIntel(parsed);
@@ -715,7 +715,7 @@
       return;
     }
 
-    const code = `javascript:(async()=>{const GALAXY=${JSON.stringify(galaxy)},MAP_ID=${JSON.stringify(mapId)},SUPA=${JSON.stringify(config.SUPABASE_URL)},KEY=${JSON.stringify(config.SUPABASE_ANON_KEY)};const now=new Date().toISOString();const hdr={'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'};const post=async(t,r,c)=>{if(!r.length)return 0;const u=SUPA+'/rest/v1/'+t+'?on_conflict='+encodeURIComponent(c);const x=await fetch(u,{method:'POST',headers:hdr,body:JSON.stringify(r)});if(!x.ok)throw new Error(t+': '+await x.text());return r.length};const re3=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}(?!:)','g');const re4=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const reg=v=>{const m=String(v||'').match(new RegExp('^'+GALAXY+':(\\\\d{1,2})'));return m?GALAXY+':'+Number(m[1]):''};const sys=v=>String(v||'').split(':').slice(0,3).join(':');const clean=(v,c)=>String(v||'').replace(/^44-;-\\s*/,'').replace(c,'').replace(/\\s+/g,' ').trim();const html=document.documentElement.innerHTML;const systems=[...new Set(html.match(re3)||[])].map(c=>({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:c.split(':')[2],updated_at:now}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const v of Object.values(mapToolBox_data||{})){const s=String(v||'');const c=(s.match(re4)||[])[0];if(!c)continue;const g=(s.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'';const txt=s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').trim();bases.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),guild:g,label:clean(txt,c),updated_at:now})}}const seen={};const uniqueBases=bases.filter(b=>!seen[b.coord]&&(seen[b.coord]=1));const body=document.body.innerText||'';const astros=[];for(const line of body.split(/\\r?\\n/)){const c=(line.match(re4)||[])[0];if(!c)continue;const rest=line.replace(c,'').trim();const m=rest.match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(!m)continue;astros.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),astro_no:c.split(':')[3],terrain:m[1],astro_type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),has_base:m[4]==='Yes',updated_at:now})}try{const a=await post('b24_systems',systems,'map_id,coord');const b=await post('b24_bases',uniqueBases,'map_id,coord');const c=await post('b24_astros',astros,'map_id,coord');alert('VisionBot import complete for '+GALAXY+': '+a+' systems, '+b+' bases, '+c+' astros')}catch(e){console.error(e);alert('VisionBot import failed: '+e.message)}})()`;
+    const code = `javascript:(async()=>{const GALAXY=${JSON.stringify(galaxy)},MAP_ID=${JSON.stringify(mapId)},SUPA=${JSON.stringify(config.SUPABASE_URL)},KEY=${JSON.stringify(config.SUPABASE_ANON_KEY)},CHAT_ID=${JSON.stringify(telegramChatId)},USER=${JSON.stringify(user?.username || user?.first_name || "VisionBot exporter")},USER_ID=${JSON.stringify(user?.id ? String(user.id) : "")};const now=new Date().toISOString();const hdr={'apikey':KEY,'Authorization':'Bearer '+KEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'};const post=async(t,r,c)=>{if(!r.length)return 0;const u=SUPA+'/rest/v1/'+t+'?on_conflict='+encodeURIComponent(c);const x=await fetch(u,{method:'POST',headers:hdr,body:JSON.stringify(r)});if(!x.ok)throw new Error(t+': '+await x.text());return r.length};const re3=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(GALAXY+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const reg=v=>{const m=String(v||'').match(new RegExp('^'+GALAXY+':(\\\\d{1,2})'));return m?GALAXY+':'+Number(m[1]):''};const sys=v=>String(v||'').split(':').slice(0,3).join(':');const clean=(v,c)=>String(v||'').replace(/^44-;-\\s*/,'').replace(c,'').replace(/\\s+/g,' ').trim();const dur=s=>{const p=String(s||'').split(':').map(Number);return p.length===2?((p[0]*60+p[1])*60000):p.length===3?(((p[0]*60+p[1])*60+p[2])*1000):0};const hash=s=>{let h=2166136261;for(let i=0;i<String(s).length;i++){h^=String(s).charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};const html=document.documentElement.innerHTML;const systems=[...new Set(html.match(re3)||[])].map(c=>({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:c.split(':')[2],updated_at:now}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const v of Object.values(mapToolBox_data||{})){const s=String(v||''),c=(s.match(re4)||[])[0];if(!c)continue;const g=(s.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',txt=s.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').trim();bases.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),guild:g,label:clean(txt,c),updated_at:now})}}const seen={};const uniqueBases=bases.filter(b=>!seen[b.coord]&&(seen[b.coord]=1));const body=document.body.innerText||'',astros=[];for(const line of body.split(/\\r?\\n/)){const c=(line.match(re4)||[])[0];if(!c)continue;const rest=line.replace(c,'').trim(),m=rest.match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(!m)continue;astros.push({map_id:MAP_ID,coord:c,region_id:reg(c),system_id:sys(c),astro_no:c.split(':')[3],terrain:m[1],astro_type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),has_base:m[4]==='Yes',updated_at:now})}const incoming=[];document.querySelectorAll('tr').forEach(tr=>{const cells=[...tr.querySelectorAll('td,th')].map(td=>td.innerText.trim());if(cells.length<4||!/\\d{1,4}:\\d{2}(?::\\d{2})?/.test(cells[2]||''))return;const destCell=tr.querySelectorAll('td,th')[1],sizeCell=tr.querySelectorAll('td,th')[3];const link=(destCell&&destCell.querySelector('a[href*=\"loc=\"]'))||null;const fleet=(sizeCell&&sizeCell.querySelector('a[href*=\"fleet=\"]'))||null;const href=link?link.href:'',coord=((href.match(/loc=([^&]+)/)||[])[1]||cells[1].match(re4)?.[0]||'').toUpperCase();if(!coord||!coord.startsWith(GALAXY+':'))return;const ms=dur(cells[2]);if(!ms)return;const fleetId=(fleet?.href.match(/fleet=(\\d+)/)||[])[1]||'';const player=cells[0],size=(cells[3].match(/[\\d,]+/)||[])[0]||'',arrival=new Date(Date.now()+ms).toISOString();incoming.push({map_id:MAP_ID,incoming_id:fleetId?'scan-fleet-'+fleetId:'scan-'+hash([coord,player,size].join('|')),defended_coord:coord,defended_region_id:reg(coord),defended_system_id:sys(coord),attacker_coord:null,region_id:null,system_id:null,eta_minutes:Math.max(1,Math.ceil(ms/60000)),arrival_at:arrival,reported_by:USER,reported_by_user_id:USER_ID||null,chat_id:CHAT_ID||null,hostile_fleet:tr.innerText.replace(/\\s+/g,' ').trim(),note:[player?'player '+player:'',size?'size '+size:''].filter(Boolean).join(' | '),status:'active',updated_at:now})});try{const a=await post('b24_systems',systems,'map_id,coord'),b=await post('b24_bases',uniqueBases,'map_id,coord'),c=await post('b24_astros',astros,'map_id,coord'),d=await post('b24_incoming',incoming,'map_id,incoming_id');alert('VisionBot import complete for '+GALAXY+': '+a+' systems, '+b+' bases, '+c+' astros, '+d+' incoming')}catch(e){console.error(e);alert('VisionBot import failed: '+e.message)}})()`;
 
     try {
       await navigator.clipboard.writeText(code);
@@ -727,7 +727,7 @@
   }
 
   function parseIntel(text) {
-    const result = { systems: [], bases: [], astros: [] };
+    const result = { systems: [], bases: [], astros: [], incoming: [] };
 
     try {
       const json = JSON.parse(text);
@@ -753,6 +753,7 @@
         });
       });
 
+      result.incoming.push(...parseIncomingMovementText(text));
       return result;
     } catch {
       return parseTextIntel(text);
@@ -760,7 +761,7 @@
   }
 
   function parseTextIntel(text) {
-    const result = { systems: [], bases: [], astros: [] };
+    const result = { systems: [], bases: [], astros: [], incoming: [] };
     const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
     lines.forEach((line) => {
@@ -781,7 +782,59 @@
       });
     });
 
+    result.incoming.push(...parseIncomingMovementText(text));
     return result;
+  }
+
+  function parseIncomingMovementText(text) {
+    const rows = [];
+    const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    lines.forEach((line) => {
+      if (!line.includes(galaxy)) return;
+      const coord = normalizeAstro((line.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`)) || [])[0]);
+      if (!coord) return;
+      const etaMatch = line.match(/\b(\d{1,4}:\d{2}(?::\d{2})?)\b/);
+      if (!etaMatch) return;
+      const duration = parseDurationToMs(etaMatch[1]);
+      if (!duration) return;
+      const sizeMatch = line.match(/\[(\d[\d,]*)\]\([^)]*fleet=/i) || line.match(/(?:\]|\)|\s)(\d[\d,]*)\s*$/);
+      const fleetMatch = line.match(/\bfleet=(\d+)/i);
+      const player = cleanMovementPlayer(line, coord, etaMatch[1], sizeMatch?.[1] || "");
+      rows.push({
+        defendedCoord: coord,
+        attackerCoord: "",
+        etaMinutes: Math.max(1, Math.ceil(duration / 60000)),
+        arrivalAt: new Date(Date.now() + duration).toISOString(),
+        player,
+        fleetId: fleetMatch?.[1] || "",
+        size: sizeMatch?.[1] || "",
+        note: [player ? `player ${player}` : "", sizeMatch?.[1] ? `size ${sizeMatch[1]}` : ""].filter(Boolean).join(" | "),
+        rawLine: line
+      });
+    });
+    return rows;
+  }
+
+  function cleanMovementPlayer(line, coord, eta, size) {
+    let text = String(line || "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/https?:\/\/\S+/g, " ")
+      .replace(coord, " ")
+      .replace(eta, " ")
+      .replace(size, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const parts = text.split(/\t| {2,}/).map((part) => part.trim()).filter(Boolean);
+    text = parts[0] || text;
+    return text.replace(/^Player\b/i, "").trim();
+  }
+
+  function parseDurationToMs(value) {
+    const parts = String(value || "").split(":").map(Number);
+    if (!parts.length || parts.length > 3 || !parts.every(Number.isFinite)) return 0;
+    if (parts.length === 2) return ((parts[0] * 60) + parts[1]) * 60000;
+    if (parts.length === 3) return (((parts[0] * 60) + parts[1]) * 60 + parts[2]) * 1000;
+    return parts[0] * 60000;
   }
 
   function mergeImportedIntel(parsed) {
@@ -846,6 +899,43 @@
       }));
       await client.from("b24_astros").upsert(rows);
     }
+
+    if (parsed.incoming.length) {
+      const rows = parsed.incoming.map((row) => ({
+        map_id: mapId,
+        incoming_id: movementIncomingId(row),
+        defended_coord: row.defendedCoord,
+        defended_region_id: astroToRegion(row.defendedCoord),
+        defended_system_id: astroToSystem(row.defendedCoord),
+        attacker_coord: row.attackerCoord || null,
+        region_id: row.attackerCoord ? astroToRegion(row.attackerCoord) : null,
+        system_id: row.attackerCoord ? astroToSystem(row.attackerCoord) : null,
+        eta_minutes: row.etaMinutes,
+        arrival_at: row.arrivalAt,
+        reported_by: user?.username || user?.first_name || "VisionBot exporter",
+        reported_by_user_id: user?.id ? String(user.id) : null,
+        chat_id: telegramChatId || null,
+        hostile_fleet: row.rawLine || "",
+        note: row.note || "",
+        status: "active",
+        updated_at: stamp
+      }));
+      await client.from("b24_incoming").upsert(rows);
+    }
+  }
+
+  function movementIncomingId(row) {
+    if (row.fleetId) return `scan-fleet-${row.fleetId}`;
+    return `scan-${hashText([row.defendedCoord, row.attackerCoord, row.player, row.size].join("|"))}`;
+  }
+
+  function hashText(value) {
+    let hash = 2166136261;
+    for (let i = 0; i < String(value).length; i += 1) {
+      hash ^= String(value).charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
 
   function paintAll() {
