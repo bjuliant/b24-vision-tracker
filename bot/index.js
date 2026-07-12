@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.13";
+const botBuild = "2026-07-12.14";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1811,9 +1811,11 @@ async function buildAstroSearch(parsed) {
       mapId: galaxyToMapId(parsed.galaxy),
       order: "coord.asc"
     });
-    const excludedBaseCoords = await excludedTagBaseCoords(parsed);
+    const excludedFootprint = await excludedTagBaseFootprint(parsed);
     const matched = allRows.filter((astro) => {
-      return astroMatchesAttributeFilters(astro, parsed.attrFilters) && !excludedBaseCoords.has(astro.coord);
+      return astroMatchesAttributeFilters(astro, parsed.attrFilters)
+        && !excludedFootprint.coords.has(astro.coord)
+        && !excludedFootprint.regions.has(astro.region_id);
     });
     count = matched.length;
     rows = matched.slice(from, from + pageSize);
@@ -1959,17 +1961,18 @@ function parseExcludedTags(raw) {
   }).filter((tag) => tag.value);
 }
 
-async function excludedTagBaseCoords(parsed) {
-  if (!parsed.excludedTags.length) return new Set();
+async function excludedTagBaseFootprint(parsed) {
+  if (!parsed.excludedTags.length) return { coords: new Set(), regions: new Set() };
   const rows = await fetchRows("b24_bases", {}, {
     mapId: galaxyToMapId(parsed.galaxy),
     order: "coord.asc"
   });
   const excluded = new Set(parsed.excludedTags.map((tag) => tag.value));
-  return new Set(rows
-    .filter((row) => excluded.has(normalizeStanceTarget(row.guild)))
-    .map((row) => row.coord)
-    .filter(Boolean));
+  const matches = rows.filter((row) => excluded.has(normalizeStanceTarget(row.guild)));
+  return {
+    coords: new Set(matches.map((row) => row.coord).filter(Boolean)),
+    regions: new Set(matches.map((row) => row.region_id || (row.coord ? astroToRegion(row.coord) : "")).filter(Boolean))
+  };
 }
 
 function astroMatchesAttributeFilters(astro, attrFilters) {
