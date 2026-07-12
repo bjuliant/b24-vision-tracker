@@ -27,12 +27,13 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.27";
+const botBuild = "2026-07-12.28";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
   scout: ["sc", "scout"],
   astros: ["as", "ast", "astr", "astro", "astros"],
+  report: ["rep", "repo", "repor", "report"],
   friend: ["fr", "fri", "frie", "frien", "friend"],
   enemy: ["e", "en", "ene", "enem", "enemy"]
 };
@@ -40,7 +41,7 @@ const canonicalCommands = [
   "help", "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
-  "standdown", "cancelop", "board", "defense", "next", "myops", "incoming",
+  "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report",
   "targets", "claimed", "mine", "me", "friend", "enemy"
 ];
 
@@ -119,6 +120,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
+  if (isCommand(lower, "report")) return handleIncomingReport(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
   if (isAstrosCommand(lower)) return handleAstros(ctx, text, mode);
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
@@ -253,7 +255,7 @@ async function handleHelp(ctx, text, mode) {
 }
 
 async function helpText(ctx, input = "") {
-  const topic = String(input).trim().split(/\s+/)[1]?.toLowerCase() || "";
+  const topic = commandName(String(input).trim().split(/\s+/)[1] || "");
   const topics = {
     setup: [
       "<b>Setup Help</b>",
@@ -350,20 +352,28 @@ async function helpText(ctx, input = "") {
     incoming: [
       "<b>Incoming Help</b>",
       "",
+      "<b>Report new incoming</b>",
+      "<code>$report [attacker] [defended] [eta] [size] [note]</code>",
+      "Quick report format. ETA can be minutes, <code>1:30</code>, or <code>1:12:03</code>.",
       "<code>!sos [your base] [attacker coord] [eta minutes] [note]</code>",
       "<code>$sos [your base] [attacker coord] [eta minutes] [note]</code>",
-      "Report hostile incoming against a defended base and sort it by ETA. Use <code>!</code> privately or <code>$</code> publicly.",
-      "<code>$incoming [coord|system|region|tag]</code>",
-      "Show active hostile incoming for a base, system, sector, or guild tag.",
-      "<code>$incoming [pasted rows]</code>",
+      "Creates a defense operation when the defended base is known.",
+      "<code>$report [pasted rows]</code>",
       "Import copied incoming rows that contain source, destination, ETA, and optional size.",
       "",
+      "<b>View incoming</b>",
+      "<code>$incoming [coord|system|region|tag]</code>",
+      "Show active hostile incoming for a base, system, sector, or guild tag.",
+      "<code>$incoming clear [coord|system|region|tag|all]</code>",
+      "Clear false incoming reports.",
+      "",
       "Examples:",
+      "<code>$report B24:18:40:10 B24:34:64:40 1:12:03 8,950</code>",
       "<code>$sos B24:45:10:30 B24:34:06:10 25 incoming dread</code>",
       "<code>!attacked B24:45:10:30 B24:34:06:10 25 incoming dread</code>",
       "<code>$incoming B24:36</code>",
       "<code>$incoming [APP]</code>",
-      "<code>$incoming</code>"
+      "<code>$incoming clear B24:36</code>"
     ],
     bases: [
       "<b>Base List Help</b>",
@@ -422,6 +432,7 @@ async function helpText(ctx, input = "") {
     "<code>$attack 02:00 [coord] [coord] [note]</code>",
     "<code>$attack [target] [eta-min] [note]</code>",
     "<code>$sos [defended] [hostile] [eta-min] [note]</code>",
+    "<code>$report [attacker] [defended] [eta] [size]</code>",
     "<code>$scout [coord] [due-min] [note]</code>",
     "",
     "<b>PARTICIPATE</b>",
@@ -444,7 +455,7 @@ async function helpText(ctx, input = "") {
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, bases, guild, alerts, aliases"
+    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, guild, alerts, aliases"
   ].join("\n");
 }
 
@@ -457,7 +468,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -553,6 +564,7 @@ function isProtectedOperationalCommand(lowerText) {
     "next",
     "myops",
     "incoming",
+    "report",
     "targets",
     "claimed",
     "intel",
@@ -593,6 +605,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "next",
     "myops",
     "incoming",
+    "report",
     "targets",
     "claimed",
     "bases",
@@ -617,7 +630,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1174,6 +1187,7 @@ async function handleIncoming(ctx, text, mode) {
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const query = commandBody(text);
+  if (/^(help|usage|\?)$/i.test(query)) return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
   if (/^clear\b/i.test(query)) return clearIncomingReports(ctx, mode, galaxy, scopeId, query.replace(/^clear\b/i, "").trim());
   const imported = parseIncomingExportRows(query, galaxy);
   if (imported.length) {
@@ -1195,6 +1209,36 @@ async function handleIncoming(ctx, text, mode) {
     lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
   }
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function handleIncomingReport(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const query = commandBody(text);
+  if (!query || /^(help|usage|\?)$/i.test(query)) {
+    return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
+  }
+
+  const imported = parseIncomingExportRows(query, galaxy);
+  if (imported.length) {
+    const saved = await insertIncomingRows(ctx, imported, scopeId);
+    return respond(ctx, mode, `Reported ${saved}/${imported.length} incoming. Use <code>$incoming</code> to view.`, { parse_mode: "HTML" });
+  }
+
+  const generic = parseGenericIncomingReport(query, galaxy);
+  if (generic) {
+    const saved = await insertIncomingRows(ctx, [generic], scopeId);
+    return respond(ctx, mode, saved
+      ? `Reported generic incoming: ETA ${formatEta(generic.arrivalAt)}${generic.note ? ` - ${escapeHtml(generic.note)}` : ""}`
+      : "Incoming report failed. I could not reach Supabase.", { parse_mode: "HTML" });
+  }
+
+  return respond(ctx, mode, [
+    "Use: <code>$report [attacker] [defended] [eta] [size] [note]</code>",
+    "Example: <code>$report B24:18:40:10 B24:34:64:40 1:12:03 8,950</code>",
+    "Or paste incoming rows after <code>$report</code>."
+  ].join("\n"), { parse_mode: "HTML" });
 }
 
 async function clearIncomingReports(ctx, mode, galaxy, scopeId, query) {
@@ -3410,7 +3454,7 @@ function parseTimedCoordinate(value, fallbackGalaxy) {
 }
 
 function parseIncomingReport(value, fallbackGalaxy) {
-  const exported = parseIncomingExportRows(value, fallbackGalaxy);
+  const exported = parseIncomingExportStream(String(value || "").replace(/\s+/g, " ").trim(), fallbackGalaxy);
   if (exported.length === 1) {
     const row = exported[0];
     return {
@@ -3468,6 +3512,11 @@ function parseIncomingExportRows(value, fallbackGalaxy) {
     .filter(Boolean);
   const rows = [];
   for (const line of lines) {
+    const plain = parsePlainIncomingLine(line, fallbackGalaxy);
+    if (plain) {
+      rows.push(plain);
+      continue;
+    }
     const coords = [...line.matchAll(/\bB\d{2}:\d{2}:\d{2}:\d{2}\b/gi)].map((match) => normalizeCoordText(match[0], fallbackGalaxy));
     if (coords.length < 2) continue;
     const eta = parseEtaDuration(line);
@@ -3490,6 +3539,32 @@ function parseIncomingExportRows(value, fallbackGalaxy) {
     });
   }
   return rows;
+}
+
+function parsePlainIncomingLine(line, fallbackGalaxy) {
+  const text = String(line || "").trim();
+  const match = text.match(/\b(B\d{2}:\d{2}:\d{2}:\d{2})\b\s+(.{0,160}?)\b(B\d{2}:\d{2}:\d{2}:\d{2})\b\s+(?:ETA\s+)?(\d{1,4}(?::\d{2}){0,2})(?:\s+(?:Size\s+)?([\d,]+))?(?:\s+(.+))?$/i);
+  if (!match) return null;
+  const attackerCoord = normalizeCoordText(match[1], fallbackGalaxy);
+  const defendedCoord = normalizeCoordText(match[3], fallbackGalaxy);
+  const eta = parseIncomingDuration(match[4]);
+  if (!eta) return null;
+  const tags = [...text.matchAll(/\[[^\]]{1,24}\]/g)].map((tagMatch) => tagMatch[0]);
+  const size = match[5] ? `size ${match[5]}` : "";
+  const extra = (match[6] || "").trim();
+  return {
+    attackerCoord,
+    defendedCoord,
+    etaMinutes: Math.max(1, Math.ceil(eta.ms / 60000)),
+    arrivalAt: new Date(Date.now() + eta.ms),
+    note: [
+      tags[0] ? `from ${tags[0]}` : "",
+      tags[1] ? `to ${tags[1]}` : "",
+      size,
+      extra
+    ].filter(Boolean).join(" | "),
+    rawLine: text
+  };
 }
 
 function parseIncomingExportStream(value, fallbackGalaxy) {
