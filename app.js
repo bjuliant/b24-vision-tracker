@@ -75,6 +75,11 @@
   init();
 
   async function init() {
+    if (shouldBlockDirectAccess()) {
+      renderAccessRequired();
+      return;
+    }
+
     tg?.ready();
     tg?.expand();
 
@@ -117,6 +122,25 @@
     claimTarget.placeholder = `${galaxy}:44:76:10`;
     highlightedSector = locationToRegion(initialLocation, galaxy);
     if (highlightedSector) selected = highlightedSector;
+  }
+
+  function shouldBlockDirectAccess() {
+    if (location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1") return false;
+    if (!/github\.io$/i.test(location.hostname)) return false;
+    return !tg?.initData;
+  }
+
+  function renderAccessRequired() {
+    document.body.classList.add("access-locked");
+    const shell = document.querySelector(".app-shell");
+    if (!shell) return;
+    shell.innerHTML = [
+      `<section class="access-lock">`,
+      `<h1>VisionBot Access Required</h1>`,
+      `<p>Open this map from Lysander in Telegram.</p>`,
+      `<p>Use <code>/map</code> in your approved guild group or DM.</p>`,
+      `</section>`
+    ].join("");
   }
 
   function renderGrid() {
@@ -254,6 +278,7 @@
           "postgres_changes",
           { event: "*", schema: "public", table: "b24_claims", filter: `map_id=eq.${mapId}` },
           (payload) => {
+            if (!rowBelongsToCurrentChat(payload.new)) return;
             mergeClaimRow(payload.new);
             saveLocalState();
             paintSector(payload.new.region_id);
@@ -264,6 +289,7 @@
           "postgres_changes",
           { event: "*", schema: "public", table: "b24_operations", filter: `map_id=eq.${mapId}` },
           (payload) => {
+            if (!rowBelongsToCurrentChat(payload.new)) return;
             mergeOperationRow(payload.new);
             saveLocalState();
             const region = operationRegion(payload.new);
@@ -310,14 +336,24 @@
   }
 
   async function loadRemoteClaims() {
-    const { data, error } = await client.from("b24_claims").select("*").eq("map_id", mapId);
+    if (!telegramChatId) {
+      intel.claims = {};
+      saveLocalState();
+      return;
+    }
+    const { data, error } = await client.from("b24_claims").select("*").eq("map_id", mapId).eq("chat_id", telegramChatId);
     if (error) return;
     data.forEach(mergeClaimRow);
     saveLocalState();
   }
 
   async function loadRemoteOperations() {
-    const { data, error } = await client.from("b24_operations").select("*").eq("map_id", mapId);
+    if (!telegramChatId) {
+      intel.operations = {};
+      saveLocalState();
+      return;
+    }
+    const { data, error } = await client.from("b24_operations").select("*").eq("map_id", mapId).eq("chat_id", telegramChatId);
     if (error) return;
     data.forEach(mergeOperationRow);
     saveLocalState();
@@ -512,6 +548,11 @@
     if (!attackWindowStart.value) {
       claimList.textContent = "Step 1: pick the 4 hour landing window above before claiming targets.";
       finalizeStatus.textContent = "Step 1 required: pick a landing window above.";
+      return;
+    }
+    if (client && !telegramChatId) {
+      claimList.textContent = "Open the Mini App from the approved Telegram group before creating live claims.";
+      finalizeStatus.textContent = "Live claim blocked: no Telegram group scope found.";
       return;
     }
 
@@ -1169,6 +1210,11 @@
     if (astro) return astroToRegion(astro);
     const system = normalizeSystem(value);
     return system ? systemToRegion(system) : "";
+  }
+
+  function rowBelongsToCurrentChat(row) {
+    if (!telegramChatId) return false;
+    return String(row?.chat_id || "") === String(telegramChatId);
   }
 
   function astroToSystem(astro) {

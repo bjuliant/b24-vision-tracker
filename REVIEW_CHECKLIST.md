@@ -74,15 +74,28 @@ Ordered so each step supports the next one.
 - [x] Warn before duplicate active target/defense operations.
 - [x] Include Mini App claims on `$board` / `@board`.
 - [x] Guard operation callback buttons with permission and operation-scope checks.
-- [ ] Make `$` commands sent in DM post to the active guild group, or explicitly reject them.
+- [x] Make `$` commands sent in DM post to the active guild group, or explicitly reject them.
 - [ ] Make operation creation and closure transactional.
 - [ ] Add atomic reminder claiming to avoid duplicate reminders if multiple bot instances run.
 
 ## Hostile-Use Review
 
-- [x] Public coordinate lookup remains available to anyone.
+- [x] Restrict coordinate/intel lookup to approved guild/access users.
 - [x] Sensitive commands such as `@board`, `$board`, `$attack`, `$sos`, `$incoming`, and `$targets` require permission.
 - [x] Permission can be granted by membership in a configured Telegram access group/channel.
+- [x] Remove saved user bases and private notes from public coordinate/system intel.
+- [x] Require sensitive-command authorization for `Bases` inline callback buttons.
+- [x] Reject or quarantine Mini App claims when `chat_id` is missing.
+- [ ] Scope Mini App claim and operation reads/subscriptions by verified guild/chat.
+- [x] Add hardening drops for `Mini App can write/update B24 claims` policies.
+- [ ] Remove anonymous map-intel writes after backend import exists.
+- [ ] Store Mini App wave times as absolute timestamps rather than clock-only labels.
+- [x] Sync `!sent` operation-member state to linked claim `confirmed_sent`.
+- [x] Restrict `/map`, `$map`, and `@map` to approved/access users.
+- [x] Show a Mini App access-required screen when GitHub Pages is opened directly outside Telegram.
+- [x] Add `!astros` / `$astros` galaxy breakdown and terrain search.
+- [x] Return helpful responses for unknown command-like messages instead of silently ignoring them.
+- [x] Add partial coordinate summaries for galaxy and region lookups.
 - [ ] Validate Mini App Telegram `initData` on the backend before trusting app actions.
 - [ ] Give the Mini App a backend operation creation endpoint so app claims create full operations.
 - [ ] Restrict Mini App reads by verified active guild/chat scope.
