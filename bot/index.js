@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.4";
+const botBuild = "2026-07-12.6";
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -1741,14 +1741,26 @@ function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
 }
 
 function parseAstrosLocation(raw, fallbackGalaxy) {
-  const locationMatch = String(raw || "").trim().match(/^(B\d{2})(?::(\d{1,2}))?(?=\s|:|$)/i);
-  if (!locationMatch) return null;
-  const galaxy = normalizeGalaxy(locationMatch[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  const region = locationMatch[2] ? `${galaxy}:${Number(locationMatch[2])}` : "";
+  const text = String(raw || "").trim();
+  let locationMatch = text.match(/^(B\d{2})(?::|\s+)?(\d{1,2})?(?=\s|:|$)/i);
+  let consumed = "";
+  let galaxy = "";
+  let region = "";
+  if (locationMatch) {
+    consumed = locationMatch[0];
+    galaxy = normalizeGalaxy(locationMatch[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+    region = locationMatch[2] ? `${galaxy}:${Number(locationMatch[2])}` : "";
+  } else {
+    locationMatch = text.match(/^(\d{2})(?:\s+|:)(\d{1,2})(?=\s|:|$)/);
+    if (!locationMatch) return null;
+    consumed = locationMatch[0];
+    galaxy = normalizeGalaxy(`B${locationMatch[1]}`) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+    region = `${galaxy}:${Number(locationMatch[2])}`;
+  }
   return {
     galaxy,
     region,
-    remainder: String(raw || "").slice(locationMatch[0].length).trim()
+    remainder: text.slice(consumed.length).trim()
   };
 }
 
@@ -1758,8 +1770,8 @@ function parseAttributeFilters(raw) {
     s: { index: 1, name: "solar" },
     f: { index: 2, name: "fertility" },
     m: { index: 3, name: "metal" },
-    c: { index: 4, name: "crystal" },
-    g: { index: 5, name: "gas" }
+    g: { index: 4, name: "gas" },
+    c: { index: 5, name: "crystal" }
   };
   return [...String(raw || "").matchAll(/(?:^|\s)([asfmcg])\s*(\d{1,3})(?=\s|$)/gi)].map((match) => {
     const key = match[1].toLowerCase();
