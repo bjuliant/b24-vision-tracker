@@ -3853,7 +3853,7 @@ function parseCsv(value) {
 
 function mapUrl(galaxy, loc = "", chatId = "") {
   const separator = webAppUrl.includes("?") ? "&" : "?";
-  const params = new URLSearchParams({ gal: galaxy });
+  const params = new URLSearchParams({ gal: galaxy, v: botBuild });
   if (loc) params.set("loc", loc);
   if (chatId) params.set("chat_id", String(chatId));
   return `${webAppUrl}${separator}${params.toString()}`;
