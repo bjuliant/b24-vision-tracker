@@ -27,7 +27,20 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.7";
+const botBuild = "2026-07-12.10";
+const preferredCommandAliases = {
+  help: ["h", "he", "hel", "help"],
+  status: ["st", "status"],
+  scout: ["sc", "scout"],
+  astros: ["as", "ast", "astr", "astro", "astros"]
+};
+const canonicalCommands = [
+  "help", "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
+  "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
+  "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
+  "standdown", "cancelop", "board", "defense", "next", "myops", "incoming",
+  "targets", "claimed", "mine", "me"
+];
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -68,13 +81,20 @@ async function sendMapButton(ctx) {
 }
 
 async function handleText(ctx) {
-  const text = normalizeIncomingText(ctx.message?.text || ctx.channelPost?.text || "");
-  const lower = text.trim().toLowerCase();
+  let text = normalizeIncomingText(ctx.message?.text || ctx.channelPost?.text || "");
   const mode = deliveryMode(text);
 
   if (mode === "$" && isPrivateChat(ctx)) {
     return ctx.reply("Use ! commands in DM. $ commands must be sent in an approved guild group so the result can post there.");
   }
+
+  const ambiguous = ambiguousCommandMatches(text);
+  if (ambiguous.length > 1) {
+    return respond(ctx, mode, `That command is ambiguous: ${ambiguous.map((command) => `<code>${escapeHtml(mode)}${escapeHtml(command)}</code>`).join(", ")}. Type a few more letters.`, { parse_mode: "HTML" });
+  }
+
+  text = canonicalizeCommandText(text);
+  const lower = text.trim().toLowerCase();
 
   if (isProtectedOperationalCommand(lower) && !chatApproved(ctx)) {
     return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
@@ -98,7 +118,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
-  if (isCommand(lower, "astros")) return handleAstros(ctx, text, mode);
+  if (isAstrosCommand(lower)) return handleAstros(ctx, text, mode);
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
   if (isCommand(lower, "score")) return handleScore(ctx, text, mode);
   if (isCommand(lower, "bases")) return handleBases(ctx, text, mode);
@@ -424,7 +444,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|version|help|map|g|setgalaxy|guild|claim|take|attack|scout|attacked|sos|intel|astros|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|intel|as|ast|astr|astro|astros|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -437,12 +457,65 @@ function versionReport() {
 
 function isCommand(lowerText, command) {
   const lower = String(lowerText || "").trim();
-  return lower === `!${command}` || lower === `$${command}` || lower.startsWith(`!${command} `) || lower.startsWith(`$${command} `);
+  const parsed = commandToken(lower);
+  if (!parsed.name) return false;
+  const aliases = commandAliases(command);
+  return aliases.some((alias) => alias.startsWith(parsed.name));
 }
 
 function isExactCommand(lowerText, command) {
-  const lower = String(lowerText || "").trim();
-  return lower === `!${command}` || lower === `$${command}`;
+  const parsed = commandToken(lowerText);
+  return parsed.name === command;
+}
+
+function isAstrosCommand(lowerText) {
+  return isCommand(lowerText, "astros");
+}
+
+function commandToken(text) {
+  const match = String(text || "").trim().match(/^([!$\/])([a-z0-9_-]+)(?=\s|$)/i);
+  return {
+    prefix: match?.[1] || "",
+    name: (match?.[2] || "").toLowerCase()
+  };
+}
+
+function commandAliases(command) {
+  return preferredCommandAliases[command] || [command];
+}
+
+function matchingCommands(name) {
+  const exactMatches = new Set();
+  for (const command of canonicalCommands) {
+    if (commandAliases(command).includes(name)) exactMatches.add(command);
+  }
+  if (exactMatches.size) return [...exactMatches];
+
+  const matches = new Set();
+  for (const command of canonicalCommands) {
+    if (commandAliases(command).some((alias) => alias.startsWith(name))) matches.add(command);
+  }
+  return [...matches];
+}
+
+function ambiguousCommandMatches(text) {
+  const parsed = commandToken(text);
+  if (!parsed.name || parsed.name.length < 1) return [];
+  return matchingCommands(parsed.name);
+}
+
+function commandBody(text) {
+  return String(text || "").trim().replace(/^[!$\/][a-z0-9_-]+(?:\s+|$)/i, "").trim();
+}
+
+function canonicalizeCommandText(text) {
+  const trimmed = String(text || "").trim();
+  const parsed = commandToken(trimmed);
+  if (!parsed.prefix || !parsed.name) return trimmed;
+  const matches = matchingCommands(parsed.name);
+  if (matches.length !== 1) return trimmed;
+  const body = commandBody(trimmed);
+  return `${parsed.prefix}${matches[0]}${body ? ` ${body}` : ""}`;
 }
 
 function isProtectedOperationalCommand(lowerText) {
@@ -470,6 +543,11 @@ function isProtectedOperationalCommand(lowerText) {
     "targets",
     "claimed",
     "intel",
+    "a",
+    "as",
+    "ast",
+    "astr",
+    "astro",
     "astros",
     "mine",
     "me",
@@ -504,6 +582,11 @@ function isSensitiveOperationalCommand(lowerText) {
     "claimed",
     "bases",
     "intel",
+    "a",
+    "as",
+    "ast",
+    "astr",
+    "astro",
     "astros",
     "mine",
     "me",
@@ -517,7 +600,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "scout", "intel", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -930,7 +1013,7 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
 }
 
 async function handleScout(ctx, text, mode) {
-  const body = text.replace(/^[!$]scout\b/i, "").trim();
+  const body = commandBody(text);
   const parsed = parseScoutRequest(body, await galaxyForContext(ctx));
   if (!parsed) return respond(ctx, mode, "Use: $scout B24:44:76 120 optional note");
 
@@ -1075,7 +1158,7 @@ async function handleIntel(ctx, text, mode) {
 
 async function handleAstros(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
-  const query = text.replace(/^[!$]astros\b/i, "").trim();
+  const query = commandBody(text);
   const report = await buildAstrosReport(query, galaxy);
   return respond(ctx, mode, report, { parse_mode: "HTML" });
 }
@@ -1734,7 +1817,7 @@ function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
   const mode = trimmed[0];
   if (mode !== "!" && mode !== "$") return null;
   const body = trimmed.slice(1).trim();
-  const match = body.match(/^(B\d{2}(?::\d{1,2})?)\s+([A-Za-z][\s\S]*)$/i);
+  const match = body.match(/^(B\d{2}(?::?\d{1,2})?)(?:\s+)(?=[A-Za-z0-9])([\s\S]+)$/i);
   if (!match) return null;
   const galaxy = normalizeGalaxy(match[1].split(":")[0]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
   return { mode, galaxy, query: body };
@@ -1751,7 +1834,15 @@ function parseAstrosLocation(raw, fallbackGalaxy) {
     galaxy = normalizeGalaxy(locationMatch[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
     region = locationMatch[2] ? `${galaxy}:${Number(locationMatch[2])}` : "";
   } else {
-    locationMatch = text.match(/^(\d{2})(?:\s+|:)(\d{1,2})(?=\s|:|$)/);
+    locationMatch = text.match(/^(B\d{2})(\d{2})(?=\s|:|$)/i);
+    if (locationMatch) {
+      consumed = locationMatch[0];
+      galaxy = normalizeGalaxy(locationMatch[1]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+      region = `${galaxy}:${Number(locationMatch[2])}`;
+    }
+  }
+  if (!locationMatch || !region && !galaxy) {
+    locationMatch = text.match(/^(\d{2})(?:\s+|:)?(\d{2})(?=\s|:|$)/);
     if (!locationMatch) return null;
     consumed = locationMatch[0];
     galaxy = normalizeGalaxy(`B${locationMatch[1]}`) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
