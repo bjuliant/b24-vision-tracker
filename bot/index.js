@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.26";
+const botBuild = "2026-07-12.27";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1174,6 +1174,7 @@ async function handleIncoming(ctx, text, mode) {
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
   const query = commandBody(text);
+  if (/^clear\b/i.test(query)) return clearIncomingReports(ctx, mode, galaxy, scopeId, query.replace(/^clear\b/i, "").trim());
   const imported = parseIncomingExportRows(query, galaxy);
   if (imported.length) {
     const saved = await insertIncomingRows(ctx, imported, scopeId);
@@ -1194,6 +1195,36 @@ async function handleIncoming(ctx, text, mode) {
     lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
   }
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function clearIncomingReports(ctx, mode, galaxy, scopeId, query) {
+  const incoming = await fetchActiveIncoming(galaxy, scopeId);
+  const filter = /^all$/i.test(query) ? "" : query;
+  const matched = filterIncomingReports(incoming, filter, galaxy);
+  if (!matched.length) return respond(ctx, mode, `No active incoming reports matched ${escapeHtml(query || "all")}.`, { parse_mode: "HTML" });
+  const stamp = new Date().toISOString();
+  let cleared = 0;
+  for (const row of matched) {
+    const ok = await updateRows("b24_incoming", {
+      status: "false_report",
+      updated_at: stamp
+    }, {
+      map_id: `eq.${row.map_id}`,
+      incoming_id: `eq.${row.incoming_id}`
+    });
+    if (ok) cleared += 1;
+    if (row.operation_id) {
+      await updateRows("b24_operations", {
+        status: "stood_down",
+        note: row.note ? `${row.note} | Incoming cleared by ${telegramName(ctx)}` : `Incoming cleared by ${telegramName(ctx)}`,
+        updated_at: stamp
+      }, {
+        map_id: `eq.${row.map_id}`,
+        operation_id: `eq.${row.operation_id}`
+      });
+    }
+  }
+  return respond(ctx, mode, `Cleared ${cleared}/${matched.length} incoming report${matched.length === 1 ? "" : "s"}.`);
 }
 
 async function insertIncomingRows(ctx, rows, scopeId) {
@@ -1413,23 +1444,26 @@ async function handleBoard(ctx, text, mode) {
   const lines = [`<b>${galaxy} Board</b>`];
   if (kind !== "defense" && kind !== "scout") {
     lines.push("", `<b>Attacks</b> (${attackCount})`);
-    lines.push(...(attacks.length ? attacks.map((operation) => {
-      return formatOperationLine(
-        operation,
-        membersByOperation.get(operation.operation_id) || [],
-        claimsByOperation.get(operation.operation_id) || []
-      );
-    }) : []));
-    lines.push(...(appClaims.length ? appClaims.map(formatBoardClaimLine) : []));
+    const attackLines = [
+      ...attacks.map((operation) => {
+        return formatBoardOperationCompact(
+          operation,
+          membersByOperation.get(operation.operation_id) || [],
+          claimsByOperation.get(operation.operation_id) || []
+        );
+      }),
+      ...appClaims.map(formatBoardClaimCompact)
+    ];
+    lines.push(...(attackLines.length ? [`<pre>${attackLines.join("\n")}</pre>`] : []));
     if (!attackCount) lines.push("No active attack operations or app claims.");
   }
   if (kind !== "attack" && kind !== "scout") {
     lines.push("", `<b>Defense</b> (${defenses.length})`);
-    lines.push(...(defenses.length ? defenses.map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : ["No active defense operations."]));
+    lines.push(...(defenses.length ? [`<pre>${defenses.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`] : ["No active defense operations."]));
   }
   if (kind !== "attack" && kind !== "defense") {
     lines.push("", `<b>Scouts</b> (${scouts.length})`);
-    lines.push(...(scouts.length ? scouts.map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : ["No active scout operations."]));
+    lines.push(...(scouts.length ? [`<pre>${scouts.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`] : ["No active scout operations."]));
   }
 
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
@@ -2896,6 +2930,43 @@ function formatBoardClaimLine(claim) {
   const note = claim.note ? ` - ${claim.note}` : "";
   const sent = claim.confirmed_sent ? " - sent confirmed" : "";
   return `App claim ${escapeHtml(target)} - ${formatEta(new Date(claim.arrival_at))}${escapeHtml(claimer)}${escapeHtml(note)}${sent}`;
+}
+
+function formatBoardOperationCompact(operation, members = [], claims = []) {
+  const eta = formatCompactEta(new Date(operation.arrival_at));
+  const activeMembers = members.filter((member) => member.state !== "withdrawn");
+  const stateCounts = countBy(activeMembers, "state");
+  const joined = String(activeMembers.length).padStart(2, " ");
+  const ready = String(stateCounts.ready || 0).padStart(2, " ");
+  const sent = String(stateCounts.sent || 0).padStart(2, " ");
+  const id = String(operation.short_id || "?").padEnd(7, " ");
+
+  if (operation.type === "defense") {
+    const defended = operation.defended_coord || operation.target_coord || "?";
+    const hostile = operation.hostile_origin || "?";
+    return escapeHtml(`${eta} ${id} ${defended} <= ${hostile} j${joined} r${ready} s${sent}`);
+  }
+
+  const target = operation.target_coord || "?";
+  const base = `${eta} ${id} ${target}`;
+  const claimSummary = claims.length
+    ? ` c${String(claims.filter((claim) => claim.claimed_by_user_id).length).padStart(2, " ")}/${String(claims.length).padStart(2, " ")}`
+    : "";
+  return escapeHtml(`${base} j${joined} r${ready} s${sent}${claimSummary}`);
+}
+
+function formatBoardClaimCompact(claim) {
+  const eta = formatCompactEta(new Date(claim.arrival_at));
+  const target = String(claim.target_coord || "?").padEnd(12, " ");
+  const who = compactLabel(claim.claimed_by || "open", 12).padEnd(12, " ");
+  const state = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "planned" : "open";
+  return escapeHtml(`${eta} ${target} ${who} ${state}`);
+}
+
+function compactLabel(value, max = 12) {
+  const text = String(value || "").trim().replace(/\s+/g, " ");
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1))}.`;
 }
 
 async function operationIntelSummary(operation) {
