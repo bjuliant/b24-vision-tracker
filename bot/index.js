@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.16";
+const botBuild = "2026-07-12.17";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1806,19 +1806,21 @@ async function buildAstroSearch(parsed) {
   const from = (page - 1) * pageSize;
   let rows = [];
   let count = 0;
-  if (parsed.attrFilters.length || parsed.excludedTags.length || parsed.includedTags.length || parsed.emptyOnly) {
+  if (parsed.attrFilters.length || parsed.excludedTags.length || parsed.includedTags.length || parsed.nearTags.length || parsed.emptyOnly) {
     const allRows = await fetchAllRows("b24_astros", filters, {
       mapId: galaxyToMapId(parsed.galaxy),
       order: "coord.asc"
     });
     const excludedFootprint = await tagBaseFootprint(parsed, "excludedTags");
     const includedFootprint = await tagBaseFootprint(parsed, "includedTags");
+    const nearFootprints = await tagAdjacentFootprints(parsed);
     const matched = allRows.filter((astro) => {
       return astroMatchesAttributeFilters(astro, parsed.attrFilters)
         && (!parsed.emptyOnly || !astro.has_base)
         && !excludedFootprint.coords.has(astro.coord)
         && !excludedFootprint.regions.has(astro.region_id)
-        && (!parsed.includedTags.length || includedFootprint.coords.has(astro.coord) || includedFootprint.regions.has(astro.region_id));
+        && (!parsed.includedTags.length || includedFootprint.coords.has(astro.coord) || includedFootprint.regions.has(astro.region_id))
+        && nearFootprints.every((footprint) => footprint.adjacentRegions.has(astro.region_id));
     });
     count = matched.length;
     rows = matched.slice(from, from + pageSize);
@@ -1826,6 +1828,7 @@ async function buildAstroSearch(parsed) {
       ...parsed.attrFilters.map(attributeFilterLabel),
       parsed.emptyOnly ? "empty only" : "",
       ...parsed.includedTags.map((tag) => `with ${tag.value}`),
+      ...parsed.nearTags.map((tag) => `near ${tag.value}`),
       ...parsed.excludedTags.map((tag) => `without ${tag.value}`)
     ].filter(Boolean).join(", "));
   } else {
@@ -1869,6 +1872,10 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   includedTags.forEach((tag) => {
     withoutPage = withoutPage.replace(tag.regex, " ");
   });
+  const nearTags = parseNearTags(withoutPage);
+  nearTags.forEach((tag) => {
+    withoutPage = withoutPage.replace(tag.regex, " ");
+  });
   const attrFilters = parseAttributeFilters(withoutPage);
   const raw = attrFilters.reduce((value, filter) => value.replace(filter.tokenRegex, " "), withoutPage).trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
@@ -1888,12 +1895,12 @@ function parseAstrosQuery(query, fallbackGalaxy) {
     .replace(/^[:\s]+/, "")
     .trim()
     .toLowerCase();
-  return { galaxy, region, filter, page, attrFilters, excludedTags, includedTags, emptyOnly };
+  return { galaxy, region, filter, page, attrFilters, excludedTags, includedTags, nearTags, emptyOnly };
 }
 
 function astrosNextQuery(parsed, page) {
   const scope = parsed.region || parsed.galaxy;
-  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), parsed.emptyOnly ? "empty" : "", ...parsed.includedTags.map((tag) => `yes ${tag.value}`), ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
+  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), parsed.emptyOnly ? "empty" : "", ...parsed.includedTags.map((tag) => `yes ${tag.value}`), ...parsed.nearTags.map((tag) => `near ${tag.value}`), ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
 }
 
 function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
@@ -1970,6 +1977,10 @@ function parseIncludedTags(raw) {
   return parseTagFilters(raw, "(?:yes|with|only)");
 }
 
+function parseNearTags(raw) {
+  return parseTagFilters(raw, "(?:near|adjacent|nextto|next-to)");
+}
+
 function parseTagFilters(raw, keywordPattern) {
   const regex = new RegExp(`(?:^|\\s)${keywordPattern}\\s+(\\[[^\\]]{1,24}\\]|\\S{1,24})(?=\\s|$)`, "gi");
   return [...String(raw || "").matchAll(regex)].map((match) => {
@@ -1994,6 +2005,51 @@ async function tagBaseFootprint(parsed, tagKey) {
     coords: new Set(matches.map((row) => row.coord).filter(Boolean)),
     regions: new Set(matches.map((row) => row.region_id || (row.coord ? astroToRegion(row.coord) : "")).filter(Boolean))
   };
+}
+
+async function tagAdjacentFootprints(parsed) {
+  if (!parsed.nearTags.length) return [];
+  const baseFootprints = await Promise.all(parsed.nearTags.map(async (tag) => {
+    const footprint = await tagBaseFootprint({ ...parsed, selectedNearTag: [tag] }, "selectedNearTag");
+    return {
+      tag: tag.value,
+      coords: footprint.coords,
+      regions: footprint.regions,
+      adjacentRegions: adjacentRegionSet(footprint.regions)
+    };
+  }));
+  return baseFootprints;
+}
+
+function adjacentRegionSet(regions) {
+  const adjacent = new Set();
+  [...regions].forEach((region) => {
+    adjacentRegions(region).forEach((nearRegion) => adjacent.add(nearRegion));
+  });
+  return adjacent;
+}
+
+function adjacentRegions(regionId) {
+  const match = String(regionId || "").match(/^(B\d{2}):(\d{1,2})$/i);
+  if (!match) return [];
+  const galaxy = normalizeGalaxy(match[1]);
+  const regionNumber = Number(match[2]);
+  if (!galaxy || !Number.isInteger(regionNumber) || regionNumber < 0 || regionNumber > 99) return [];
+  const row = Math.floor(regionNumber / 10);
+  const col = regionNumber % 10;
+  const regions = [];
+  for (let dr = -1; dr <= 1; dr += 1) {
+    for (let dc = -1; dc <= 1; dc += 1) {
+      if (dr === 0 && dc === 0) continue;
+      const nextRow = row + dr;
+      const nextCol = col + dc;
+      if (nextRow < 0 || nextRow > 9 || nextCol < 0 || nextCol > 9) continue;
+      const nextRegion = nextRow * 10 + nextCol;
+      if (nextRegion === 0) continue;
+      regions.push(`${galaxy}:${nextRegion}`);
+    }
+  }
+  return regions;
 }
 
 function astroMatchesAttributeFilters(astro, attrFilters) {
