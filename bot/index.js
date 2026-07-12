@@ -41,9 +41,11 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.32";
+const botBuild = "2026-07-12.34";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
+  ohelp: ["oh", "ohelp"],
+  onboardme: ["on", "onboard", "onboardme"],
   status: ["st", "status"],
   scout: ["sc", "scout"],
   astros: ["as", "ast", "astr", "astro", "astros"],
@@ -52,7 +54,8 @@ const preferredCommandAliases = {
   enemy: ["e", "en", "ene", "enem", "enemy"]
 };
 const canonicalCommands = [
-  "help", "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
+  "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
+  "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report",
@@ -134,6 +137,11 @@ async function handleText(ctx) {
   }
 
   if (isCommand(lower, "help")) return handleHelp(ctx, text, mode);
+  if (isCommand(lower, "ohelp")) return handleOfficerHelp(ctx, mode);
+  if (isCommand(lower, "onboardme")) return handleOnboardMe(ctx, text, mode);
+  if (isCommand(lower, "approve") || isCommand(lower, "officer") || isCommand(lower, "demote") || isCommand(lower, "ban") || isCommand(lower, "access")) {
+    return handleAccessCommand(ctx, text, mode);
+  }
   if (isExactCommand(lower, "status")) return ctx.reply(statusReport(ctx));
   if (isExactCommand(lower, "version")) return ctx.reply(versionReport());
   if (isExactCommand(lower, "map")) return sendMapButton(ctx);
@@ -279,6 +287,13 @@ async function handleClaimButton(ctx) {
 
 async function handleHelp(ctx, text, mode) {
   return respond(ctx, mode, await helpText(ctx, text), { parse_mode: "HTML" });
+}
+
+async function handleOfficerHelp(ctx, mode) {
+  if (!(await userCanUseOfficerCommands(ctx))) {
+    return respond(ctx, mode, "Officer help is only available to Lysander officers/owners.");
+  }
+  return respond(ctx, mode, officerHelpText(), { parse_mode: "HTML" });
 }
 
 async function helpText(ctx, input = "") {
@@ -446,6 +461,9 @@ async function helpText(ctx, input = "") {
   if (topics[topic]) return topics[topic].join("\n");
 
   const status = await helpStatus(ctx);
+  const officerHint = await userCanUseOfficerCommands(ctx)
+    ? ["", "<b>OFFICER</b>", "<code>$ohelp</code> - officer/access commands"].join("\n")
+    : "";
   return [
     "<b>VisionBot Commands</b>",
     "",
@@ -482,8 +500,95 @@ async function helpText(ctx, input = "") {
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, guild, alerts, aliases"
+    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, guild, alerts, aliases",
+    officerHint
   ].join("\n");
+}
+
+function officerHelpText() {
+  return [
+    "<b>Officer Commands</b>",
+    "",
+    "<b>Access</b>",
+    "<code>$onboardme</code> - create/update your access request",
+    "<code>$approve [user]</code> - approve a member",
+    "<code>$officer [user]</code> - promote to officer",
+    "<code>$demote [user]</code> - demote to member",
+    "<code>$ban [user]</code> - block access",
+    "<code>$access [user]</code> - show a user's access state",
+    "",
+    "<b>Operations</b>",
+    "<code>$guild bind</code> - bind this group as the active operation group",
+    "<code>$setgalaxy B24</code> - set the guild chat galaxy",
+    "<code>$standdown [operation-ID] [reason]</code> - close an operation",
+    "<code>$incoming clear [coord|system|region|tag|all]</code> - clear false incoming reports",
+    "<code>/id</code> - show chat/user IDs for setup",
+    "",
+    "Tip: reply to someone's message with <code>$approve</code>, <code>$officer</code>, <code>$demote</code>, <code>$ban</code>, or <code>$access</code>."
+  ].join("\n");
+}
+
+async function handleOnboardMe(ctx, text, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "I need a Telegram user to onboard.");
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "Use <code>$onboardme</code> in the guild group first, or bind an active guild with <code>$guild bind</code>.", { parse_mode: "HTML" });
+  const accessGroupMember = accessChatIds.length ? await isMemberOfAnyAccessChat(ctx, telegramUserId(ctx)) : false;
+  const existing = await fetchAccessMember(scopeId, telegramUserId(ctx));
+  if (existing?.status === "banned") return respond(ctx, mode, "Your Lysander access is blocked for this guild.");
+  const status = accessGroupMember ? "active" : existing?.status || "pending";
+  const role = existing?.role || "member";
+  const saved = await upsertAccessMember({
+    chatId: scopeId,
+    userId: telegramUserId(ctx),
+    username: ctx.from.username || "",
+    displayName: telegramName(ctx),
+    role,
+    status,
+    approvedBy: accessGroupMember ? "access-group" : existing?.approved_by || "",
+    approvedAt: accessGroupMember ? new Date().toISOString() : existing?.approved_at || null
+  });
+  if (!saved) return respond(ctx, mode, "I could not save your onboarding record. Has the Supabase access table been created?");
+  return respond(ctx, mode, status === "active"
+    ? `Onboarded as ${role}. Lysander access is active for this guild.`
+    : "Onboarding request saved. An officer can approve you with <code>$approve</code>.", { parse_mode: "HTML" });
+}
+
+async function handleAccessCommand(ctx, text, mode) {
+  if (!(await userCanUseOfficerCommands(ctx))) {
+    return respond(ctx, mode, "Only Lysander officers/owners can manage access.");
+  }
+  const command = commandName(text);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use this in the guild group or run <code>$guild bind</code> first.", { parse_mode: "HTML" });
+  const target = await resolveAccessTarget(ctx, commandBody(text), scopeId);
+  if (!target) return respond(ctx, mode, `Use: <code>$${command} @username</code> or reply to a user's message with <code>$${command}</code>.`, { parse_mode: "HTML" });
+  if (target.ambiguous?.length) {
+    return respond(ctx, mode, [
+      `Multiple users match <code>${escapeHtml(commandBody(text))}</code>:`,
+      ...target.ambiguous.slice(0, 8).map((row) => `- ${escapeHtml(accessMemberLabel(row))}`)
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+
+  if (command === "access") {
+    const row = target.row || await fetchAccessMember(scopeId, target.userId);
+    return respond(ctx, mode, formatAccessStatus(row, target), { parse_mode: "HTML" });
+  }
+
+  const next = accessCommandState(command);
+  if (!next) return respond(ctx, mode, "Unknown access command.");
+  const existing = target.row || await fetchAccessMember(scopeId, target.userId);
+  const saved = await upsertAccessMember({
+    chatId: scopeId,
+    userId: target.userId,
+    username: target.username || existing?.username || "",
+    displayName: target.displayName || existing?.display_name || target.userId,
+    role: next.role || existing?.role || "member",
+    status: next.status,
+    approvedBy: telegramUserId(ctx),
+    approvedAt: next.status === "active" ? new Date().toISOString() : existing?.approved_at || null
+  });
+  if (!saved) return respond(ctx, mode, "Could not update access. Has the Supabase access table been created?");
+  return respond(ctx, mode, `${escapeHtml(target.displayName || existing?.display_name || target.userId)} is now ${next.status}/${next.role || existing?.role || "member"}.`, { parse_mode: "HTML" });
 }
 
 function deliveryMode(text) {
@@ -495,7 +600,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -657,7 +762,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "attack", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -726,12 +831,136 @@ async function userCanUseSensitiveCommands(ctx) {
   const userId = telegramUserId(ctx);
   if (officerUserIds.includes(userId)) return true;
 
+  const scopeId = await operationScopeId(ctx);
+  if (scopeId) {
+    const access = await fetchAccessMember(scopeId, userId);
+    if (access?.status === "banned") return false;
+    if (access?.status === "active" && ["member", "officer", "owner"].includes(access.role)) return true;
+  }
+
   if (accessChatIds.length) {
-    return isMemberOfAnyAccessChat(ctx, userId);
+    const accessGroupMember = await isMemberOfAnyAccessChat(ctx, userId);
+    if (accessGroupMember) return true;
+    if (scopeId) {
+      const access = await fetchAccessMember(scopeId, userId);
+      if (access && access.status !== "active") return false;
+    }
+    return false;
   }
 
   if (isPrivateChat(ctx)) return true;
   return chatApproved(ctx);
+}
+
+async function userCanUseOfficerCommands(ctx) {
+  if (!ctx.from?.id) return false;
+  const userId = telegramUserId(ctx);
+  if (officerUserIds.includes(userId)) return true;
+  const scopeId = await operationScopeId(ctx);
+  if (scopeId) {
+    const access = await fetchAccessMember(scopeId, userId);
+    if (access?.status === "banned") return false;
+    if (access?.status === "active" && ["officer", "owner"].includes(access.role)) return true;
+  }
+  if (!ctx.chat?.id || isPrivateChat(ctx)) return false;
+  try {
+    const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+    return member?.status === "creator" || member?.status === "administrator";
+  } catch {
+    return false;
+  }
+}
+
+async function fetchAccessMember(chatId, userId) {
+  if (!chatId || !userId) return null;
+  return fetchOne("b24_access_members", { chat_id: chatId, user_id: userId }, null, false);
+}
+
+async function upsertAccessMember({ chatId, userId, username, displayName, role, status, approvedBy = "", approvedAt = null }) {
+  const now = new Date().toISOString();
+  return upsertRow("b24_access_members", {
+    chat_id: String(chatId),
+    user_id: String(userId),
+    username: String(username || "").replace(/^@/, ""),
+    display_name: String(displayName || userId),
+    role,
+    status,
+    approved_by: approvedBy || null,
+    approved_at: approvedAt,
+    last_seen_at: now,
+    updated_at: now
+  }, "chat_id,user_id");
+}
+
+async function resolveAccessTarget(ctx, query, scopeId) {
+  const replied = ctx.message?.reply_to_message?.from || ctx.channelPost?.reply_to_message?.from;
+  if (replied?.id) {
+    return {
+      userId: String(replied.id),
+      username: replied.username || "",
+      displayName: replied.username ? `@${replied.username}` : [replied.first_name, replied.last_name].filter(Boolean).join(" ") || `Telegram ${replied.id}`
+    };
+  }
+
+  const raw = String(query || "").trim();
+  if (!raw) return null;
+  const needle = searchText(raw);
+  const rows = await fetchRows("b24_access_members", { chat_id: `eq.${scopeId}` }, {
+    includeMap: false,
+    order: "updated_at.desc"
+  });
+  const exact = rows.filter((row) => {
+    return String(row.user_id) === raw
+      || searchText(row.username) === needle
+      || searchText(row.display_name) === needle;
+  });
+  const partial = exact.length ? exact : rows.filter((row) => {
+    return searchText(row.username).startsWith(needle) || searchText(row.display_name).startsWith(needle);
+  });
+  if (partial.length > 1) return { ambiguous: partial };
+  if (partial.length === 1) {
+    const row = partial[0];
+    return {
+      row,
+      userId: String(row.user_id),
+      username: row.username || "",
+      displayName: row.display_name || row.username || row.user_id
+    };
+  }
+  return null;
+}
+
+function accessCommandState(command) {
+  switch (command) {
+    case "approve":
+      return { status: "active", role: "member" };
+    case "officer":
+      return { status: "active", role: "officer" };
+    case "demote":
+      return { status: "active", role: "member" };
+    case "ban":
+      return { status: "banned", role: "member" };
+    default:
+      return null;
+  }
+}
+
+function accessMemberLabel(row) {
+  const handle = row.username ? `@${row.username}` : "";
+  return [row.display_name, handle, row.user_id].filter(Boolean).join(" ");
+}
+
+function formatAccessStatus(row, target) {
+  if (!row) return `No access record found for <code>${escapeHtml(target.displayName || target.userId)}</code>.`;
+  return [
+    `<b>Access ${escapeHtml(row.display_name || row.username || row.user_id)}</b>`,
+    `User ID: <code>${escapeHtml(row.user_id)}</code>`,
+    row.username ? `Username: @${escapeHtml(row.username)}` : "",
+    `Status: ${escapeHtml(row.status || "pending")}`,
+    `Role: ${escapeHtml(row.role || "member")}`,
+    row.approved_by ? `Approved by: <code>${escapeHtml(row.approved_by)}</code>` : "",
+    row.updated_at ? `Updated: ${escapeHtml(formatLocalSummary(new Date(row.updated_at)))}` : ""
+  ].filter(Boolean).join("\n");
 }
 
 async function isMemberOfAnyAccessChat(ctx, userId) {
