@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.22";
+const botBuild = "2026-07-12.24";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1181,10 +1181,20 @@ async function handleIncoming(ctx, text, mode) {
   }
 
   const incoming = await fetchActiveIncoming(galaxy, scopeId);
-  const filtered = filterIncomingReports(incoming, query, galaxy);
+  const pageInfo = parseIncomingPage(query);
+  const filtered = filterIncomingReports(incoming, pageInfo.query, galaxy);
   const enriched = await enrichIncomingReports(filtered, galaxy);
-  const label = query ? ` matching ${escapeHtml(query)}` : "";
-  return respond(ctx, mode, enriched.length ? enriched.map(formatIncomingLine).join("\n") : `No active hostile incoming reports${label} in ${galaxy}.`, { parse_mode: "HTML" });
+  const pageSize = 15;
+  const from = (pageInfo.page - 1) * pageSize;
+  const pageRows = enriched.slice(from, from + pageSize);
+  const label = pageInfo.query ? ` matching ${escapeHtml(pageInfo.query)}` : "";
+  if (!pageRows.length) return respond(ctx, mode, `No active hostile incoming reports${label} in ${galaxy}.`, { parse_mode: "HTML" });
+  const lines = pageRows.map(formatIncomingLine);
+  lines.push("", `${from + 1}-${from + pageRows.length} of ${enriched.length} incoming`);
+  if (from + pageRows.length < enriched.length) {
+    lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
+  }
+  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
 async function insertIncomingRows(ctx, rows, scopeId) {
@@ -2958,15 +2968,14 @@ function formatIncomingLine(incoming) {
   const note = incoming.note ? ` - ${escapeHtml(incoming.note)}` : "";
   const eta = formatEta(new Date(incoming.arrival_at));
   const reporter = escapeHtml(incoming.reported_by || "Unknown");
-  const fleet = incoming.hostile_fleet ? ` - ${escapeHtml(incoming.hostile_fleet)}` : "";
   if (incoming.defended_coord) {
-    return `${escapeHtml(incoming.defended_coord)} <= ${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}${fleet}`;
+    return `${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - ${reporter}${note}`;
   }
   if (!incoming.attacker_coord) {
     const bases = incoming.reporter_base_hint ? ` (${escapeHtml(incoming.reporter_base_hint)})` : " (base unknown)";
-    return `${reporter}${bases} - ETA ${eta}${note}${fleet}`;
+    return `${reporter}${bases} - ETA ${eta}${note}`;
   }
-  return `${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - reported by ${reporter}${note}${fleet}`;
+  return `${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - ${reporter}${note}`;
 }
 
 async function enrichIncomingReports(incoming, galaxy) {
@@ -3469,6 +3478,15 @@ function filterIncomingReports(incoming, query, fallbackGalaxy) {
     const haystack = searchText([row.hostile_fleet, row.note, row.reported_by, row.attacker_coord, row.defended_coord].filter(Boolean).join(" "));
     return haystack.includes(needle);
   });
+}
+
+function parseIncomingPage(query) {
+  const raw = String(query || "").trim();
+  const match = raw.match(/(?:^|\s)(?:page\s*|p)(\d+)(?=\s|$)/i);
+  return {
+    page: match ? Math.max(1, Number(match[1])) : 1,
+    query: raw.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim()
+  };
 }
 
 function parseTimedRemainder(value) {
