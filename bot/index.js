@@ -11,11 +11,25 @@ const webhookBaseUrl = (process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_U
 const approvedChatIds = parseCsv(process.env.APPROVED_CHAT_IDS);
 const accessChatIds = parseCsv(process.env.ACCESS_CHAT_IDS || process.env.COMMAND_STAFF_CHAT_IDS);
 const officerUserIds = parseCsv(process.env.OFFICER_USER_IDS);
+const webhookPathSecret = process.env.WEBHOOK_PATH_SECRET || token?.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "");
+const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+const requireAccessControl = /^(1|true|yes)$/i.test(process.env.REQUIRE_ACCESS_CONTROL || "");
+const accessMemberCache = new Map();
 
 if (!token) throw new Error("BOT_TOKEN is required");
 if (!webAppUrl) throw new Error("WEB_APP_URL is required");
 if (!supabaseUrl) throw new Error("SUPABASE_URL is required");
 if (!supabaseKey) throw new Error("SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY is required");
+if (requireAccessControl) {
+  const missing = [
+    approvedChatIds.length ? "" : "APPROVED_CHAT_IDS",
+    accessChatIds.length ? "" : "ACCESS_CHAT_IDS",
+    officerUserIds.length ? "" : "OFFICER_USER_IDS",
+    process.env.SUPABASE_SERVICE_ROLE_KEY ? "" : "SUPABASE_SERVICE_ROLE_KEY",
+    telegramWebhookSecret ? "" : "TELEGRAM_WEBHOOK_SECRET"
+  ].filter(Boolean);
+  if (missing.length) throw new Error(`REQUIRE_ACCESS_CONTROL is enabled but missing: ${missing.join(", ")}`);
+}
 
 const bot = new Telegraf(token);
 const galaxyPattern = /B\d{2}/i;
@@ -25,9 +39,9 @@ const attackedPattern = /^[!$](attacked|sos)\s+(.+)$/i;
 const minePattern = /^[!$]mine\s+(.+)$/i;
 const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
-const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
+const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.31";
+const botBuild = "2026-07-12.32";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -47,8 +61,20 @@ const canonicalCommands = [
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
-  console.log(`Telegram update ${ctx.updateType || "unknown"} chat=${ctx.chat?.id || "none"} from=${ctx.from?.id || "none"} text=${String(text).slice(0, 120)}`);
+  console.log(`Telegram update ${ctx.updateType || "unknown"} chat=${ctx.chat?.id || "none"} from=${ctx.from?.id || "none"} text=${sanitizeLogText(text)}`);
   return next();
+});
+
+bot.catch((error, ctx) => {
+  console.error("Unhandled bot error", {
+    updateType: ctx?.updateType || "unknown",
+    chat: ctx?.chat?.id || "none",
+    from: ctx?.from?.id || "none",
+    message: error?.message || String(error)
+  });
+  if (ctx?.reply) {
+    return ctx.reply("Lysander hit an internal error while handling that. Try again in a moment.");
+  }
 });
 
 bot.start(sendMapButton);
@@ -710,14 +736,36 @@ async function userCanUseSensitiveCommands(ctx) {
 
 async function isMemberOfAnyAccessChat(ctx, userId) {
   for (const chatId of accessChatIds) {
+    const cached = cachedAccessMember(chatId, userId);
+    if (cached !== null) {
+      if (cached) return true;
+      continue;
+    }
+
     try {
       const member = await ctx.telegram.getChatMember(chatId, userId);
-      if (member && member.status !== "left" && member.status !== "kicked") return true;
+      const allowed = Boolean(member && member.status !== "left" && member.status !== "kicked");
+      cacheAccessMember(chatId, userId, allowed);
+      if (allowed) return true;
     } catch (error) {
       console.error(`Access chat lookup failed for ${chatId}`, error.message);
+      cacheAccessMember(chatId, userId, false, 30 * 1000);
     }
   }
   return false;
+}
+
+function cachedAccessMember(chatId, userId) {
+  const entry = accessMemberCache.get(`${chatId}:${userId}`);
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return entry.allowed;
+}
+
+function cacheAccessMember(chatId, userId, allowed, ttlMs = 5 * 60 * 1000) {
+  accessMemberCache.set(`${chatId}:${userId}`, {
+    allowed,
+    expiresAt: Date.now() + ttlMs
+  });
 }
 
 async function validateOperationCallback(ctx, operation) {
@@ -2503,7 +2551,7 @@ async function fetchBoardClaims(galaxy, chatId = "") {
   const allClaims = await fetchActiveClaims(galaxy);
   return allClaims.filter((claim) => {
     if (claim.operation_id) return false;
-    if (!claim.chat_id) return true;
+    if (!claim.chat_id) return false;
     return chatId && String(claim.chat_id) === String(chatId);
   });
 }
@@ -3871,11 +3919,25 @@ function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function sanitizeLogText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const command = commandNameFromText(text);
+  const sensitive = new Set(["report", "incoming", "sos", "attack", "claim", "take", "sent", "mine", "save"]);
+  if (sensitive.has(command)) return `${text.slice(0, 24)}... [redacted]`;
+  return text.slice(0, 120);
+}
+
 const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
 
 http.createServer((request, response) => {
   const path = new URL(request.url || "/", "http://localhost").pathname;
   if (webhookHandler && path === webhookPath) {
+    if (telegramWebhookSecret && request.headers["x-telegram-bot-api-secret-token"] !== telegramWebhookSecret) {
+      response.writeHead(403, { "Content-Type": "text/plain" });
+      response.end("Forbidden\n");
+      return;
+    }
     console.log(`Webhook request received: ${request.method} ${path}`);
     return webhookHandler(request, response);
   }
@@ -3893,7 +3955,11 @@ startBot().catch((error) => {
 
 async function startBot() {
   if (webhookUrl) {
-    await bot.telegram.setWebhook(webhookUrl);
+    const webhookOptions = {
+      allowed_updates: ["message", "channel_post", "callback_query"]
+    };
+    if (telegramWebhookSecret) webhookOptions.secret_token = telegramWebhookSecret;
+    await bot.telegram.setWebhook(webhookUrl, webhookOptions);
     console.log(`Telegram webhook set to ${webhookUrl}`);
   } else {
     await bot.telegram.deleteWebhook();
