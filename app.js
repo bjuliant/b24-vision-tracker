@@ -130,6 +130,7 @@
   function shouldBlockDirectAccess() {
     if (location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1") return false;
     if (!/github\.io$/i.test(location.hostname)) return false;
+    if (urlParams.get("chat_id")) return false;
     return !tg?.initData;
   }
 
