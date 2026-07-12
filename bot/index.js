@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.25";
+const botBuild = "2026-07-12.26";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1189,8 +1189,7 @@ async function handleIncoming(ctx, text, mode) {
   const pageRows = enriched.slice(from, from + pageSize);
   const label = pageInfo.query ? ` matching ${escapeHtml(pageInfo.query)}` : "";
   if (!pageRows.length) return respond(ctx, mode, `No active hostile incoming reports${label} in ${galaxy}.`, { parse_mode: "HTML" });
-  const lines = pageRows.map(formatIncomingLine);
-  lines.push("", `${from + 1}-${from + pageRows.length} of ${enriched.length} incoming`);
+  const lines = [`<pre>${pageRows.map(formatIncomingLine).join("\n")}</pre>`, "", `${from + 1}-${from + pageRows.length} of ${enriched.length} incoming`];
   if (from + pageRows.length < enriched.length) {
     lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
   }
@@ -2965,29 +2964,30 @@ function formatOperationMemberLine(member) {
 }
 
 function formatIncomingLine(incoming) {
-  const summary = incomingNoteSummary(incoming.note);
-  const detail = summary ? ` ${escapeHtml(summary)}` : "";
+  const details = incomingNoteParts(incoming.note);
   const eta = formatCompactEta(new Date(incoming.arrival_at));
   const reporter = escapeHtml(incoming.reported_by || "Unknown");
   if (incoming.defended_coord) {
-    return `${eta} ${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)}${detail}`;
+    return `${eta} ${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)} ${escapeHtml(details.tag.padEnd(7))} ${escapeHtml(details.size.padStart(7))}`.trimEnd();
   }
   if (!incoming.attacker_coord) {
     const bases = incoming.reporter_base_hint ? ` (${escapeHtml(incoming.reporter_base_hint)})` : " (base unknown)";
-    return `${eta} ${reporter}${bases}${detail}`;
+    const extra = [details.size, details.tag, details.extra].filter(Boolean).join(" ");
+    return `${eta} ${reporter}${bases}${extra ? ` ${escapeHtml(extra)}` : ""}`;
   }
-  return `${eta} ${escapeHtml(incoming.attacker_coord)}${detail}`;
+  return `${eta} ${escapeHtml(incoming.attacker_coord)} ${escapeHtml(details.tag.padEnd(7))} ${escapeHtml(details.size.padStart(7))}`.trimEnd();
 }
 
-function incomingNoteSummary(note) {
+function incomingNoteParts(note) {
   const text = String(note || "");
-  const from = (text.match(/\bfrom\s+(\[[^\]]+\])/i) || [])[1] || "";
+  const tag = (text.match(/\bfrom\s+(\[[^\]]+\])/i) || [])[1] || "";
   const size = (text.match(/\bsize\s+([\d,]+)/i) || [])[1] || "";
-  const extras = text
+  const extra = text
     .split("|")
     .map((part) => part.trim())
-    .filter((part) => part && !/^from\s+/i.test(part) && !/^to\s+/i.test(part) && !/^size\s+/i.test(part));
-  return [from, size, ...extras].filter(Boolean).join(" ");
+    .filter((part) => part && !/^from\s+/i.test(part) && !/^to\s+/i.test(part) && !/^size\s+/i.test(part))
+    .join(" ");
+  return { tag, size, extra };
 }
 
 async function enrichIncomingReports(incoming, galaxy) {
@@ -3179,11 +3179,11 @@ function formatEta(date) {
 
 function formatCompactEta(date) {
   const diff = date.getTime() - Date.now();
-  if (!Number.isFinite(diff) || diff <= 0) return "now";
+  if (!Number.isFinite(diff) || diff <= 0) return "00h00m";
   const total = Math.ceil(diff / 60000);
   const hours = Math.floor(total / 60);
   const minutes = total % 60;
-  return hours ? `${hours}h${minutes ? `${minutes}m` : ""}` : `${minutes}m`;
+  return `${String(hours).padStart(2, "0")}h${String(minutes).padStart(2, "0")}m`;
 }
 
 function formatAge(date) {
