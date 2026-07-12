@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.24";
+const botBuild = "2026-07-12.25";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -2965,17 +2965,29 @@ function formatOperationMemberLine(member) {
 }
 
 function formatIncomingLine(incoming) {
-  const note = incoming.note ? ` - ${escapeHtml(incoming.note)}` : "";
-  const eta = formatEta(new Date(incoming.arrival_at));
+  const summary = incomingNoteSummary(incoming.note);
+  const detail = summary ? ` ${escapeHtml(summary)}` : "";
+  const eta = formatCompactEta(new Date(incoming.arrival_at));
   const reporter = escapeHtml(incoming.reported_by || "Unknown");
   if (incoming.defended_coord) {
-    return `${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - ${reporter}${note}`;
+    return `${eta} ${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)}${detail}`;
   }
   if (!incoming.attacker_coord) {
     const bases = incoming.reporter_base_hint ? ` (${escapeHtml(incoming.reporter_base_hint)})` : " (base unknown)";
-    return `${reporter}${bases} - ETA ${eta}${note}`;
+    return `${eta} ${reporter}${bases}${detail}`;
   }
-  return `${escapeHtml(incoming.attacker_coord)} - ETA ${eta} - ${reporter}${note}`;
+  return `${eta} ${escapeHtml(incoming.attacker_coord)}${detail}`;
+}
+
+function incomingNoteSummary(note) {
+  const text = String(note || "");
+  const from = (text.match(/\bfrom\s+(\[[^\]]+\])/i) || [])[1] || "";
+  const size = (text.match(/\bsize\s+([\d,]+)/i) || [])[1] || "";
+  const extras = text
+    .split("|")
+    .map((part) => part.trim())
+    .filter((part) => part && !/^from\s+/i.test(part) && !/^to\s+/i.test(part) && !/^size\s+/i.test(part));
+  return [from, size, ...extras].filter(Boolean).join(" ");
 }
 
 async function enrichIncomingReports(incoming, galaxy) {
@@ -3163,6 +3175,15 @@ function formatEta(date) {
   const minutes = total % 60;
   const time = formatLocalSummary(date);
   return hours ? `${hours}h ${minutes}m (${time})` : `${minutes}m (${time})`;
+}
+
+function formatCompactEta(date) {
+  const diff = date.getTime() - Date.now();
+  if (!Number.isFinite(diff) || diff <= 0) return "now";
+  const total = Math.ceil(diff / 60000);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  return hours ? `${hours}h${minutes ? `${minutes}m` : ""}` : `${minutes}m`;
 }
 
 function formatAge(date) {
