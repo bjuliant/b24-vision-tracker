@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.1";
+const botBuild = "2026-07-12.2";
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -1572,8 +1572,8 @@ async function buildLocationReport(location, options = {}) {
 async function buildGalaxyReport(galaxy) {
   const mapId = galaxyToMapId(galaxy);
   const [astros, bases, operations, claims] = await Promise.all([
-    fetchRows("b24_astros", {}, { mapId, order: "coord.asc", limit: 5000 }),
-    fetchRows("b24_bases", {}, { mapId, order: "coord.asc", limit: 5000 }),
+    fetchAllRows("b24_astros", {}, { mapId, select: "coord,system_id,region_id", order: "coord.asc" }),
+    fetchAllRows("b24_bases", {}, { mapId, select: "coord", order: "coord.asc" }),
     fetchRows("b24_operations", { status: "eq.active" }, { mapId, order: "arrival_at.asc", limit: 1000 }),
     fetchRows("b24_claims", { status: "eq.active" }, { mapId, order: "arrival_at.asc", limit: 1000 })
   ]);
@@ -1583,7 +1583,7 @@ async function buildGalaxyReport(galaxy) {
     `<b>${escapeHtml(galaxy)}</b>`,
     `Known astros: ${astros.length}`,
     `Known systems: ${systems.size}`,
-    `Known regions: ${regions.size}`,
+    `Regions with intel: ${regions.size} / 99`,
     `Known bases: ${bases.length}`,
     `Active operations: ${operations.length}`,
     `Active claims: ${claims.length}`,
@@ -1631,7 +1631,7 @@ async function buildAstroBreakdown(galaxy, region = "") {
   const mapId = galaxyToMapId(galaxy);
   const filters = {};
   if (region) filters.region_id = `eq.${region}`;
-  const rows = await fetchRows("b24_astros", filters, { mapId, order: "terrain.asc", limit: 5000 });
+  const rows = await fetchAllRows("b24_astros", filters, { mapId, select: "terrain,has_base", order: "terrain.asc" });
   if (!rows.length) return `No astro intel found for ${escapeHtml(region || galaxy)} yet.`;
   const counts = countBy(rows, "terrain");
   const title = region || galaxy;
@@ -1648,7 +1648,15 @@ async function buildAstroSearch(parsed) {
   const titleParts = [parsed.filter, parsed.region || parsed.galaxy].filter(Boolean);
   if (parsed.region) filters.region_id = `eq.${parsed.region}`;
   filters.terrain = `ilike.*${parsed.filter}*`;
-  const rows = await fetchRows("b24_astros", filters, { mapId: galaxyToMapId(parsed.galaxy), order: "coord.asc", limit: 50 });
+  const pageSize = 50;
+  const page = Math.max(1, parsed.page || 1);
+  const from = (page - 1) * pageSize;
+  const { rows, count } = await fetchRowsWithCount("b24_astros", filters, {
+    mapId: galaxyToMapId(parsed.galaxy),
+    order: "coord.asc",
+    from,
+    to: from + pageSize - 1
+  });
   if (!rows.length) return `No ${escapeHtml(parsed.filter)} astros found in ${escapeHtml(parsed.region || parsed.galaxy)}.`;
   const lines = [`<b>${escapeHtml(titleParts.join(" in "))}</b>`];
   rows.forEach((astro) => {
@@ -1656,12 +1664,20 @@ async function buildAstroSearch(parsed) {
     const base = astro.has_base ? " base" : "";
     lines.push(`${escapeHtml(astro.coord)} - ${escapeHtml(astro.terrain || "?")} ${escapeHtml(astro.astro_type || "?")}${attrs ? ` - ${escapeHtml(attrs)}` : ""}${base}`);
   });
-  lines.push("", `${rows.length}${rows.length === 50 ? "+" : ""} found`);
+  const shownTo = from + rows.length;
+  const totalText = Number.isFinite(count) ? `${from + 1}-${shownTo} of ${count}` : `${rows.length}${rows.length === pageSize ? "+" : ""}`;
+  lines.push("", `${totalText} found`);
+  if (Number.isFinite(count) && shownTo < count) {
+    lines.push(`Next: <code>$astros ${escapeHtml(astrosNextQuery(parsed, page + 1))}</code>`);
+  }
   return lines.join("\n");
 }
 
 function parseAstrosQuery(query, fallbackGalaxy) {
-  const raw = String(query || "").trim();
+  const original = String(query || "").trim();
+  const pageMatch = original.match(/(?:^|\s)(?:page\s*|p)(\d+)(?=\s|$)/i);
+  const page = pageMatch ? Math.max(1, Number(pageMatch[1])) : 1;
+  const raw = original.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
   const fallback = normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
   const location = parseLocation(raw, fallbackGalaxy);
@@ -1679,7 +1695,12 @@ function parseAstrosQuery(query, fallbackGalaxy) {
     .replace(/^[:\s]+/, "")
     .trim()
     .toLowerCase();
-  return { galaxy, region, filter };
+  return { galaxy, region, filter, page };
+}
+
+function astrosNextQuery(parsed, page) {
+  const scope = parsed.region || parsed.galaxy;
+  return [scope, parsed.filter, `page ${page}`].filter(Boolean).join(" ");
 }
 
 function scoreLine(astro, base) {
@@ -1838,13 +1859,59 @@ async function fetchOne(table, filters, forcedMapId = null, includeMap = true) {
 
 async function fetchRows(table, filters, options = {}) {
   const params = new URLSearchParams({
-    select: "*",
+    select: options.select || "*",
     order: options.order || "arrival_at.asc"
   });
   if (options.includeMap !== false) params.set("map_id", `eq.${options.mapId || galaxyToMapId(defaultGalaxy)}`);
   if (options.limit) params.set("limit", String(options.limit));
   Object.entries(filters).forEach(([key, value]) => params.set(key, value));
   return requestRows(table, params);
+}
+
+async function fetchRowsWithCount(table, filters, options = {}) {
+  const params = new URLSearchParams({
+    select: options.select || "*",
+    order: options.order || "arrival_at.asc"
+  });
+  if (options.includeMap !== false) params.set("map_id", `eq.${options.mapId || galaxyToMapId(defaultGalaxy)}`);
+  Object.entries(filters).forEach(([key, value]) => params.set(key, value));
+  const from = Number.isInteger(options.from) ? options.from : 0;
+  const to = Number.isInteger(options.to) ? options.to : from + (options.limit || 1000) - 1;
+  const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${params}`, {
+    headers: {
+      apikey: supabaseKey,
+      Authorization: `Bearer ${supabaseKey}`,
+      Prefer: "count=exact",
+      Range: `${from}-${to}`
+    }
+  });
+  if (!response.ok) {
+    console.error(`${table} counted lookup failed`, await response.text());
+    return { rows: [], count: 0 };
+  }
+  const contentRange = response.headers.get("content-range") || "";
+  const count = Number(contentRange.split("/")[1]);
+  return {
+    rows: await response.json(),
+    count: Number.isFinite(count) ? count : NaN
+  };
+}
+
+async function fetchAllRows(table, filters, options = {}) {
+  const pageSize = options.pageSize || 1000;
+  const all = [];
+  let count = NaN;
+  for (let from = 0; from < 20000; from += pageSize) {
+    const result = await fetchRowsWithCount(table, filters, {
+      ...options,
+      from,
+      to: from + pageSize - 1
+    });
+    all.push(...result.rows);
+    count = result.count;
+    if (!result.rows.length || result.rows.length < pageSize || (Number.isFinite(count) && all.length >= count)) break;
+  }
+  return all;
 }
 
 function fetchActiveClaims(galaxy, chatId = "") {
