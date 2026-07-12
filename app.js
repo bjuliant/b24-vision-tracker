@@ -1141,6 +1141,12 @@
   function renderIncomingBoard() {
     if (!incomingBoard || !incomingCounts) return;
 
+    if (!telegramChatId) {
+      incomingCounts.textContent = "group needed";
+      incomingBoard.textContent = "Open this map from Lysander's /map button in an approved group to show that group's incoming reports.";
+      return;
+    }
+
     const activeIncoming = getAllActiveIncoming();
     incomingCounts.textContent = `${activeIncoming.length} active`;
 
