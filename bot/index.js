@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.29";
+const botBuild = "2026-07-12.30";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -3083,7 +3083,9 @@ function formatIncomingLine(incoming) {
   const eta = formatCompactEta(new Date(incoming.arrival_at));
   const reporter = escapeHtml(incoming.reported_by || "Unknown");
   if (incoming.defended_coord) {
-    return `${eta} ${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(incoming.attacker_coord)} ${escapeHtml(details.tag.padEnd(7))} ${escapeHtml(details.size.padStart(7))}`.trimEnd();
+    const origin = incoming.attacker_coord || details.player || "?";
+    const tag = details.tag || details.playerTag || "";
+    return `${eta} ${escapeHtml(incoming.defended_coord)} &lt;= ${escapeHtml(origin)} ${escapeHtml(tag.padEnd(7))} ${escapeHtml(details.size.padStart(7))}`.trimEnd();
   }
   if (!incoming.attacker_coord) {
     const bases = incoming.reporter_base_hint ? ` (${escapeHtml(incoming.reporter_base_hint)})` : " (base unknown)";
@@ -3096,13 +3098,15 @@ function formatIncomingLine(incoming) {
 function incomingNoteParts(note) {
   const text = String(note || "");
   const tag = (text.match(/\bfrom\s+(\[[^\]]+\])/i) || [])[1] || "";
+  const player = (text.match(/\bplayer\s+([^|]+)/i) || [])[1]?.trim() || "";
+  const playerTag = (player.match(/(\[[^\]]+\])/) || [])[1] || "";
   const size = (text.match(/\bsize\s+([\d,]+)/i) || [])[1] || "";
   const extra = text
     .split("|")
     .map((part) => part.trim())
     .filter((part) => part && !/^from\s+/i.test(part) && !/^to\s+/i.test(part) && !/^size\s+/i.test(part))
     .join(" ");
-  return { tag, size, extra };
+  return { tag, player, playerTag, size, extra };
 }
 
 async function enrichIncomingReports(incoming, galaxy) {
