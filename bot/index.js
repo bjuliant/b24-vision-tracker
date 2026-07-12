@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.6";
+const botBuild = "2026-07-12.7";
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -1712,7 +1712,7 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   let region = "";
   if (location) {
     galaxy = location.galaxy;
-    region = location.kind === "region" ? location.coord : "";
+    region = location.region || "";
     remainder = location.remainder || "";
   } else if (explicitGalaxy) {
     remainder = raw.replace(new RegExp(`\\b${explicitGalaxy}\\b`, "i"), "").trim();
