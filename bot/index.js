@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.36";
+const botBuild = "2026-07-12.37";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -4193,7 +4193,7 @@ function escapeRegExp(value) {
 function sanitizeLogText(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
-  const command = commandNameFromText(text);
+  const command = commandName(text);
   const sensitive = new Set(["report", "incoming", "sos", "attack", "claim", "take", "sent", "mine", "save"]);
   if (sensitive.has(command)) return `${text.slice(0, 24)}... [redacted]`;
   return text.slice(0, 120);
