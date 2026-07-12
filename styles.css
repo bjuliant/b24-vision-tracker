@@ -364,6 +364,7 @@ h1 {
 .sector-panel details,
 .claims-panel details,
 .operations-panel details,
+.incoming-panel details,
 .intel-panel details,
 .attack-setup-panel,
 .bulk-panel,
@@ -380,6 +381,7 @@ h1 {
 .sector-panel details::before,
 .claims-panel details::before,
 .operations-panel details::before,
+.incoming-panel details::before,
 .intel-panel details::before,
 .attack-setup-panel::before,
 .bulk-panel::before,
@@ -492,7 +494,8 @@ h1 {
 
 .sector-panel summary,
 .claims-panel summary,
-.operations-panel summary {
+.operations-panel summary,
+.incoming-panel summary {
   cursor: pointer;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -506,7 +509,8 @@ h1 {
 
 .sector-panel summary strong,
 .claims-panel summary strong,
-.operations-panel summary strong {
+.operations-panel summary strong,
+.incoming-panel summary strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -514,7 +518,8 @@ h1 {
 
 .sector-panel summary em,
 .claims-panel summary em,
-.operations-panel summary em {
+.operations-panel summary em,
+.incoming-panel summary em {
   color: var(--muted);
   font-style: normal;
   font-size: 0.8rem;
@@ -916,6 +921,7 @@ h1 {
   color: var(--text);
 }
 
+.incoming-panel,
 .attack-panel {
   padding-top: 0;
 }
@@ -952,6 +958,7 @@ h1 {
   font-weight: 850;
 }
 
+.incoming-board,
 .attack-board {
   margin: 0 12px 12px;
   border: 1px solid var(--line);
@@ -960,6 +967,23 @@ h1 {
   padding: 6px 10px;
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.incoming-board pre {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  font-family: "Roboto Mono", "Cascadia Mono", Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.incoming-more {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
 }
 
 .attack-row {

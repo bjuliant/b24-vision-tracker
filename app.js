@@ -31,6 +31,8 @@
   const claimList = document.querySelector("#claimList");
   const attackCounts = document.querySelector("#attackCounts");
   const attackBoard = document.querySelector("#attackBoard");
+  const incomingCounts = document.querySelector("#incomingCounts");
+  const incomingBoard = document.querySelector("#incomingBoard");
   const confirmFleetText = document.querySelector("#confirmFleetText");
   const confirmFleetButton = document.querySelector("#confirmFleetButton");
   const confirmFleetResult = document.querySelector("#confirmFleetResult");
@@ -96,6 +98,7 @@
     bindControls();
     selectSector(selected);
     renderAttackBoard();
+    renderIncomingBoard();
     renderBulkTargets();
     setInterval(tickClaims, 1000);
 
@@ -223,11 +226,13 @@
         loadRemoteBases(),
         loadRemoteAstros(),
         loadRemoteClaims(),
-        loadRemoteOperations()
+        loadRemoteOperations(),
+        loadRemoteIncoming()
       ]);
       paintAll();
       selectSector(selected);
       renderAttackBoard();
+      renderIncomingBoard();
       renderBulkTargets();
       setSync("Live", true);
 
@@ -299,6 +304,16 @@
             renderBulkTargets();
           }
         )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "b24_incoming", filter: `map_id=eq.${mapId}` },
+          (payload) => {
+            if (!rowBelongsToCurrentChat(payload.new)) return;
+            mergeIncomingRow(payload.new);
+            saveLocalState();
+            renderIncomingBoard();
+          }
+        )
         .subscribe();
     } catch (error) {
       console.error(error);
@@ -359,6 +374,18 @@
     saveLocalState();
   }
 
+  async function loadRemoteIncoming() {
+    if (!telegramChatId) {
+      intel.incoming = {};
+      saveLocalState();
+      return;
+    }
+    const { data, error } = await client.from("b24_incoming").select("*").eq("map_id", mapId).eq("chat_id", telegramChatId);
+    if (error) return;
+    data.forEach(mergeIncomingRow);
+    saveLocalState();
+  }
+
   async function loadPreferredGalaxy() {
     const tgUser = tg?.initDataUnsafe?.user;
     if (!tgUser?.id || !client) return "";
@@ -400,6 +427,22 @@
       status: row.status || "active",
       note: row.note || "",
       region: operationRegion(row)
+    };
+  }
+
+  function mergeIncomingRow(row) {
+    if (!row?.incoming_id) return;
+    intel.incoming ||= {};
+    intel.incoming[row.incoming_id] = {
+      id: row.incoming_id,
+      defended: row.defended_coord || "",
+      attacker: row.attacker_coord || "",
+      arrivalAt: row.arrival_at || "",
+      etaMinutes: Number(row.eta_minutes || 0),
+      reporter: row.reported_by || "",
+      status: row.status || "active",
+      note: row.note || "",
+      region: incomingRegion(row)
     };
   }
 
@@ -912,8 +955,8 @@
         system_id: row.attackerCoord ? astroToSystem(row.attackerCoord) : null,
         eta_minutes: row.etaMinutes,
         arrival_at: row.arrivalAt,
-        reported_by: user?.username || user?.first_name || "VisionBot exporter",
-        reported_by_user_id: user?.id ? String(user.id) : null,
+        reported_by: user || "VisionBot exporter",
+        reported_by_user_id: tg?.initDataUnsafe?.user?.id ? String(tg.initDataUnsafe.user.id) : null,
         chat_id: telegramChatId || null,
         hostile_fleet: row.rawLine || "",
         note: row.note || "",
@@ -1095,6 +1138,46 @@
     }).join("");
   }
 
+  function renderIncomingBoard() {
+    if (!incomingBoard || !incomingCounts) return;
+
+    const activeIncoming = getAllActiveIncoming();
+    incomingCounts.textContent = `${activeIncoming.length} active`;
+
+    if (!activeIncoming.length) {
+      incomingBoard.textContent = "No active incoming reports.";
+      return;
+    }
+
+    const visible = activeIncoming.slice(0, 20);
+    const lines = visible.map((row) => escapeHtml(formatIncomingMiniLine(row))).join("\n");
+    const more = activeIncoming.length > visible.length
+      ? `<div class="incoming-more">1-${visible.length} of ${activeIncoming.length} incoming</div>`
+      : "";
+    incomingBoard.innerHTML = `<pre>${lines}</pre>${more}`;
+  }
+
+  function formatIncomingMiniLine(row) {
+    const eta = formatCompactCountdown(row.arrivalAt);
+    const defended = row.defended || "?";
+    const attacker = row.attacker || incomingNoteValue(row.note, "origin") || "?";
+    const tag = incomingTag(row.note);
+    const size = incomingNoteValue(row.note, "size");
+    const tagText = tag ? ` ${tag}` : "";
+    const sizeText = size ? ` ${size}` : "";
+    return `${eta} ${defended} <= ${attacker}${tagText}${sizeText}`;
+  }
+
+  function incomingNoteValue(note, key) {
+    const pattern = new RegExp(`(?:^|\\|)\\s*${key}\\s+([^|]+)`, "i");
+    const match = String(note || "").match(pattern);
+    return match ? match[1].trim() : "";
+  }
+
+  function incomingTag(note) {
+    return incomingNoteValue(note, "from") || (incomingNoteValue(note, "player").match(/(\[[^\]]+\])/) || [])[1] || "";
+  }
+
   function renderBulkTargets() {
     if (!bulkTargetText || !parsedTargets) return;
 
@@ -1237,6 +1320,12 @@
       .sort((a, b) => String(a.arrivalAt).localeCompare(String(b.arrivalAt)) || a.target.localeCompare(b.target));
   }
 
+  function getAllActiveIncoming() {
+    return Object.values(intel.incoming || {})
+      .filter(isIncomingActive)
+      .sort((a, b) => String(a.arrivalAt).localeCompare(String(b.arrivalAt)) || String(a.defended).localeCompare(String(b.defended)));
+  }
+
   function getOperationsForRegion(region) {
     return Object.values(intel.operations || {})
       .filter((operation) => operation.region === region && isOperationActive(operation))
@@ -1255,8 +1344,14 @@
     return new Date(operation.arrivalAt).getTime() > Date.now();
   }
 
+  function isIncomingActive(row) {
+    if (!row || row.status !== "active") return false;
+    if (!row.arrivalAt) return true;
+    return new Date(row.arrivalAt).getTime() > Date.now();
+  }
+
   function loadLocalState() {
-    const blank = { sectors: {}, systems: {}, bases: {}, astros: {}, claims: {}, operations: {} };
+    const blank = { sectors: {}, systems: {}, bases: {}, astros: {}, claims: {}, operations: {}, incoming: {} };
     try {
       return { ...blank, ...JSON.parse(localStorage.getItem(storageKey) || "{}") };
     } catch {
@@ -1296,6 +1391,14 @@
 
   function operationRegion(row) {
     const value = row?.target_coord || row?.defended_coord || row?.hostile_origin || row?.target || row?.defended || row?.hostile || "";
+    const astro = normalizeAstro(value);
+    if (astro) return astroToRegion(astro);
+    const system = normalizeSystem(value);
+    return system ? systemToRegion(system) : "";
+  }
+
+  function incomingRegion(row) {
+    const value = row?.defended_coord || row?.attacker_coord || row?.defended || row?.attacker || "";
     const astro = normalizeAstro(value);
     if (astro) return astroToRegion(astro);
     const system = normalizeSystem(value);
@@ -1394,6 +1497,17 @@
     return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
   }
 
+  function formatCompactCountdown(value) {
+    const diff = new Date(value).getTime() - Date.now();
+    if (!Number.isFinite(diff)) return "--h--m";
+    if (diff <= 0) return "00h00m";
+
+    const totalMinutes = Math.floor(diff / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${String(hours).padStart(2, "0")}h${String(minutes).padStart(2, "0")}m`;
+  }
+
   function formatLocalDateTime(value) {
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return "";
@@ -1408,6 +1522,7 @@
   function tickClaims() {
     renderClaimsPanel(selected);
     renderAttackBoard();
+    renderIncomingBoard();
     paintSector(selected);
   }
 
