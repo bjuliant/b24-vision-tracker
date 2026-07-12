@@ -1604,7 +1604,7 @@
 
   function getTelegramChatId() {
     const chat = tg?.initDataUnsafe?.chat;
-    return chat?.id ? String(chat.id) : "";
+    return chat?.id ? String(chat.id) : String(urlParams.get("chat_id") || "");
   }
 
   function setSync(label, live = false) {
