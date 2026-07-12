@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.34";
+const botBuild = "2026-07-12.35";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -290,7 +290,7 @@ async function handleHelp(ctx, text, mode) {
 }
 
 async function handleOfficerHelp(ctx, mode) {
-  if (!(await userCanUseOfficerCommands(ctx))) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
     return respond(ctx, mode, "Officer help is only available to Lysander officers/owners.");
   }
   return respond(ctx, mode, officerHelpText(), { parse_mode: "HTML" });
@@ -460,10 +460,7 @@ async function helpText(ctx, input = "") {
 
   if (topics[topic]) return topics[topic].join("\n");
 
-  const status = await helpStatus(ctx);
-  const officerHint = await userCanUseOfficerCommands(ctx)
-    ? ["", "<b>OFFICER</b>", "<code>$ohelp</code> - officer/access commands"].join("\n")
-    : "";
+  const status = await safeHelpStatus(ctx);
   return [
     "<b>VisionBot Commands</b>",
     "",
@@ -501,7 +498,8 @@ async function helpText(ctx, input = "") {
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
     "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, guild, alerts, aliases",
-    officerHint
+    "",
+    "Officers: <code>$ohelp</code>"
   ].join("\n");
 }
 
@@ -871,6 +869,15 @@ async function userCanUseOfficerCommands(ctx) {
   }
 }
 
+async function safeUserCanUseOfficerCommands(ctx) {
+  try {
+    return await userCanUseOfficerCommands(ctx);
+  } catch (error) {
+    console.error("officer permission lookup failed", error?.message || error);
+    return false;
+  }
+}
+
 async function fetchAccessMember(chatId, userId) {
   if (!chatId || !userId) return null;
   return fetchOne("b24_access_members", { chat_id: chatId, user_id: userId }, null, false);
@@ -1138,6 +1145,19 @@ async function helpStatus(ctx) {
     `Galaxy: ${escapeHtml(galaxy)}`,
     `Your role: ${await userRoleLabel(ctx)}`
   ].join("\n");
+}
+
+async function safeHelpStatus(ctx) {
+  try {
+    return await helpStatus(ctx);
+  } catch (error) {
+    console.error("help status lookup failed", error?.message || error);
+    return [
+      "Active guild: unknown",
+      `Galaxy: ${escapeHtml(defaultGalaxy)}`,
+      "Your role: Member"
+    ].join("\n");
+  }
 }
 
 async function userRoleLabel(ctx) {
