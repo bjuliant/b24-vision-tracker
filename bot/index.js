@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.15";
+const botBuild = "2026-07-12.16";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1806,23 +1806,26 @@ async function buildAstroSearch(parsed) {
   const from = (page - 1) * pageSize;
   let rows = [];
   let count = 0;
-  if (parsed.attrFilters.length || parsed.excludedTags.length || parsed.emptyOnly) {
+  if (parsed.attrFilters.length || parsed.excludedTags.length || parsed.includedTags.length || parsed.emptyOnly) {
     const allRows = await fetchAllRows("b24_astros", filters, {
       mapId: galaxyToMapId(parsed.galaxy),
       order: "coord.asc"
     });
-    const excludedFootprint = await excludedTagBaseFootprint(parsed);
+    const excludedFootprint = await tagBaseFootprint(parsed, "excludedTags");
+    const includedFootprint = await tagBaseFootprint(parsed, "includedTags");
     const matched = allRows.filter((astro) => {
       return astroMatchesAttributeFilters(astro, parsed.attrFilters)
         && (!parsed.emptyOnly || !astro.has_base)
         && !excludedFootprint.coords.has(astro.coord)
-        && !excludedFootprint.regions.has(astro.region_id);
+        && !excludedFootprint.regions.has(astro.region_id)
+        && (!parsed.includedTags.length || includedFootprint.coords.has(astro.coord) || includedFootprint.regions.has(astro.region_id));
     });
     count = matched.length;
     rows = matched.slice(from, from + pageSize);
     titleParts.push([
       ...parsed.attrFilters.map(attributeFilterLabel),
       parsed.emptyOnly ? "empty only" : "",
+      ...parsed.includedTags.map((tag) => `with ${tag.value}`),
       ...parsed.excludedTags.map((tag) => `without ${tag.value}`)
     ].filter(Boolean).join(", "));
   } else {
@@ -1862,6 +1865,10 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   excludedTags.forEach((tag) => {
     withoutPage = withoutPage.replace(tag.regex, " ");
   });
+  const includedTags = parseIncludedTags(withoutPage);
+  includedTags.forEach((tag) => {
+    withoutPage = withoutPage.replace(tag.regex, " ");
+  });
   const attrFilters = parseAttributeFilters(withoutPage);
   const raw = attrFilters.reduce((value, filter) => value.replace(filter.tokenRegex, " "), withoutPage).trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
@@ -1881,12 +1888,12 @@ function parseAstrosQuery(query, fallbackGalaxy) {
     .replace(/^[:\s]+/, "")
     .trim()
     .toLowerCase();
-  return { galaxy, region, filter, page, attrFilters, excludedTags, emptyOnly };
+  return { galaxy, region, filter, page, attrFilters, excludedTags, includedTags, emptyOnly };
 }
 
 function astrosNextQuery(parsed, page) {
   const scope = parsed.region || parsed.galaxy;
-  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), parsed.emptyOnly ? "empty" : "", ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
+  return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), parsed.emptyOnly ? "empty" : "", ...parsed.includedTags.map((tag) => `yes ${tag.value}`), ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
 }
 
 function parseAstrosShortcutCommand(text, fallbackGalaxy = defaultGalaxy) {
@@ -1956,23 +1963,33 @@ function parseAttributeFilters(raw) {
 }
 
 function parseExcludedTags(raw) {
-  return [...String(raw || "").matchAll(/(?:^|\s)(?:no|not|without)\s+(\[[^\]]{1,24}\]|[a-z0-9 _-]{1,24})(?=\s|$)/gi)].map((match) => {
+  return parseTagFilters(raw, "(?:no|not|without)");
+}
+
+function parseIncludedTags(raw) {
+  return parseTagFilters(raw, "(?:yes|with|only)");
+}
+
+function parseTagFilters(raw, keywordPattern) {
+  const regex = new RegExp(`(?:^|\\s)${keywordPattern}\\s+(\\[[^\\]]{1,24}\\]|\\S{1,24})(?=\\s|$)`, "gi");
+  return [...String(raw || "").matchAll(regex)].map((match) => {
     const value = normalizeStanceTarget(match[1]);
     return {
       value,
-      regex: new RegExp(`(?:^|\\s)(?:no|not|without)\\s+${escapeRegExp(match[1])}(?=\\s|$)`, "i")
+      regex: new RegExp(`(?:^|\\s)${keywordPattern}\\s+${escapeRegExp(match[1])}(?=\\s|$)`, "i")
     };
   }).filter((tag) => tag.value);
 }
 
-async function excludedTagBaseFootprint(parsed) {
-  if (!parsed.excludedTags.length) return { coords: new Set(), regions: new Set() };
+async function tagBaseFootprint(parsed, tagKey) {
+  const tags = parsed[tagKey] || [];
+  if (!tags.length) return { coords: new Set(), regions: new Set() };
   const rows = await fetchRows("b24_bases", {}, {
     mapId: galaxyToMapId(parsed.galaxy),
     order: "coord.asc"
   });
-  const excluded = new Set(parsed.excludedTags.map((tag) => tag.value));
-  const matches = rows.filter((row) => excluded.has(normalizeStanceTarget(row.guild)));
+  const selected = new Set(tags.map((tag) => tag.value));
+  const matches = rows.filter((row) => selected.has(normalizeStanceTarget(row.guild)));
   return {
     coords: new Set(matches.map((row) => row.coord).filter(Boolean)),
     regions: new Set(matches.map((row) => row.region_id || (row.coord ? astroToRegion(row.coord) : "")).filter(Boolean))
