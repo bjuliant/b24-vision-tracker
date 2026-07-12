@@ -27,6 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
+const botBuild = "2026-07-12.1";
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -38,7 +39,8 @@ bot.start(sendMapButton);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
 bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }));
-bot.command("status", (ctx) => ctx.reply(`VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nChat: ${ctx.chat?.id || "unknown"}`));
+bot.command("status", (ctx) => ctx.reply(statusReport(ctx)));
+bot.command("version", (ctx) => ctx.reply(versionReport()));
 bot.command("board", async (ctx) => {
   if (!chatApproved(ctx)) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
   if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
@@ -82,7 +84,8 @@ async function handleText(ctx) {
   }
 
   if (isCommand(lower, "help")) return handleHelp(ctx, text, mode);
-  if (isExactCommand(lower, "status")) return ctx.reply(`VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nChat: ${ctx.chat?.id || "unknown"}`);
+  if (isExactCommand(lower, "status")) return ctx.reply(statusReport(ctx));
+  if (isExactCommand(lower, "version")) return ctx.reply(versionReport());
   if (isExactCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
@@ -412,7 +415,15 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|help|map|g|setgalaxy|guild|claim|take|attack|scout|attacked|sos|intel|astros|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|version|help|map|g|setgalaxy|guild|claim|take|attack|scout|attacked|sos|intel|astros|stale|score|bases|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+}
+
+function statusReport(ctx) {
+  return `VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nBuild: ${botBuild}\nChat: ${ctx.chat?.id || "unknown"}`;
+}
+
+function versionReport() {
+  return `VisionBot build ${botBuild}`;
 }
 
 function isCommand(lowerText, command) {
@@ -496,17 +507,28 @@ function isSensitiveOperationalCommand(lowerText) {
 }
 
 function closestCommand(command) {
+  const cleanCommand = commandName(command);
   const commands = ["help", "status", "map", "attack", "claim", "take", "sos", "scout", "intel", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
-    const distance = editDistance(command, candidate);
+    if (!cleanCommand || cleanCommand === candidate) continue;
+    const distance = editDistance(cleanCommand, candidate);
     if (distance < bestDistance) {
       bestDistance = distance;
       best = candidate;
     }
   }
   return bestDistance <= 2 ? best : "";
+}
+
+function commandName(text) {
+  return String(text || "")
+    .trim()
+    .replace(/^[@!$/]+/, "")
+    .split(/\s+/)[0]
+    .replace(/[^a-z0-9_-].*$/i, "")
+    .toLowerCase();
 }
 
 function editDistance(a, b) {
@@ -1067,7 +1089,7 @@ async function handleUnknownCommand(ctx, text, mode) {
   const trimmed = String(text || "").trim();
   if (!/^[!$@/]/.test(trimmed)) return;
   const normalized = normalizeIncomingText(trimmed);
-  const command = (normalized.match(/^[!$\/]([a-z0-9_-]+)/i) || [])[1]?.toLowerCase() || "";
+  const command = commandName(normalized);
   if (!command) return;
 
   const suggestions = {
@@ -1083,7 +1105,7 @@ async function handleUnknownCommand(ctx, text, mode) {
   };
   const suggestion = suggestions[command] || closestCommand(command);
   const lines = [`I do not know <code>${escapeHtml(trimmed.split(/\s+/)[0])}</code>.`];
-  if (suggestion) lines.push(`Did you mean <code>${escapeHtml(mode)}${escapeHtml(suggestion)}</code>?`);
+  if (suggestion && suggestion !== command) lines.push(`Did you mean <code>${escapeHtml(mode)}${escapeHtml(suggestion)}</code>?`);
   lines.push("", "Try <code>!help</code>, <code>!help attack</code>, <code>!help scout</code>, or <code>!help intel</code>.");
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
