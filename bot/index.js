@@ -27,7 +27,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${token.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.28";
+const botBuild = "2026-07-12.29";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   status: ["st", "status"],
@@ -1215,7 +1215,7 @@ async function handleIncomingReport(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const query = commandBody(text);
+  const query = commandBody(text).replace(/^[!$\/]report\s+/i, "").trim();
   if (!query || /^(help|usage|\?)$/i.test(query)) {
     return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
   }
@@ -3608,6 +3608,8 @@ function parseIncomingDuration(value) {
   let seconds = 0;
   if (parts.length === 1) {
     minutes = parts[0];
+    if (minutes < 1 || minutes > 1440) return null;
+    return { ms: minutes * 60 * 1000 };
   } else if (parts.length === 2) {
     hours = parts[0];
     minutes = parts[1];
