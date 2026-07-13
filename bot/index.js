@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.41";
+const botBuild = "2026-07-12.42";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -1996,7 +1996,7 @@ async function sendBasesReport(ctx, mode, query) {
   const activeAttackPlans = scopeId && await safeUserCanUseOfficerCommands(ctx)
     ? await fetchActiveOperations(galaxy, scopeId, "attack")
     : [];
-  const addPlan = activeAttackPlans[0] || null;
+  const addPlan = newestAttackPlan(activeAttackPlans);
 
   const needle = searchText(query);
   const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
@@ -2044,12 +2044,13 @@ async function sendBasesReport(ctx, mode, query) {
     if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(query)} page ${pageInfo.page + 1}</code>`);
   }
   if (addPlan) {
-    lines.push("", `Officer shortcut: buttons can add rows to <code>${escapeHtml(addPlan.short_id)}</code>.`);
+    const addPlanNumber = attackNumberForOperation(activeAttackPlans, addPlan) || "?";
+    lines.push("", `Officer shortcut: buttons add rows to attack <code>${escapeHtml(addPlanNumber)}</code> (${escapeHtml(attackDisplayName(addPlan))}).`);
     if (activeAttackPlans.length > 1) lines.push(`Other plans: <code>$attacks</code>`);
   }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page, addPlan)
+    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page, addPlan, activeAttackPlans)
   });
 }
 
@@ -2958,15 +2959,16 @@ function basesSuggestionKeyboard(owners) {
   ]));
 }
 
-function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null) {
+function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null, attacks = []) {
   const pageSize = 8;
   const coords = uniqueBaseCoords(importedRows, savedRows).slice((page - 1) * pageSize, page * pageSize);
   if (!coords.length) return {};
+  const addPlanNumber = addPlan ? attackNumberForOperation(attacks, addPlan) : 0;
   return Markup.inlineKeyboard(coords.map((coord) => {
     const row = [
       Markup.button.callback(`Intel ${coord}`, `intel:${coord}`)
     ];
-    if (addPlan?.short_id) row.push(Markup.button.callback(`Add ${addPlan.short_id}`, `attackadd:${addPlan.short_id}:${coord}`));
+    if (addPlan?.short_id) row.push(Markup.button.callback(`Add ${addPlanNumber || addPlan.short_id}`, `attackadd:${addPlan.short_id}:${coord}`));
     else row.push(Markup.button.callback("Claim 4h", `claim4h:${coord}`));
     row.push(Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord)));
     return row;
@@ -3701,6 +3703,14 @@ async function findAttackByNumber(galaxy, scopeId, attackNumber) {
 function attackNumberForOperation(attacks, operation) {
   const index = attacks.findIndex((row) => row.operation_id === operation.operation_id);
   return index >= 0 ? index + 1 : 0;
+}
+
+function newestAttackPlan(attacks) {
+  return [...attacks].sort((a, b) => {
+    const bCreated = new Date(b.created_at || b.updated_at || b.arrival_at || 0).getTime();
+    const aCreated = new Date(a.created_at || a.updated_at || a.arrival_at || 0).getTime();
+    return bCreated - aCreated;
+  })[0] || null;
 }
 
 function formatAttackPoolClaim(operation, claim) {
