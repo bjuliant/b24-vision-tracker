@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.44";
+const botBuild = "2026-07-12.45";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3626,10 +3626,10 @@ function attackPoolKeyboard(operation, claims, page = 1) {
   const openClaims = pageData.rows.filter((claim) => !claim.claimed_by_user_id);
   const rows = [];
   for (const claim of openClaims) {
-    rows.push(waveOffsets.map((offset, index) => {
-      const label = index === 0 ? `W1 ${claim.target_coord}` : `W${index + 1}`;
-      return Markup.button.callback(label, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`);
-    }));
+    rows.push([Markup.button.url(claim.target_coord, mapUrl(galaxyFromCoord(claim.target_coord), claim.target_coord))]);
+    rows.push(waveOffsets.map((offset, index) => (
+      Markup.button.callback(`W${index + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+    )));
   }
   const nav = [];
   if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `attackpool:${operation.short_id}:${pageData.page - 1}`));
@@ -3670,7 +3670,7 @@ async function formatAttackPool(operation, claims, page = 1) {
   if (firstOpen) {
     lines.push("");
     lines.push(`Claim: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(firstOpen.target_coord)} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))}</code>`);
-    lines.push("Buttons claim hourly waves from the landing time.");
+    lines.push(`Buttons show waves 1-${Math.min(attackWaveCount(operation), 6)}. Use the command for later waves.`);
   }
   if (pageData.page < pageData.pages) lines.push(`Next page: <code>!attacks ${escapeHtml(operation.short_id)} page ${pageData.page + 1}</code>`);
   lines.push(`Board: <code>$board attack</code>`);
@@ -3678,7 +3678,7 @@ async function formatAttackPool(operation, claims, page = 1) {
 }
 
 function attackPoolPage(claims, page = 1) {
-  const pageSize = 8;
+  const pageSize = 6;
   const pages = Math.max(1, Math.ceil(claims.length / pageSize));
   const safePage = Math.min(Math.max(1, Number(page) || 1), pages);
   const start = (safePage - 1) * pageSize;
