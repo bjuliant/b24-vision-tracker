@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.37";
+const botBuild = "2026-07-12.38";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -170,12 +170,12 @@ async function handleText(ctx) {
   if (isCommand(lower, "leave")) return handleOperationMember(ctx, text, mode, "withdrawn");
   if (isCommand(lower, "standdown") || isCommand(lower, "cancelop")) return handleCloseOperation(ctx, text, mode);
   if (isCommand(lower, "board") || isExactCommand(lower, "defense")) return handleBoard(ctx, text, mode);
-  if (isExactCommand(lower, "next") || isExactCommand(lower, "myops")) return handleNext(ctx, mode);
+  if (isCommand(lower, "next") || isExactCommand(lower, "myops")) return handleNext(ctx, text, mode);
   if (isCommand(lower, "incoming")) return handleIncoming(ctx, text, mode);
   if (isExactCommand(lower, "targets")) return handleTargets(ctx, mode);
   if (isExactCommand(lower, "claimed")) return handleClaimed(ctx, mode);
   if (isCommand(lower, "mine")) return handleMine(ctx, text, mode);
-  if (isExactCommand(lower, "me")) return handleMe(ctx, mode);
+  if (isCommand(lower, "me")) return handleMe(ctx, text, mode);
   if (isCommand(lower, "save me")) return handleSaveMe(ctx, text, mode);
 
   const astroShortcut = parseAstrosShortcutCommand(text, await galaxyForContext(ctx));
@@ -1833,11 +1833,12 @@ async function handleBoard(ctx, text, mode) {
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
-async function handleNext(ctx, mode) {
+async function handleNext(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !next in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const scope = parseNextScope(text);
   const [memberships, bases] = await Promise.all([
     fetchRows("b24_operation_members", {
       user_id: `eq.${telegramUserId(ctx)}`
@@ -1851,17 +1852,70 @@ async function handleNext(ctx, mode) {
   const operations = await fetchOperationsForMemberships(galaxy, activeMemberships);
   const actionOps = operations.filter((operation) => operation.status === "active" && operation.chat_id === scopeId);
   const membersByOperation = await fetchMembersByOperation(actionOps);
+  const incoming = scope.kind === "empire" ? [] : await incomingForUserBases(galaxy, scopeId, bases, telegramUserId(ctx));
+  const filteredOps = actionOps
+    .filter((operation) => scope.kind === "all" || scope.kind === "combat" || operation.type === scope.kind)
+    .filter((operation) => new Date(operation.arrival_at).getTime() <= Date.now() + scope.hours * 60 * 60 * 1000);
+  const filteredIncoming = incoming
+    .filter((row) => new Date(row.arrival_at).getTime() <= Date.now() + scope.hours * 60 * 60 * 1000);
 
   const lines = [
     `<b>${galaxy} Next Actions</b>`,
+    `${scope.label}`,
     "",
-    `<b>Your Operations</b> (${actionOps.length})`,
-    ...(actionOps.length ? actionOps.slice(0, 8).map((operation) => formatOperationLine(operation, membersByOperation.get(operation.operation_id) || [])) : ["No active operations need you."]),
+    `<b>Operations</b> (${filteredOps.length})`,
+    ...(filteredOps.length
+      ? [`<pre>${filteredOps.slice(0, 8).map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`]
+      : ["No active operations need you."]),
     "",
-    `<b>Your Saved Bases</b> (${bases.length})`
+    `<b>Incoming Near Your Bases</b> (${filteredIncoming.length})`,
+    ...(filteredIncoming.length
+      ? [`<pre>${filteredIncoming.slice(0, 8).map(formatIncomingLine).join("\n")}</pre>`]
+      : ["No active incoming matched your saved bases."]),
+    "",
+    `<b>Empire</b>`,
+    `Saved bases: ${bases.length}`,
+    bases.length ? `Use <code>!me bases</code> to list them.` : `Add one with <code>!mine ${galaxy}:06:10:20</code>.`,
+    "",
+    "Views: <code>!next combat</code>, <code>!next empire</code>, <code>!next 24h</code>"
   ];
 
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+function parseNextScope(text) {
+  const body = commandBody(text).trim().toLowerCase();
+  const hoursMatch = body.match(/\b(\d{1,3})\s*h\b/);
+  const hours = hoursMatch ? Math.max(1, Math.min(168, Number(hoursMatch[1]))) : 24;
+  const kind = /\bempire\b/.test(body)
+    ? "empire"
+    : /\battack\b/.test(body)
+      ? "attack"
+      : /\bdefen[cs]e\b/.test(body)
+        ? "defense"
+        : /\bscout\b/.test(body)
+          ? "scout"
+          : /\bcombat\b/.test(body)
+            ? "combat"
+            : "all";
+  const label = kind === "all"
+    ? `Window: next ${hours}h`
+    : `Window: next ${hours}h / ${kind}`;
+  return { hours, kind, label };
+}
+
+async function incomingForUserBases(galaxy, scopeId, bases, userId) {
+  const baseCoords = new Set(bases.map((base) => base.base_coord).filter(Boolean));
+  const systems = new Set([...baseCoords].map(astroToSystem));
+  const regions = new Set([...baseCoords].map(astroToRegion));
+  const incoming = await fetchActiveIncoming(galaxy, scopeId);
+  return incoming.filter((row) => {
+    if (String(row.reported_by_user_id || "") === String(userId)) return true;
+    if (row.defended_coord && baseCoords.has(row.defended_coord)) return true;
+    if (row.defended_system_id && systems.has(row.defended_system_id)) return true;
+    if (row.defended_region_id && regions.has(row.defended_region_id)) return true;
+    return false;
+  });
 }
 
 async function handleOp(ctx, text, mode) {
@@ -1993,15 +2047,34 @@ async function handleMine(ctx, text, mode) {
   return respond(ctx, mode, `Saved ${escapeHtml(location.coord)} to your ${location.galaxy} base list${note ? `\nNote: ${escapeHtml(note)}` : ""}.`, { parse_mode: "HTML" });
 }
 
-async function handleMe(ctx, mode) {
+async function handleMe(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !me in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
+  const body = commandBody(text).trim().toLowerCase();
   const rows = await fetchRows("b24_user_bases", {
     user_id: `eq.${telegramUserId(ctx)}`,
     status: "eq.active"
   }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
-  const message = rows.length ? rows.map(formatUserBaseLine).join("\n") : `You have no saved bases in ${galaxy}. Add one with !mine ${galaxy}:06:10:20`;
-  return respond(ctx, mode, message, { parse_mode: "HTML" });
+  if (body === "bases") {
+    const message = rows.length
+      ? [`<b>Your Saved Bases</b> (${rows.length})`, ...rows.map(formatUserBaseLine)].join("\n")
+      : `You have no saved bases in ${galaxy}. Add one with <code>!mine ${galaxy}:06:10:20</code>`;
+    return respond(ctx, mode, message, { parse_mode: "HTML" });
+  }
+
+  const scopeId = await operationScopeId(ctx);
+  const access = scopeId ? await fetchAccessMember(scopeId, telegramUserId(ctx)) : null;
+  const lines = [
+    `<b>${escapeHtml(telegramName(ctx))}</b>`,
+    `Galaxy: ${escapeHtml(galaxy)}`,
+    scopeId ? `Active guild: ${escapeHtml(await operationScopeLabel(ctx, scopeId))}` : "Active guild: none",
+    `Access: ${escapeHtml(access ? `${access.status}/${access.role}` : "not onboarded")}`,
+    `Saved bases: ${rows.length}`,
+    "",
+    "Use <code>!next</code> for immediate actions.",
+    "Use <code>!me bases</code> for your base list."
+  ];
+  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
 async function handleSaveMe(ctx, text, mode) {
@@ -3733,6 +3806,16 @@ async function operationScopeId(ctx) {
   const activeChatId = settings?.active_chat_id || "";
   if (approvedChatIds.length && !approvedChatIds.includes(activeChatId)) return "";
   return activeChatId;
+}
+
+async function operationScopeLabel(ctx, scopeId = "") {
+  if (!isPrivateChat(ctx)) return chatTitle(ctx);
+  if (!ctx.from?.id) return scopeId || "unknown";
+  const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
+  if (scopeId && String(settings?.active_chat_id || "") === String(scopeId) && settings?.active_chat_label) {
+    return settings.active_chat_label;
+  }
+  return scopeId || settings?.active_chat_label || "unknown";
 }
 
 function parseLookupCommand(text, fallbackGalaxy = defaultGalaxy) {
