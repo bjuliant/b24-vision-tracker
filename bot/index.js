@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.38";
+const botBuild = "2026-07-12.39";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -50,6 +50,7 @@ const preferredCommandAliases = {
   scout: ["sc", "scout"],
   astros: ["as", "ast", "astr", "astro", "astros"],
   report: ["rep", "repo", "repor", "report"],
+  attacks: ["attacks"],
   friend: ["fr", "fri", "frie", "frien", "friend"],
   enemy: ["e", "en", "ene", "enem", "enemy"]
 };
@@ -58,7 +59,7 @@ const canonicalCommands = [
   "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
-  "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report",
+  "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
   "targets", "claimed", "mine", "me", "friend", "enemy"
 ];
 
@@ -98,6 +99,7 @@ bot.action(/^op:(join|ready|sent|leave|status|close):(.+)$/, handleOperationButt
 bot.action(/^intel:(B\d{2}:\d{2}:\d{2}(?::\d{2})?)$/, handleIntelButton);
 bot.action(/^bases:(.+)$/, handleBasesButton);
 bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
+bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
 
 async function sendMapButton(ctx) {
   if (!(await userCanUseSensitiveCommands(ctx))) {
@@ -153,6 +155,7 @@ async function handleText(ctx) {
   if (isProtectedOperationalCommand(lower) && !isPrivateChat(ctx)) await rememberActiveChat(ctx);
 
   if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
+  if (isCommand(lower, "attacks")) return handleAttacks(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "report")) return handleIncomingReport(ctx, text, mode);
@@ -318,6 +321,10 @@ async function helpText(ctx, input = "") {
       "",
       "<code>$attack 02:00 [coord] [coord] [note]</code>",
       "Creates a target pool for a landing window.",
+      "<code>$attacks</code>",
+      "Lists active attack plans.",
+      "<code>$attack add A-7K4P9 [coord] [coord]</code>",
+      "Officer-only: adds targets to an existing attack plan.",
       "<code>!take A-7K4P9 [coord] 02:30 [note]</code>",
       "Claims one target from that pool at your chosen arrival time.",
       "",
@@ -478,6 +485,7 @@ async function helpText(ctx, input = "") {
     "<b>CREATE</b>",
     "<code>$attack 02:00 [coord] [coord] [note]</code>",
     "<code>$attack [target] [eta-min] [note]</code>",
+    "<code>$attacks</code> / <code>$attack add [ID] [coord]</code>",
     "<code>$sos [defended] [hostile] [eta-min] [note]</code>",
     "<code>$report [attacker] [defended] [eta] [size]</code>",
     "<code>$scout [coord] [due-min] [note]</code>",
@@ -523,6 +531,8 @@ function officerHelpText() {
     "<b>Operations</b>",
     "<code>$guild bind</code> - bind this group as the active operation group",
     "<code>$setgalaxy B24</code> - set the guild chat galaxy",
+    "<code>$attacks</code> - list active attack plans",
+    "<code>$attack add [ID] [coord]</code> - add targets to a plan",
     "<code>$standdown [operation-ID] [reason]</code> - close an operation",
     "<code>$incoming clear [coord|system|region|tag|all]</code> - clear false incoming reports",
     "<code>/id</code> - show chat/user IDs for setup",
@@ -699,6 +709,7 @@ function isProtectedOperationalCommand(lowerText) {
     "claim",
     "take",
     "attack",
+    "attacks",
     "map",
     "scout",
     "attacked",
@@ -740,6 +751,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "claim",
     "take",
     "attack",
+    "attacks",
     "map",
     "scout",
     "attacked",
@@ -782,7 +794,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "attack", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "attack", "attacks", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1194,6 +1206,8 @@ async function userRoleLabel(ctx) {
 
 async function handleClaim(ctx, text, mode) {
   if (/^[!$]attack\b/i.test(text)) {
+    const add = parseAttackAdd(text, await galaxyForContext(ctx));
+    if (add) return handleAttackAdd(ctx, add, mode);
     const plan = parseAttackPlan(text, await galaxyForContext(ctx));
     if (plan) return handleAttackPlan(ctx, plan, mode);
   }
@@ -1260,6 +1274,32 @@ async function handleClaim(ctx, text, mode) {
   return message;
 }
 
+async function handleAttacks(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const attacks = await fetchActiveOperations(galaxy, scopeId, "attack");
+  const claimsByOperation = await fetchClaimsByOperation(attacks);
+  const lines = [`<b>${galaxy} Attack Plans</b>`];
+  if (!attacks.length) {
+    lines.push("No active attack plans.");
+    lines.push("", "Create one: <code>$attack 02:00 B24:11:70:31 B24:14:89:10 note</code>");
+    return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+  }
+
+  lines.push(...attacks.map((operation) => {
+    const claims = claimsByOperation.get(operation.operation_id) || [];
+    const claimed = claims.filter((claim) => claim.claimed_by_user_id).length;
+    return `${escapeHtml(operation.short_id)} ${escapeHtml(operation.note || "attack")} - ${claimed}/${claims.length} claimed - ${formatEta(new Date(operation.arrival_at))}`;
+  }));
+  lines.push("", "Add targets: <code>$attack add A-12345 B24:44:76:10 B24:45:21:10</code>");
+  lines.push("Show board: <code>$board attack</code>");
+  return respond(ctx, mode, lines.join("\n"), {
+    parse_mode: "HTML",
+    ...attackListKeyboard(attacks)
+  });
+}
+
 async function handleAttackPlan(ctx, plan, mode) {
   if (!plan.coords.length) return respond(ctx, mode, "Use: $attack 02:00 B24:11:70:31 B24:14:89:10 optional note");
   if (plan.coords.length > 40) return respond(ctx, mode, "Keep one attack plan to 40 targets or fewer.");
@@ -1323,6 +1363,92 @@ async function handleAttackPlan(ctx, plan, mode) {
     parse_mode: "HTML",
     ...attackPlanKeyboard(operation, rows)
   });
+}
+
+async function handleAttackAdd(ctx, add, mode) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    return respond(ctx, mode, "Only Lysander officers/owners can add targets to attack plans.");
+  }
+  const operation = await findOperation(ctx, add.shortId);
+  if (!operation || operation.type !== "attack") {
+    return respond(ctx, mode, `No active attack plan found for ${escapeHtml(add.shortId)}.`, { parse_mode: "HTML" });
+  }
+  const result = await addTargetsToAttack(ctx, operation, add.coords, add.note);
+  return respond(ctx, mode, [
+    `${escapeHtml(operation.short_id)} target update`,
+    `Added: ${result.added}`,
+    `Already present: ${result.skipped}`,
+    "",
+    `Board: <code>$board attack</code>`
+  ].join("\n"), { parse_mode: "HTML" });
+}
+
+async function handleAttackAddButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to add attack targets.");
+    return;
+  }
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    await ctx.answerCbQuery("Officer access required.");
+    return;
+  }
+  const [, shortId, coord] = ctx.match || [];
+  const operation = await findOperation(ctx, shortId);
+  if (!operation || operation.type !== "attack") {
+    await ctx.answerCbQuery("Attack plan not found.");
+    return;
+  }
+  const result = await addTargetsToAttack(ctx, operation, [coord], "added from base list");
+  await ctx.answerCbQuery(result.added ? `Added ${coord}` : `${coord} already present`);
+  return ctx.reply(`${operation.short_id}: ${coord} ${result.added ? "added to target pool" : "was already in the target pool"}.`);
+}
+
+async function addTargetsToAttack(ctx, operation, coords, note = "") {
+  const cleanCoords = [...new Set(coords.map(normalizeAstro).filter(Boolean))]
+    .filter((coord) => mapIdForCoord(coord) === operation.map_id);
+  if (!cleanCoords.length) return { added: 0, skipped: 0 };
+
+  const existing = await fetchRows("b24_claims", {
+    operation_id: `eq.${operation.operation_id}`,
+    status: "eq.active"
+  }, { mapId: operation.map_id, order: "target_coord.asc", limit: 1000 });
+  const existingTargets = new Set(existing.map((claim) => claim.target_coord));
+  const stamp = new Date().toISOString();
+  let added = 0;
+  let skipped = 0;
+  for (const coord of cleanCoords) {
+    if (existingTargets.has(coord)) {
+      skipped += 1;
+      continue;
+    }
+    const row = {
+      map_id: operation.map_id,
+      claim_id: randomId(),
+      operation_id: operation.operation_id,
+      operation_short_id: operation.short_id,
+      target_coord: coord,
+      region_id: astroToRegion(coord),
+      system_id: astroToSystem(coord),
+      claimed_by: null,
+      claimed_by_user_id: null,
+      chat_id: operation.chat_id,
+      arrival_at: operation.arrival_at,
+      arrival_label: formatClockLabel(new Date(operation.arrival_at)),
+      confirmed_sent: false,
+      confirmed_at: null,
+      confirmed_by: "",
+      fleet_label: "",
+      note,
+      status: "active",
+      created_at: stamp,
+      updated_at: stamp
+    };
+    if (await insertRow("b24_claims", row)) {
+      added += 1;
+      existingTargets.add(coord);
+    }
+  }
+  return { added, skipped };
 }
 
 async function handleTargetClaim(ctx, targetClaim, mode) {
@@ -1730,6 +1856,7 @@ async function sendBasesReport(ctx, mode, query) {
   const galaxy = await galaxyForContext(ctx);
   const pageInfo = parsePageFromQuery(query);
   query = pageInfo.query;
+  const scopeId = await operationScopeId(ctx);
   const [savedRows, importedRows] = await Promise.all([
     fetchRows("b24_user_bases", {
       status: "eq.active"
@@ -1737,6 +1864,10 @@ async function sendBasesReport(ctx, mode, query) {
     fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" })
   ]);
   const stances = await fetchStanceMap(galaxy);
+  const activeAttackPlans = scopeId && await safeUserCanUseOfficerCommands(ctx)
+    ? await fetchActiveOperations(galaxy, scopeId, "attack")
+    : [];
+  const addPlan = activeAttackPlans[0] || null;
 
   const needle = searchText(query);
   const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
@@ -1783,9 +1914,13 @@ async function sendBasesReport(ctx, mode, query) {
     lines.push("", `Buttons: ${shownFrom}-${shownTo} of ${totalActionable}`);
     if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(query)} page ${pageInfo.page + 1}</code>`);
   }
+  if (addPlan) {
+    lines.push("", `Officer shortcut: buttons can add rows to <code>${escapeHtml(addPlan.short_id)}</code>.`);
+    if (activeAttackPlans.length > 1) lines.push(`Other plans: <code>$attacks</code>`);
+  }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page)
+    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page, addPlan)
   });
 }
 
@@ -2694,15 +2829,19 @@ function basesSuggestionKeyboard(owners) {
   ]));
 }
 
-function baseListKeyboard(importedRows, savedRows, page = 1) {
+function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null) {
   const pageSize = 8;
   const coords = uniqueBaseCoords(importedRows, savedRows).slice((page - 1) * pageSize, page * pageSize);
   if (!coords.length) return {};
-  return Markup.inlineKeyboard(coords.map((coord) => [
-    Markup.button.callback(`Intel ${coord}`, `intel:${coord}`),
-    Markup.button.callback("Claim 4h", `claim4h:${coord}`),
-    Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord))
-  ]));
+  return Markup.inlineKeyboard(coords.map((coord) => {
+    const row = [
+      Markup.button.callback(`Intel ${coord}`, `intel:${coord}`)
+    ];
+    if (addPlan?.short_id) row.push(Markup.button.callback(`Add ${addPlan.short_id}`, `attackadd:${addPlan.short_id}:${coord}`));
+    else row.push(Markup.button.callback("Claim 4h", `claim4h:${coord}`));
+    row.push(Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord)));
+    return row;
+  }));
 }
 
 function uniqueBaseCoords(importedRows, savedRows) {
@@ -3333,6 +3472,14 @@ function attackPlanKeyboard(operation, claims) {
   return Markup.inlineKeyboard(rows);
 }
 
+function attackListKeyboard(attacks) {
+  const rows = attacks.slice(0, 8).map((operation) => [
+    Markup.button.callback(`Status ${operation.short_id}`, `op:status:${operation.operation_id}`),
+    Markup.button.url("Open", mapUrl(galaxyFromCoord(operation.target_coord || defaultGalaxy), operation.target_coord || ""))
+  ]);
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
 function formatClaimLine(claim) {
   const note = claim.note ? ` - ${escapeHtml(claim.note)}` : "";
   const status = claim.confirmed_sent ? "confirmed" : "planned";
@@ -3556,6 +3703,18 @@ function parseAttackPlan(text, fallbackGalaxy) {
     label: start.label,
     arrivalAt: nextClockTime(start.label),
     coords,
+    note: extracted.note
+  };
+}
+
+function parseAttackAdd(text, fallbackGalaxy) {
+  const body = String(text || "").trim().replace(/^[!$]attack\s+/i, "").trim();
+  const match = body.match(/^add\s+([A-Z]-?[A-Z0-9]{3,8})\s+([\s\S]+)$/i);
+  if (!match) return null;
+  const extracted = extractAstroCoordsWithRemainder(match[2], fallbackGalaxy);
+  return {
+    shortId: normalizeShortId(match[1]),
+    coords: extracted.coords,
     note: extracted.note
   };
 }
