@@ -115,7 +115,10 @@ add column if not exists hostile_fleet text,
 add column if not exists severity text,
 add column if not exists verified boolean not null default false,
 add column if not exists reported_by_user_id text,
-add column if not exists chat_id text;
+add column if not exists chat_id text,
+add column if not exists covered_by text,
+add column if not exists covered_by_user_id text,
+add column if not exists covered_at timestamptz;
 
 alter table public.b24_incoming
 alter column attacker_coord drop not null,
