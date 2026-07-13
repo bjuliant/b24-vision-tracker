@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.1";
+const botBuild = "2026-07-13.3";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -99,9 +99,10 @@ bot.action(/^op:(join|ready|sent|leave|status|close):(.+)$/, handleOperationButt
 bot.action(/^intel:(B\d{2}:\d{2}:\d{2}(?::\d{2})?)$/, handleIntelButton);
 bot.action(/^bases:(.+)$/, handleBasesButton);
 bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
-bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?$/, handleAttackPoolButton);
+bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?(?::(B\d{2}:\d{2}:\d{2}:\d{2}))?$/, handleAttackPoolButton);
 bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})$/, handleAttackTakeButton);
 bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
+bot.action(/^noop:(.+)$/, async (ctx) => ctx.answerCbQuery(String(ctx.match?.[1] || "").slice(0, 80)));
 
 async function sendMapButton(ctx) {
   if (!(await userCanUseSensitiveCommands(ctx))) {
@@ -1495,19 +1496,28 @@ async function handleAttackPoolButton(ctx) {
     await ctx.answerCbQuery("You do not have permission for attack plans.");
     return;
   }
-  const [, shortId, pageText] = ctx.match || [];
+  const [, shortId, pageText, selectedCoord] = ctx.match || [];
   const page = Math.max(1, Number(pageText || 1));
   const operation = await findOperation(ctx, shortId);
   if (!operation || operation.type !== "attack") {
     await ctx.answerCbQuery("Attack plan not found.");
     return;
   }
-  await ctx.answerCbQuery(`Opening ${operation.short_id}`);
+  await ctx.answerCbQuery(selectedCoord ? `Waves for ${selectedCoord}` : `Opening ${operation.short_id}`);
   const claims = await fetchOperationClaims(operation);
-  return ctx.reply(await formatAttackPool(operation, claims, page), {
+  const message = await formatAttackPool(operation, claims, page, selectedCoord);
+  const options = {
     parse_mode: "HTML",
-    ...attackPoolKeyboard(operation, claims, page)
-  });
+    ...attackPoolKeyboard(operation, claims, page, selectedCoord)
+  };
+  if (selectedCoord || pageText) {
+    try {
+      return await ctx.editMessageText(message, options);
+    } catch (error) {
+      // Telegram refuses edits when content is unchanged or too old; a fresh pool still works.
+    }
+  }
+  return ctx.reply(message, options);
 }
 
 async function handleAttackTakeButton(ctx) {
@@ -3619,19 +3629,30 @@ function attackListKeyboard(attacks) {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
-function attackPoolKeyboard(operation, claims, page = 1) {
+function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   const pageData = attackPoolPage(claims, page);
   const waveCount = attackWaveCount(operation);
-  const waveOffsets = Array.from({ length: Math.min(waveCount, 4) }, (_, index) => index * 60);
-  const openClaims = pageData.rows.filter((claim) => !claim.claimed_by_user_id);
+  const waveOffsets = Array.from({ length: Math.min(waveCount, 6) }, (_, index) => index * 60);
   const rows = [];
-  for (const claim of openClaims) {
-    rows.push([
-      Markup.button.url(claim.target_coord, mapUrl(galaxyFromCoord(claim.target_coord), claim.target_coord)),
-      ...waveOffsets.map((offset, index) => (
-        Markup.button.callback(`W${index + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
-      ))
-    ]);
+  for (const [index, claim] of pageData.rows.entries()) {
+    const targetNumber = String(pageData.from + index).padStart(2, "0");
+    const claimState = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
+    if (claim.target_coord === selectedCoord && !claim.claimed_by_user_id) {
+      rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord}`, `attackpool:${operation.short_id}:${pageData.page}`)]);
+      rows.push(waveOffsets.slice(0, 3).map((offset, waveIndex) => (
+        Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+      )));
+      if (waveOffsets.length > 3) {
+        rows.push(waveOffsets.slice(3).map((offset, waveIndex) => (
+          Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+        )));
+      }
+      continue;
+    }
+    const targetAction = claim.claimed_by_user_id
+      ? `noop:${claimState}`
+      : `attackpool:${operation.short_id}:${pageData.page}:${claim.target_coord}`;
+    rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, targetAction)]);
   }
   const nav = [];
   if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `attackpool:${operation.short_id}:${pageData.page - 1}`));
@@ -3642,7 +3663,7 @@ function attackPoolKeyboard(operation, claims, page = 1) {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
-async function formatAttackPool(operation, claims, page = 1) {
+async function formatAttackPool(operation, claims, page = 1, selectedCoord = "") {
   const pageData = attackPoolPage(claims, page);
   const openClaims = claims.filter((claim) => !claim.claimed_by_user_id);
   const claimedClaims = claims.filter((claim) => claim.claimed_by_user_id);
@@ -3662,7 +3683,7 @@ async function formatAttackPool(operation, claims, page = 1) {
     return lines.join("\n");
   }
 
-  const rows = pageData.rows.map((claim) => formatAttackPoolClaim(operation, claim));
+  const rows = pageData.rows.map((claim, index) => formatAttackPoolClaim(operation, claim, pageData.from + index));
   lines.push("<pre>");
   lines.push(...rows);
   lines.push("</pre>");
@@ -3672,7 +3693,10 @@ async function formatAttackPool(operation, claims, page = 1) {
   if (firstOpen) {
     lines.push("");
     lines.push(`Claim: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(firstOpen.target_coord)} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))}</code>`);
-    lines.push(`Buttons show waves 1-${Math.min(attackWaveCount(operation), 4)}. Use the command for later waves.`);
+    lines.push(selectedCoord
+      ? `Tap a wave for ${escapeHtml(selectedCoord)}. Buttons show waves 1-${Math.min(attackWaveCount(operation), 6)}.`
+      : "Tap a target button to show its wave buttons.");
+    if (attackWaveCount(operation) > 6) lines.push("Use the command for later waves.");
   }
   if (pageData.page < pageData.pages) lines.push(`Next page: <code>!attacks ${escapeHtml(operation.short_id)} page ${pageData.page + 1}</code>`);
   lines.push(`Board: <code>$board attack</code>`);
@@ -3740,12 +3764,13 @@ function newestAttackPlan(attacks) {
   })[0] || null;
 }
 
-function formatAttackPoolClaim(operation, claim) {
+function formatAttackPoolClaim(operation, claim, number = 0) {
+  const label = number ? `${String(number).padStart(2, "0")} ` : "";
   const target = String(claim.target_coord || "?").padEnd(12, " ");
   const clock = formatClockLabel(new Date(claim.arrival_at || operation.arrival_at)).padEnd(5, " ");
   const state = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
   const who = compactLabel(claim.claimed_by || "", 12).padEnd(12, " ");
-  return escapeHtml(`${target} ${clock} ${state.padEnd(7, " ")} ${who}`.trimEnd());
+  return escapeHtml(`${label}${target} ${clock} ${state.padEnd(7, " ")} ${who}`.trimEnd());
 }
 
 function formatClaimLine(claim) {
