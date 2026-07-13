@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.3";
+const botBuild = "2026-07-13.4";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3629,6 +3629,10 @@ function attackListKeyboard(attacks) {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
+function styledButton(button, style) {
+  return style ? { ...button, style } : button;
+}
+
 function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   const pageData = attackPoolPage(claims, page);
   const waveCount = attackWaveCount(operation);
@@ -3638,13 +3642,13 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
     const targetNumber = String(pageData.from + index).padStart(2, "0");
     const claimState = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
     if (claim.target_coord === selectedCoord && !claim.claimed_by_user_id) {
-      rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord}`, `attackpool:${operation.short_id}:${pageData.page}`)]);
+      rows.push([styledButton(Markup.button.callback(`${targetNumber} ${claim.target_coord}`, `attackpool:${operation.short_id}:${pageData.page}`), "primary")]);
       rows.push(waveOffsets.slice(0, 3).map((offset, waveIndex) => (
-        Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+        styledButton(Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`), "success")
       )));
       if (waveOffsets.length > 3) {
         rows.push(waveOffsets.slice(3).map((offset, waveIndex) => (
-          Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+          styledButton(Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`), "success")
         )));
       }
       continue;
@@ -3652,7 +3656,10 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
     const targetAction = claim.claimed_by_user_id
       ? `noop:${claimState}`
       : `attackpool:${operation.short_id}:${pageData.page}:${claim.target_coord}`;
-    rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, targetAction)]);
+    rows.push([styledButton(
+      Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, targetAction),
+      claim.claimed_by_user_id ? "danger" : "primary"
+    )]);
   }
   const nav = [];
   if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `attackpool:${operation.short_id}:${pageData.page - 1}`));
