@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.6";
+const botBuild = "2026-07-13.7";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -1600,11 +1600,15 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
     return respond(ctx, mode, `No active attack operation found for ${escapeHtml(targetClaim.shortId)}.`, { parse_mode: "HTML" });
   }
 
-  const targetRows = await fetchRows("b24_claims", {
-    operation_id: operation.operation_id,
-    target_coord: targetClaim.coord,
-    status: "active"
+  let targetRows = await fetchRows("b24_claims", {
+    operation_id: `eq.${operation.operation_id}`,
+    target_coord: `eq.${targetClaim.coord}`,
+    status: "eq.active"
   }, { mapId: operation.map_id, order: "arrival_at.asc", limit: 100 });
+  if (!targetRows.length) {
+    const operationClaims = await fetchOperationClaims(operation);
+    targetRows = operationClaims.filter((row) => row.target_coord === targetClaim.coord);
+  }
   const slotIndex = Math.max(1, Math.round((targetClaim.arrivalAt.getTime() - new Date(operation.arrival_at).getTime()) / 3600000) + 1);
   const waveCount = attackWaveCount(operation);
 
