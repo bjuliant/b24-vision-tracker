@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.4";
+const botBuild = "2026-07-13.5";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3629,10 +3629,6 @@ function attackListKeyboard(attacks) {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
-function styledButton(button, style) {
-  return style ? { ...button, style } : button;
-}
-
 function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   const pageData = attackPoolPage(claims, page);
   const waveCount = attackWaveCount(operation);
@@ -3641,24 +3637,25 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   for (const [index, claim] of pageData.rows.entries()) {
     const targetNumber = String(pageData.from + index).padStart(2, "0");
     const claimState = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
-    if (claim.target_coord === selectedCoord && !claim.claimed_by_user_id) {
-      rows.push([styledButton(Markup.button.callback(`${targetNumber} ${claim.target_coord}`, `attackpool:${operation.short_id}:${pageData.page}`), "primary")]);
-      rows.push(waveOffsets.slice(0, 3).map((offset, waveIndex) => (
-        styledButton(Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`), "success")
-      )));
-      if (waveOffsets.length > 3) {
-        rows.push(waveOffsets.slice(3).map((offset, waveIndex) => (
-          styledButton(Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`), "success")
+    if (claim.target_coord === selectedCoord) {
+      rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, `attackpool:${operation.short_id}:${pageData.page}`)]);
+      if (!claim.claimed_by_user_id) {
+        rows.push(waveOffsets.slice(0, 3).map((offset, waveIndex) => (
+          Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
         )));
+        if (waveOffsets.length > 3) {
+          rows.push(waveOffsets.slice(3).map((offset, waveIndex) => (
+            Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
+          )));
+        }
+      } else {
+        rows.push([Markup.button.callback(`${claimState} by ${compactLabel(claim.claimed_by || "someone", 24)}`, `noop:${claimState}`)]);
       }
       continue;
     }
-    const targetAction = claim.claimed_by_user_id
-      ? `noop:${claimState}`
-      : `attackpool:${operation.short_id}:${pageData.page}:${claim.target_coord}`;
-    rows.push([styledButton(
-      Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, targetAction),
-      claim.claimed_by_user_id ? "danger" : "primary"
+    rows.push([Markup.button.callback(
+      `${targetNumber} ${claim.target_coord} ${claimState}`,
+      `attackpool:${operation.short_id}:${pageData.page}:${claim.target_coord}`
     )]);
   }
   const nav = [];
