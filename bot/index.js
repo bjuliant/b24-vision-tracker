@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.8";
+const botBuild = "2026-07-13.9";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -102,6 +102,8 @@ bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
 bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?(?::(B\d{2}:\d{2}:\d{2}:\d{2}))?$/, handleAttackPoolButton);
 bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})(?::(\d{1,3}))?$/, handleAttackTakeButton);
 bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
+bot.action(/^defpool:(\d{1,3})$/, handleDefensePoolButton);
+bot.action(/^defcover:([^:]+):(\d{1,3})$/, handleDefenseCoverButton);
 bot.action(/^noop:(.+)$/, async (ctx) => ctx.answerCbQuery(String(ctx.match?.[1] || "").slice(0, 80)));
 
 async function sendMapButton(ctx) {
@@ -175,7 +177,8 @@ async function handleText(ctx) {
   if (isCommand(lower, "sent")) return handleOperationMember(ctx, text, mode, "sent");
   if (isCommand(lower, "leave")) return handleOperationMember(ctx, text, mode, "withdrawn");
   if (isCommand(lower, "standdown") || isCommand(lower, "cancelop")) return handleCloseOperation(ctx, text, mode);
-  if (isCommand(lower, "board") || isExactCommand(lower, "defense")) return handleBoard(ctx, text, mode);
+  if (isCommand(lower, "defense")) return handleDefensePool(ctx, text, mode);
+  if (isCommand(lower, "board")) return handleBoard(ctx, text, mode);
   if (isCommand(lower, "next") || isExactCommand(lower, "myops")) return handleNext(ctx, text, mode);
   if (isCommand(lower, "incoming")) return handleIncoming(ctx, text, mode);
   if (isExactCommand(lower, "targets")) return handleTargets(ctx, mode);
@@ -1812,6 +1815,9 @@ async function handleAttacked(ctx, text, mode) {
     hostile_fleet: "",
     severity: "",
     verified: false,
+    covered_by: null,
+    covered_by_user_id: null,
+    covered_at: null,
     note,
     status: "active",
     created_at: now.toISOString(),
@@ -1855,6 +1861,95 @@ async function handleIncoming(ctx, text, mode) {
     lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
   }
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+async function handleDefensePool(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const pageInfo = parseIncomingPage(commandBody(text));
+  const incoming = await fetchActiveIncoming(galaxy, scopeId);
+  const filtered = filterIncomingReports(incoming, pageInfo.query, galaxy);
+  const enriched = await enrichIncomingReports(filtered, galaxy);
+  const message = formatDefensePool(galaxy, enriched, pageInfo.page, pageInfo.query);
+  return respond(ctx, mode, message, {
+    parse_mode: "HTML",
+    ...defensePoolKeyboard(enriched, pageInfo.page)
+  });
+}
+
+async function handleDefensePoolButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to view defense.");
+    return;
+  }
+  const page = Number(ctx.match?.[1] || 1) || 1;
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) {
+    await ctx.answerCbQuery("No active guild scope.");
+    return;
+  }
+  const incoming = await enrichIncomingReports(await fetchActiveIncoming(galaxy, scopeId), galaxy);
+  try {
+    return await ctx.editMessageText(formatDefensePool(galaxy, incoming, page), {
+      parse_mode: "HTML",
+      ...defensePoolKeyboard(incoming, page)
+    });
+  } catch {
+    return ctx.reply(formatDefensePool(galaxy, incoming, page), {
+      parse_mode: "HTML",
+      ...defensePoolKeyboard(incoming, page)
+    });
+  }
+}
+
+async function handleDefenseCoverButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to cover incoming.");
+    return;
+  }
+  const [, incomingId, pageText] = ctx.match || [];
+  const incoming = await fetchOne("b24_incoming", { incoming_id: incomingId }, null, false);
+  if (!incoming || incoming.status !== "active") {
+    await ctx.answerCbQuery("Incoming report not found.");
+    return;
+  }
+  if (new Date(incoming.arrival_at).getTime() <= Date.now()) {
+    await ctx.answerCbQuery("That incoming has already landed.");
+    return;
+  }
+  if (incoming.covered_by_user_id) {
+    await ctx.answerCbQuery(`Already covered by ${incoming.covered_by || "someone"}.`);
+  } else {
+    const ok = await updateRows("b24_incoming", {
+      covered_by: telegramName(ctx),
+      covered_by_user_id: telegramUserId(ctx),
+      covered_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }, {
+      map_id: `eq.${incoming.map_id}`,
+      incoming_id: `eq.${incoming.incoming_id}`
+    });
+    if (!ok) {
+      await ctx.answerCbQuery("Could not save coverage.");
+      return;
+    }
+    await ctx.answerCbQuery("Covered.");
+  }
+
+  const page = Number(pageText || 1) || 1;
+  const galaxy = galaxyFromCoord(incoming.defended_coord || incoming.attacker_coord) || defaultGalaxy;
+  const scopeId = incoming.chat_id || await operationScopeId(ctx);
+  const rows = scopeId ? await enrichIncomingReports(await fetchActiveIncoming(galaxy, scopeId), galaxy) : [incoming];
+  try {
+    return await ctx.editMessageText(formatDefensePool(galaxy, rows, page), {
+      parse_mode: "HTML",
+      ...defensePoolKeyboard(rows, page)
+    });
+  } catch {
+    return ctx.reply(`${escapeHtml(telegramName(ctx))} covered incoming at ${escapeHtml(formatClockLabel(new Date(incoming.arrival_at)))}.`, { parse_mode: "HTML" });
+  }
 }
 
 async function handleIncomingReport(ctx, text, mode) {
@@ -1941,6 +2036,9 @@ async function insertIncomingRows(ctx, rows, scopeId) {
       hostile_fleet: row.rawLine,
       severity: "",
       verified: false,
+      covered_by: null,
+      covered_by_user_id: null,
+      covered_at: null,
       note: row.note,
       status: "active",
       created_at: now,
@@ -2130,14 +2228,16 @@ async function handleBoard(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const [operations, appClaims] = await Promise.all([
+  const [operations, appClaims, incomingRows] = await Promise.all([
     fetchActiveOperations(galaxy, scopeId, kind),
-    kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId)
+    kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId),
+    kind === "attack" || kind === "scout" ? [] : fetchActiveIncoming(galaxy, scopeId)
   ]);
   const membersByOperation = await fetchMembersByOperation(operations);
   const claimsByOperation = await fetchClaimsByOperation(operations);
   const attacks = operations.filter((operation) => operation.type === "attack");
-  const defenses = operations.filter((operation) => operation.type === "defense");
+  const incomingOperationIds = new Set(incomingRows.map((row) => row.operation_id).filter(Boolean));
+  const defenses = operations.filter((operation) => operation.type === "defense" && !incomingOperationIds.has(operation.operation_id));
   const scouts = operations.filter((operation) => operation.type === "scout");
   const attackCount = attacks.length + appClaims.length;
 
@@ -2158,8 +2258,12 @@ async function handleBoard(ctx, text, mode) {
     if (!attackCount) lines.push("No active attack operations or app claims.");
   }
   if (kind !== "attack" && kind !== "scout") {
-    lines.push("", `<b>Defense</b> (${defenses.length})`);
-    lines.push(...(defenses.length ? [`<pre>${defenses.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`] : ["No active defense operations."]));
+    const defenseLines = [
+      ...incomingRows.map(formatDefenseBoardIncomingCompact),
+      ...defenses.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || []))
+    ];
+    lines.push("", `<b>Defense</b> (${defenseLines.length})`);
+    lines.push(...(defenseLines.length ? [`<pre>${defenseLines.join("\n")}</pre>`] : ["No active defense operations."]));
   }
   if (kind !== "attack" && kind !== "defense") {
     lines.push("", `<b>Scouts</b> (${scouts.length})`);
@@ -3725,6 +3829,25 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
+function defensePoolKeyboard(incoming, page = 1) {
+  const pageData = attackPoolPage(incoming, page);
+  const rows = [];
+  for (const [index, row] of pageData.rows.entries()) {
+    if (row.covered_by_user_id) continue;
+    const rowNumber = String(pageData.from + index).padStart(2, "0");
+    rows.push([Markup.button.callback(
+      `${rowNumber} cover ${defenseButtonLabel(row)}`,
+      `defcover:${row.incoming_id}:${pageData.page}`
+    )]);
+  }
+  const nav = [];
+  if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `defpool:${pageData.page - 1}`));
+  if (pageData.page < pageData.pages) nav.push(Markup.button.callback("Next", `defpool:${pageData.page + 1}`));
+  if (nav.length) rows.push(nav);
+  rows.push([Markup.button.callback("Refresh", `defpool:${pageData.page}`)]);
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
 async function formatAttackPool(operation, claims, page = 1, selectedCoord = "") {
   const targets = groupAttackTargets(operation, claims);
   const pageData = attackPoolPage(targets, page);
@@ -3765,6 +3888,35 @@ async function formatAttackPool(operation, claims, page = 1, selectedCoord = "")
   }
   if (pageData.page < pageData.pages) lines.push(`Next page: <code>!attacks ${escapeHtml(operation.short_id)} page ${pageData.page + 1}</code>`);
   lines.push(`Board: <code>$board attack</code>`);
+  return lines.join("\n");
+}
+
+function formatDefensePool(galaxy, incoming, page = 1, query = "") {
+  const pageData = attackPoolPage(incoming, page);
+  const open = incoming.filter((row) => !row.covered_by_user_id).length;
+  const covered = incoming.length - open;
+  const title = query ? `${galaxy} DEFENSE ${query}` : `${galaxy} DEFENSE`;
+  const lines = [
+    `<b>${escapeHtml(title)}</b>`,
+    `Incoming: ${incoming.length} | Open: ${open} | Covered: ${covered}`,
+    pageData.pages > 1 ? `Page: ${pageData.page}/${pageData.pages}` : "",
+    ""
+  ].filter(Boolean);
+
+  if (!incoming.length) {
+    lines.push("No active incoming reports.");
+    lines.push("Report: <code>$report B24:18:40:10 B24:34:64:40 1:12:03 8,950</code>");
+    return lines.join("\n");
+  }
+
+  lines.push("<pre>");
+  lines.push(...pageData.rows.map((row, index) => formatDefensePoolLine(row, pageData.from + index)));
+  lines.push("</pre>");
+  lines.push(`${pageData.from}-${pageData.to} of ${incoming.length} shown.`);
+  const firstOpen = pageData.rows.find((row) => !row.covered_by_user_id);
+  if (firstOpen) lines.push("", "Tap a cover button when defense is assigned.");
+  if (pageData.page < pageData.pages) lines.push(`Next page: <code>$defense page ${pageData.page + 1}</code>`);
+  lines.push(`Board: <code>$board defense</code>`);
   return lines.join("\n");
 }
 
@@ -4076,6 +4228,34 @@ function formatIncomingLine(incoming) {
     return `${eta} ${reporter}${bases}${extra ? ` ${escapeHtml(extra)}` : ""}`;
   }
   return `${eta} ${escapeHtml(incoming.attacker_coord)} ${escapeHtml(details.tag.padEnd(7))} ${escapeHtml(details.size.padStart(7))}`.trimEnd();
+}
+
+function formatDefensePoolLine(incoming, rowNumber) {
+  const eta = formatCompactEta(new Date(incoming.arrival_at)).padEnd(6, " ");
+  const defended = String(incoming.defended_coord || incoming.reporter_base_hint || "?").padEnd(12, " ");
+  const attacker = String(incoming.attacker_coord || incomingNoteParts(incoming.note).tag || "?").padEnd(12, " ");
+  const state = incoming.covered_by_user_id
+    ? `covered ${compactLabel(incoming.covered_by || "someone", 10)}`
+    : "open";
+  return escapeHtml(`${String(rowNumber).padStart(2, "0")} ${eta} ${defended} <= ${attacker} ${state}`);
+}
+
+function formatDefenseBoardIncomingCompact(incoming) {
+  const eta = formatCompactEta(new Date(incoming.arrival_at));
+  const defended = incoming.defended_coord || incoming.reporter_base_hint || "?";
+  const attacker = incoming.attacker_coord || incomingNoteParts(incoming.note).tag || "?";
+  const details = incomingNoteParts(incoming.note);
+  const state = incoming.covered_by_user_id
+    ? `covered ${compactLabel(incoming.covered_by || "someone", 10)}`
+    : "open";
+  const size = details.size ? ` ${details.size}` : "";
+  return escapeHtml(`${eta} ${defended} <= ${attacker}${size} ${state}`);
+}
+
+function defenseButtonLabel(incoming) {
+  const defended = incoming.defended_coord || incoming.reporter_base_hint || "?";
+  const attacker = incoming.attacker_coord || incomingNoteParts(incoming.note).tag || "?";
+  return compactLabel(`${formatCompactEta(new Date(incoming.arrival_at))} ${defended} <= ${attacker}`, 48);
 }
 
 function incomingNoteParts(note) {
