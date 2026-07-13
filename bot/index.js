@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.5";
+const botBuild = "2026-07-13.6";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -1312,8 +1312,10 @@ async function handleAttacks(ctx, text, mode) {
 
   lines.push(...attacks.map((operation, index) => {
     const claims = claimsByOperation.get(operation.operation_id) || [];
-    const claimed = claims.filter((claim) => claim.claimed_by_user_id).length;
-    return `${index + 1} - ${escapeHtml(formatAttackListDate(operation.arrival_at))} ${escapeHtml(attackDisplayName(operation))} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} - ${claimed}/${claims.length}`;
+    const targets = groupAttackTargets(operation, claims);
+    const claimedWaves = targets.reduce((sum, target) => sum + target.claimedWaves, 0);
+    const totalWaves = targets.reduce((sum, target) => sum + target.totalWaves, 0);
+    return `${index + 1} - ${escapeHtml(formatAttackListDate(operation.arrival_at))} ${escapeHtml(attackDisplayName(operation))} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} - ${claimedWaves}/${totalWaves || 0}`;
   }));
   lines.push("", "Add targets: <code>!attack add 1 24324510, 24351330, paste, paste</code>");
   lines.push("Open a pool: <code>!attacks 1</code>");
@@ -1598,17 +1600,44 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
     return respond(ctx, mode, `No active attack operation found for ${escapeHtml(targetClaim.shortId)}.`, { parse_mode: "HTML" });
   }
 
-  const claim = await fetchOne("b24_claims", {
+  const targetRows = await fetchRows("b24_claims", {
     operation_id: operation.operation_id,
     target_coord: targetClaim.coord,
     status: "active"
-  }, operation.map_id);
+  }, { mapId: operation.map_id, order: "arrival_at.asc", limit: 100 });
+  const slotIndex = Math.max(1, Math.round((targetClaim.arrivalAt.getTime() - new Date(operation.arrival_at).getTime()) / 3600000) + 1);
+  const waveCount = attackWaveCount(operation);
 
-  if (!claim) {
+  if (!targetRows.length) {
     return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} is not an open target on ${escapeHtml(operation.short_id)}.`, { parse_mode: "HTML" });
   }
+  if (slotIndex > waveCount) {
+    return respond(ctx, mode, `${escapeHtml(operation.short_id)} only has ${waveCount} waves.`, { parse_mode: "HTML" });
+  }
+  let claim = targetRows.find((row) => claimWaveIndex(operation, row) === slotIndex);
+  if (!claim) {
+    const template = targetRows[0];
+    claim = {
+      ...template,
+      claim_id: randomId(),
+      claimed_by: null,
+      claimed_by_user_id: null,
+      arrival_at: targetClaim.arrivalAt.toISOString(),
+      arrival_label: targetClaim.label,
+      confirmed_sent: false,
+      confirmed_at: null,
+      confirmed_by: "",
+      fleet_label: "",
+      note: "",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    if (!(await insertRow("b24_claims", claim))) {
+      return respond(ctx, mode, "Target claim failed. I could not create that wave slot in Supabase.");
+    }
+  }
   if (claim.claimed_by_user_id && claim.claimed_by_user_id !== telegramUserId(ctx)) {
-    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} is already claimed by ${escapeHtml(claim.claimed_by || "someone")}.`, { parse_mode: "HTML" });
+    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} wave ${slotIndex} is already claimed by ${escapeHtml(claim.claimed_by || "someone")}.`, { parse_mode: "HTML" });
   }
 
   const stamp = new Date().toISOString();
@@ -1626,7 +1655,7 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
   if (!ok) return respond(ctx, mode, "Target claim failed. I could not update Supabase.");
 
   await upsertOperationMember(ctx, operation, "joined", `${targetClaim.coord}${targetClaim.note ? ` ${targetClaim.note}` : ""}`);
-  return respond(ctx, mode, `${escapeHtml(telegramName(ctx))} claimed ${escapeHtml(targetClaim.coord)} for ${escapeHtml(operation.short_id)} at ${escapeHtml(targetClaim.label)}.`, { parse_mode: "HTML" });
+  return respond(ctx, mode, `${escapeHtml(telegramName(ctx))} claimed ${escapeHtml(targetClaim.coord)} W${slotIndex} for ${escapeHtml(operation.short_id)} at ${escapeHtml(targetClaim.label)}.`, { parse_mode: "HTML" });
 }
 
 async function handleScout(ctx, text, mode) {
@@ -3229,7 +3258,7 @@ function fetchOperationClaims(operation) {
   return fetchRows("b24_claims", {
     operation_id: `eq.${operation.operation_id}`,
     status: "eq.active"
-  }, { mapId: operation.map_id, order: "target_coord.asc", limit: 1000 });
+  }, { mapId: operation.map_id, order: "target_coord.asc,arrival_at.asc", limit: 1000 });
 }
 
 async function fetchOperationsForMemberships(galaxy, memberships) {
@@ -3630,32 +3659,31 @@ function attackListKeyboard(attacks) {
 }
 
 function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
-  const pageData = attackPoolPage(claims, page);
-  const waveCount = attackWaveCount(operation);
-  const waveOffsets = Array.from({ length: Math.min(waveCount, 6) }, (_, index) => index * 60);
+  const targets = groupAttackTargets(operation, claims);
+  const pageData = attackPoolPage(targets, page);
+  const waveSlots = attackWaveSlots(operation).slice(0, 6);
   const rows = [];
-  for (const [index, claim] of pageData.rows.entries()) {
+  for (const [index, target] of pageData.rows.entries()) {
     const targetNumber = String(pageData.from + index).padStart(2, "0");
-    const claimState = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
-    if (claim.target_coord === selectedCoord) {
-      rows.push([Markup.button.callback(`${targetNumber} ${claim.target_coord} ${claimState}`, `attackpool:${operation.short_id}:${pageData.page}`)]);
-      if (!claim.claimed_by_user_id) {
-        rows.push(waveOffsets.slice(0, 3).map((offset, waveIndex) => (
-          Markup.button.callback(`W${waveIndex + 1}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
-        )));
-        if (waveOffsets.length > 3) {
-          rows.push(waveOffsets.slice(3).map((offset, waveIndex) => (
-            Markup.button.callback(`W${waveIndex + 4}`, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`)
-          )));
-        }
-      } else {
-        rows.push([Markup.button.callback(`${claimState} by ${compactLabel(claim.claimed_by || "someone", 24)}`, `noop:${claimState}`)]);
+    if (target.target_coord === selectedCoord) {
+      rows.push([Markup.button.callback(`${targetNumber} ${target.target_coord} ${target.state}`, `attackpool:${operation.short_id}:${pageData.page}`)]);
+      for (let i = 0; i < waveSlots.length; i += 3) {
+        rows.push(waveSlots.slice(i, i + 3).map((slot) => {
+          const waveClaim = target.byWave.get(String(slot.index));
+          const label = waveClaim?.claimed_by_user_id
+            ? `W${slot.index} ${compactLabel(waveClaim.claimed_by || "claimed", 10)}`
+            : `W${slot.index}`;
+          const action = waveClaim?.claimed_by_user_id
+            ? `noop:W${slot.index} claimed`
+            : `attacktake:${operation.short_id}:${target.target_coord}:${slot.offsetMinutes}`;
+          return Markup.button.callback(label, action);
+        }));
       }
       continue;
     }
     rows.push([Markup.button.callback(
-      `${targetNumber} ${claim.target_coord} ${claimState}`,
-      `attackpool:${operation.short_id}:${pageData.page}:${claim.target_coord}`
+      `${targetNumber} ${target.target_coord} ${target.state}`,
+      `attackpool:${operation.short_id}:${pageData.page}:${target.target_coord}`
     )]);
   }
   const nav = [];
@@ -3668,37 +3696,40 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
 }
 
 async function formatAttackPool(operation, claims, page = 1, selectedCoord = "") {
-  const pageData = attackPoolPage(claims, page);
-  const openClaims = claims.filter((claim) => !claim.claimed_by_user_id);
-  const claimedClaims = claims.filter((claim) => claim.claimed_by_user_id);
-  const sentClaims = claims.filter((claim) => claim.confirmed_sent);
+  const targets = groupAttackTargets(operation, claims);
+  const pageData = attackPoolPage(targets, page);
+  const openTargets = targets.filter((target) => target.claimedWaves < target.totalWaves);
+  const claimedWaves = targets.reduce((sum, target) => sum + target.claimedWaves, 0);
+  const sentWaves = targets.reduce((sum, target) => sum + target.sentWaves, 0);
+  const totalWaves = targets.reduce((sum, target) => sum + target.totalWaves, 0);
   const lines = [
     `<b>${escapeHtml(attackDisplayName(operation))} TARGET POOL</b>`,
     `Landing window starts: ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} (${formatEta(new Date(operation.arrival_at))})`,
     `Waves: ${attackWaveCount(operation)}`,
-    `Targets: ${claims.length} | Open: ${openClaims.length} | Claimed: ${claimedClaims.length} | Sent: ${sentClaims.length}`,
+    `Targets: ${targets.length} | Open: ${openTargets.length} | Waves claimed: ${claimedWaves}/${totalWaves} | Sent: ${sentWaves}`,
     pageData.pages > 1 ? `Page: ${pageData.page}/${pageData.pages}` : "",
     ""
   ].filter(Boolean);
 
-  if (!claims.length) {
+  if (!targets.length) {
     lines.push("No targets in this pool yet.");
     lines.push(`Add: <code>$attack add ${escapeHtml(operation.short_id)} B24:44:76:10</code>`);
     return lines.join("\n");
   }
 
-  const rows = pageData.rows.map((claim, index) => formatAttackPoolClaim(operation, claim, pageData.from + index));
+  const rows = pageData.rows.map((target, index) => formatAttackPoolClaim(operation, target, pageData.from + index));
   lines.push("<pre>");
   lines.push(...rows);
   lines.push("</pre>");
-  lines.push(`${pageData.from}-${pageData.to} of ${claims.length} shown.`);
+  lines.push(`${pageData.from}-${pageData.to} of ${targets.length} shown.`);
 
-  const firstOpen = pageData.rows.find((claim) => !claim.claimed_by_user_id) || openClaims[0];
+  const firstOpen = pageData.rows.find((target) => target.claimedWaves < target.totalWaves) || openTargets[0];
   if (firstOpen) {
     lines.push("");
-    lines.push(`Claim: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(firstOpen.target_coord)} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))}</code>`);
+    const firstOpenSlot = attackWaveSlots(operation).find((slot) => !firstOpen.byWave.get(String(slot.index))?.claimed_by_user_id) || attackWaveSlots(operation)[0];
+    lines.push(`Claim: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(firstOpen.target_coord)} ${escapeHtml(firstOpenSlot.label)}</code>`);
     lines.push(selectedCoord
-      ? `Tap a wave for ${escapeHtml(selectedCoord)}. Buttons show waves 1-${Math.min(attackWaveCount(operation), 6)}.`
+      ? `Tap an open wave for ${escapeHtml(selectedCoord)}. Buttons show waves 1-${Math.min(attackWaveCount(operation), 6)}.`
       : "Tap a target button to show its wave buttons.");
     if (attackWaveCount(operation) > 6) lines.push("Use the command for later waves.");
   }
@@ -3737,6 +3768,62 @@ function attackWaveCount(operation) {
   return Number.isInteger(waves) && waves >= 1 && waves <= 12 ? waves : 3;
 }
 
+function attackWaveSlots(operation) {
+  const baseTime = new Date(operation.arrival_at).getTime();
+  const count = attackWaveCount(operation);
+  return Array.from({ length: count }, (_, index) => {
+    const arrivalAt = new Date(baseTime + index * 60 * 60 * 1000);
+    return {
+      index: index + 1,
+      offsetMinutes: index * 60,
+      arrivalAt,
+      label: formatClockLabel(arrivalAt)
+    };
+  });
+}
+
+function claimWaveIndex(operation, claim) {
+  const baseTime = new Date(operation.arrival_at).getTime();
+  const claimTime = new Date(claim.arrival_at || operation.arrival_at).getTime();
+  if (!Number.isFinite(baseTime) || !Number.isFinite(claimTime)) return 1;
+  return Math.max(1, Math.round((claimTime - baseTime) / 3600000) + 1);
+}
+
+function claimWaveKey(operation, claim) {
+  return String(claimWaveIndex(operation, claim));
+}
+
+function groupAttackTargets(operation, claims) {
+  const grouped = new Map();
+  const slots = attackWaveSlots(operation);
+  for (const claim of claims) {
+    if (!claim.target_coord) continue;
+    if (!grouped.has(claim.target_coord)) {
+      grouped.set(claim.target_coord, {
+        target_coord: claim.target_coord,
+        region_id: claim.region_id,
+        system_id: claim.system_id,
+        claims: [],
+        byWave: new Map()
+      });
+    }
+    const group = grouped.get(claim.target_coord);
+    group.claims.push(claim);
+    group.byWave.set(claimWaveKey(operation, claim), claim);
+  }
+  return [...grouped.values()].sort((a, b) => a.target_coord.localeCompare(b.target_coord)).map((group) => {
+    const claimedSlots = slots.filter((slot) => group.byWave.get(String(slot.index))?.claimed_by_user_id);
+    const sentSlots = slots.filter((slot) => group.byWave.get(String(slot.index))?.confirmed_sent);
+    return {
+      ...group,
+      totalWaves: slots.length,
+      claimedWaves: claimedSlots.length,
+      sentWaves: sentSlots.length,
+      state: sentSlots.length === slots.length ? "sent" : claimedSlots.length === slots.length ? "full" : claimedSlots.length ? `${claimedSlots.length}/${slots.length}` : "open"
+    };
+  });
+}
+
 function formatAttackListDate(value) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "unknown date";
@@ -3768,13 +3855,12 @@ function newestAttackPlan(attacks) {
   })[0] || null;
 }
 
-function formatAttackPoolClaim(operation, claim, number = 0) {
+function formatAttackPoolClaim(operation, target, number = 0) {
   const label = number ? `${String(number).padStart(2, "0")} ` : "";
-  const target = String(claim.target_coord || "?").padEnd(12, " ");
-  const clock = formatClockLabel(new Date(claim.arrival_at || operation.arrival_at)).padEnd(5, " ");
-  const state = claim.confirmed_sent ? "sent" : claim.claimed_by_user_id ? "claimed" : "open";
-  const who = compactLabel(claim.claimed_by || "", 12).padEnd(12, " ");
-  return escapeHtml(`${label}${target} ${clock} ${state.padEnd(7, " ")} ${who}`.trimEnd());
+  const coord = String(target.target_coord || "?").padEnd(12, " ");
+  const clock = formatClockLabel(new Date(operation.arrival_at)).padEnd(5, " ");
+  const state = String(target.state || "open").padEnd(7, " ");
+  return escapeHtml(`${label}${coord} ${clock} ${state}`.trimEnd());
 }
 
 function formatClaimLine(claim) {
@@ -3792,9 +3878,10 @@ function formatOperationLine(operation, members = [], claims = []) {
   const sent = stateCounts.sent || 0;
   const ready = stateCounts.ready || 0;
   const joined = activeMembers.length;
-  const targetSummary = claims.length
-    ? ` - ${claims.filter((claim) => claim.claimed_by_user_id).length}/${claims.length} targets claimed`
-    : "";
+  const targets = operation.type === "attack" && claims.length ? groupAttackTargets(operation, claims) : [];
+  const claimedWaves = targets.reduce((sum, targetRow) => sum + targetRow.claimedWaves, 0);
+  const totalWaves = targets.reduce((sum, targetRow) => sum + targetRow.totalWaves, 0);
+  const targetSummary = totalWaves ? ` - ${claimedWaves}/${totalWaves} waves claimed` : "";
   const claimLines = operation.type === "attack" && claims.length
     ? claims.slice(0, 6).map((claim) => {
       const claimer = claim.claimed_by ? ` by ${claim.claimed_by}` : " open";
@@ -3831,13 +3918,17 @@ function formatBoardOperationCompact(operation, members = [], claims = []) {
   const target = operation.target_coord || "?";
   if (operation.type === "attack" && !operation.target_coord && claims.length) {
     const name = compactLabel(attackDisplayName(operation), 14).padEnd(14, " ");
-    const claimSummary = `c${String(claims.filter((claim) => claim.claimed_by_user_id).length).padStart(2, " ")}/${String(claims.length).padStart(2, " ")}`;
+    const targets = groupAttackTargets(operation, claims);
+    const claimedWaves = targets.reduce((sum, attackTarget) => sum + attackTarget.claimedWaves, 0);
+    const totalWaves = targets.reduce((sum, attackTarget) => sum + attackTarget.totalWaves, 0);
+    const claimSummary = `c${String(claimedWaves).padStart(2, " ")}/${String(totalWaves).padStart(2, " ")}`;
     return escapeHtml(`${eta} ${id} ${name} ${claimSummary} j${joined} r${ready} s${sent}`);
   }
   const base = `${eta} ${id} ${target}`;
-  const claimSummary = claims.length
-    ? ` c${String(claims.filter((claim) => claim.claimed_by_user_id).length).padStart(2, " ")}/${String(claims.length).padStart(2, " ")}`
-    : "";
+  const targets = claims.length ? groupAttackTargets(operation, claims) : [];
+  const claimedWaves = targets.reduce((sum, attackTarget) => sum + attackTarget.claimedWaves, 0);
+  const totalWaves = targets.reduce((sum, attackTarget) => sum + attackTarget.totalWaves, 0);
+  const claimSummary = totalWaves ? ` c${String(claimedWaves).padStart(2, " ")}/${String(totalWaves).padStart(2, " ")}` : "";
   return escapeHtml(`${base} j${joined} r${ready} s${sent}${claimSummary}`);
 }
 
@@ -3902,14 +3993,16 @@ async function formatOperationStatus(operation, members) {
   const activeMembers = members.filter((member) => member.state !== "withdrawn");
   if (operation.type === "attack" && !operation.target_coord) {
     const claims = await fetchOperationClaims(operation);
-    const claimed = claims.filter((claim) => claim.claimed_by_user_id).length;
-    const sent = claims.filter((claim) => claim.confirmed_sent).length;
+    const targets = groupAttackTargets(operation, claims);
+    const claimed = targets.reduce((sum, target) => sum + target.claimedWaves, 0);
+    const sent = targets.reduce((sum, target) => sum + target.sentWaves, 0);
+    const totalWaves = targets.reduce((sum, target) => sum + target.totalWaves, 0);
     const lines = [
       `<b>${escapeHtml(operation.short_id)} ATTACK PLAN</b>`,
       `Name: ${escapeHtml(attackDisplayName(operation))}`,
       `Landing: ${formatEta(new Date(operation.arrival_at))}`,
       `Waves: ${attackWaveCount(operation)}`,
-      `Targets: ${claims.length} | Claimed: ${claimed} | Sent: ${sent}`,
+      `Targets: ${targets.length} | Waves claimed: ${claimed}/${totalWaves} | Sent: ${sent}`,
       `Commander: ${escapeHtml(operation.commander_label || "Unknown")}`,
       "",
       `<b>Members</b> (${activeMembers.length})`
