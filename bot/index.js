@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.42";
+const botBuild = "2026-07-12.43";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -99,7 +99,7 @@ bot.action(/^op:(join|ready|sent|leave|status|close):(.+)$/, handleOperationButt
 bot.action(/^intel:(B\d{2}:\d{2}:\d{2}(?::\d{2})?)$/, handleIntelButton);
 bot.action(/^bases:(.+)$/, handleBasesButton);
 bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
-bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})$/, handleAttackPoolButton);
+bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?$/, handleAttackPoolButton);
 bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})$/, handleAttackTakeButton);
 bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
 
@@ -1286,14 +1286,15 @@ async function handleAttacks(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const body = commandBody(text).trim();
+  const pageInfo = parsePageFromQuery(commandBody(text));
+  const body = pageInfo.query.trim();
   const shortId = normalizeShortId(body.match(/^([A-Z]-?[A-Z0-9]{3,8})$/i)?.[1] || "");
-  if (shortId) return handleAttackPool(ctx, shortId, mode);
+  if (shortId) return handleAttackPool(ctx, shortId, mode, pageInfo.page);
   const attackNumber = parseAttackNumber(body);
   if (attackNumber) {
     const operation = await findAttackByNumber(galaxy, scopeId, attackNumber);
     if (!operation) return respond(ctx, mode, `No active attack #${attackNumber} found.`);
-    return handleAttackPool(ctx, operation.short_id, mode);
+    return handleAttackPool(ctx, operation.short_id, mode, pageInfo.page);
   }
   if (/^clear$/i.test(body)) {
     return respond(ctx, mode, "Use <code>$standdown A-12345 reason</code> to close one attack plan. <code>$attacks</code> only lists plans.", { parse_mode: "HTML" });
@@ -1422,17 +1423,17 @@ async function handleAttackPlan(ctx, plan, mode) {
   });
 }
 
-async function handleAttackPool(ctx, shortId, mode) {
+async function handleAttackPool(ctx, shortId, mode, page = 1) {
   const operation = await findOperation(ctx, shortId);
   if (!operation || operation.type !== "attack") {
     return respond(ctx, mode, `No active attack plan found for ${escapeHtml(shortId)}.`, { parse_mode: "HTML" });
   }
 
   const claims = await fetchOperationClaims(operation);
-  const message = await formatAttackPool(operation, claims);
+  const message = await formatAttackPool(operation, claims, page);
   return respond(ctx, mode, message, {
     parse_mode: "HTML",
-    ...attackPoolKeyboard(operation, claims)
+    ...attackPoolKeyboard(operation, claims, page)
   });
 }
 
@@ -1494,7 +1495,8 @@ async function handleAttackPoolButton(ctx) {
     await ctx.answerCbQuery("You do not have permission for attack plans.");
     return;
   }
-  const [, shortId] = ctx.match || [];
+  const [, shortId, pageText] = ctx.match || [];
+  const page = Math.max(1, Number(pageText || 1));
   const operation = await findOperation(ctx, shortId);
   if (!operation || operation.type !== "attack") {
     await ctx.answerCbQuery("Attack plan not found.");
@@ -1502,9 +1504,9 @@ async function handleAttackPoolButton(ctx) {
   }
   await ctx.answerCbQuery(`Opening ${operation.short_id}`);
   const claims = await fetchOperationClaims(operation);
-  return ctx.reply(await formatAttackPool(operation, claims), {
+  return ctx.reply(await formatAttackPool(operation, claims, page), {
     parse_mode: "HTML",
-    ...attackPoolKeyboard(operation, claims)
+    ...attackPoolKeyboard(operation, claims, page)
   });
 }
 
@@ -3617,10 +3619,11 @@ function attackListKeyboard(attacks) {
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
-function attackPoolKeyboard(operation, claims) {
+function attackPoolKeyboard(operation, claims, page = 1) {
+  const pageData = attackPoolPage(claims, page);
   const waveCount = attackWaveCount(operation);
   const waveOffsets = Array.from({ length: Math.min(waveCount, 6) }, (_, index) => index * 60);
-  const openClaims = claims.filter((claim) => !claim.claimed_by_user_id).slice(0, Math.max(1, Math.floor(12 / Math.max(1, waveOffsets.length))));
+  const openClaims = pageData.rows.filter((claim) => !claim.claimed_by_user_id);
   const rows = [];
   for (const claim of openClaims) {
     rows.push(waveOffsets.map((offset, index) => {
@@ -3628,12 +3631,17 @@ function attackPoolKeyboard(operation, claims) {
       return Markup.button.callback(label, `attacktake:${operation.short_id}:${claim.target_coord}:${offset}`);
     }));
   }
+  const nav = [];
+  if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `attackpool:${operation.short_id}:${pageData.page - 1}`));
+  if (pageData.page < pageData.pages) nav.push(Markup.button.callback("Next", `attackpool:${operation.short_id}:${pageData.page + 1}`));
+  if (nav.length) rows.push(nav);
   if (operation.target_coord) rows.push([Markup.button.url("Open First Target", mapUrl(galaxyFromCoord(operation.target_coord), operation.target_coord))]);
   rows.push([Markup.button.callback("Status", `op:status:${operation.operation_id}`)]);
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
-async function formatAttackPool(operation, claims) {
+async function formatAttackPool(operation, claims, page = 1) {
+  const pageData = attackPoolPage(claims, page);
   const openClaims = claims.filter((claim) => !claim.claimed_by_user_id);
   const claimedClaims = claims.filter((claim) => claim.claimed_by_user_id);
   const sentClaims = claims.filter((claim) => claim.confirmed_sent);
@@ -3642,6 +3650,7 @@ async function formatAttackPool(operation, claims) {
     `Landing window starts: ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} (${formatEta(new Date(operation.arrival_at))})`,
     `Waves: ${attackWaveCount(operation)}`,
     `Targets: ${claims.length} | Open: ${openClaims.length} | Claimed: ${claimedClaims.length} | Sent: ${sentClaims.length}`,
+    pageData.pages > 1 ? `Page: ${pageData.page}/${pageData.pages}` : "",
     ""
   ].filter(Boolean);
 
@@ -3651,20 +3660,36 @@ async function formatAttackPool(operation, claims) {
     return lines.join("\n");
   }
 
-  const rows = claims.slice(0, 30).map((claim) => formatAttackPoolClaim(operation, claim));
+  const rows = pageData.rows.map((claim) => formatAttackPoolClaim(operation, claim));
   lines.push("<pre>");
   lines.push(...rows);
   lines.push("</pre>");
-  if (claims.length > rows.length) lines.push(`${rows.length}/${claims.length} shown.`);
+  lines.push(`${pageData.from}-${pageData.to} of ${claims.length} shown.`);
 
-  const firstOpen = openClaims[0];
+  const firstOpen = pageData.rows.find((claim) => !claim.claimed_by_user_id) || openClaims[0];
   if (firstOpen) {
     lines.push("");
     lines.push(`Claim: <code>!take ${escapeHtml(operation.short_id)} ${escapeHtml(firstOpen.target_coord)} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))}</code>`);
     lines.push("Buttons claim hourly waves from the landing time.");
   }
+  if (pageData.page < pageData.pages) lines.push(`Next page: <code>!attacks ${escapeHtml(operation.short_id)} page ${pageData.page + 1}</code>`);
   lines.push(`Board: <code>$board attack</code>`);
   return lines.join("\n");
+}
+
+function attackPoolPage(claims, page = 1) {
+  const pageSize = 8;
+  const pages = Math.max(1, Math.ceil(claims.length / pageSize));
+  const safePage = Math.min(Math.max(1, Number(page) || 1), pages);
+  const start = (safePage - 1) * pageSize;
+  const rows = claims.slice(start, start + pageSize);
+  return {
+    page: safePage,
+    pages,
+    rows,
+    from: claims.length ? start + 1 : 0,
+    to: Math.min(claims.length, start + rows.length)
+  };
 }
 
 function attackNote(name, waves) {
