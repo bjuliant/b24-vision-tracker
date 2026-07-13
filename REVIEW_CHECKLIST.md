@@ -126,6 +126,8 @@ Ordered so each step supports the next one.
 Ordered by the natural Astro Empires progression: gather intel, expand, coordinate operations, then add heavier planners.
 
 - [x] Identify that Lysander's product goal is shifting from "stores guild info" to "tells each person what to do next."
+- [x] Adopt the product rule: automate bookkeeping, assist judgment, require human ownership for decisions and in-game actions.
+- [x] Update Mini App wording so bulk parsed targets do not imply autopilot/finalization; current behavior is explicitly "claim unclaimed rows under your name."
 - [x] Add first-pass `!next` action center using existing data: personal operations, incoming near saved bases, saved-base count, and scoped views such as `!next combat`, `!next empire`, and `!next 24h`.
 - [x] Make `!me` a profile/dashboard entry instead of only dumping bases.
 - [x] Implement `!me bases` as the base-only view already promised in help.
@@ -137,12 +139,19 @@ Ordered by the natural Astro Empires progression: gather intel, expand, coordina
 - [ ] Add research, production, and unlock-path planning after build planning has base data.
 - [ ] Upgrade astro search into purpose-based scoring and expansion reservations.
 - [ ] Add end-to-end expansion workflow: reserve, outpost sent, base founded, role assigned.
+- [ ] Replace Mini App "claim every pasted row as me" with a true open target pool / campaign target model.
+- [ ] Add draft/publish attack lifecycle so officers can review target pools before members claim responsibility.
+- [x] Add officer command `$attacks` to list active attack plans.
+- [x] Add officer command `$attack add [ID] [coord...]` to add base targets to an existing attack plan as open/unclaimed rows.
+- [x] Add `$bases` officer shortcut buttons that add listed bases to the first active attack plan.
+- [ ] Store observations separately from decisions: source, observer, observed time, imported time, confidence, and conflicts.
 - [ ] Implement watchlists and smart alerts for bases, players, guilds, sectors, operations, stale intel, and incoming.
 - [ ] Add role-specific `!digest` and `$briefing` outputs.
 - [ ] Add immutable intel history, diffs, source records, and confidence scoring.
 - [ ] Add scout coverage and route planning.
 - [ ] Add defense triage and responder matching.
 - [ ] Add operation requirements and auto-assignment board.
+- [ ] Add result/debrief state separation: planned, claimed, ready, sent, arrived, report received, verified result.
 - [ ] Add battle/counter/wave/profit calculators after formulas and assumptions are agreed.
 - [ ] Add result/debrief/rebuild/debris settlement workflows.
 - [ ] Add occupation/unrest/revolt/liberation tracking.
