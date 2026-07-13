@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-12.43";
+const botBuild = "2026-07-12.44";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3613,7 +3613,7 @@ function attackPlanKeyboard(operation, claims) {
 function attackListKeyboard(attacks) {
   const rows = attacks.slice(0, 8).map((operation, index) => [
     Markup.button.callback(`Open ${index + 1}`, `attackpool:${operation.short_id}`),
-    Markup.button.callback("Status", `op:status:${operation.operation_id}`),
+    Markup.button.callback("Stand down", `op:close:${operation.operation_id}`),
     Markup.button.url("Open", mapUrl(galaxyFromCoord(operation.target_coord || defaultGalaxy), operation.target_coord || ""))
   ]);
   return rows.length ? Markup.inlineKeyboard(rows) : {};
@@ -3798,6 +3798,11 @@ function formatBoardOperationCompact(operation, members = [], claims = []) {
   }
 
   const target = operation.target_coord || "?";
+  if (operation.type === "attack" && !operation.target_coord && claims.length) {
+    const name = compactLabel(attackDisplayName(operation), 14).padEnd(14, " ");
+    const claimSummary = `c${String(claims.filter((claim) => claim.claimed_by_user_id).length).padStart(2, " ")}/${String(claims.length).padStart(2, " ")}`;
+    return escapeHtml(`${eta} ${id} ${name} ${claimSummary} j${joined} r${ready} s${sent}`);
+  }
   const base = `${eta} ${id} ${target}`;
   const claimSummary = claims.length
     ? ` c${String(claims.filter((claim) => claim.claimed_by_user_id).length).padStart(2, " ")}/${String(claims.length).padStart(2, " ")}`
@@ -3864,6 +3869,24 @@ async function coordIntelSummary(coord) {
 async function formatOperationStatus(operation, members) {
   const intel = await operationIntelSummary(operation);
   const activeMembers = members.filter((member) => member.state !== "withdrawn");
+  if (operation.type === "attack" && !operation.target_coord) {
+    const claims = await fetchOperationClaims(operation);
+    const claimed = claims.filter((claim) => claim.claimed_by_user_id).length;
+    const sent = claims.filter((claim) => claim.confirmed_sent).length;
+    const lines = [
+      `<b>${escapeHtml(operation.short_id)} ATTACK PLAN</b>`,
+      `Name: ${escapeHtml(attackDisplayName(operation))}`,
+      `Landing: ${formatEta(new Date(operation.arrival_at))}`,
+      `Waves: ${attackWaveCount(operation)}`,
+      `Targets: ${claims.length} | Claimed: ${claimed} | Sent: ${sent}`,
+      `Commander: ${escapeHtml(operation.commander_label || "Unknown")}`,
+      "",
+      `<b>Members</b> (${activeMembers.length})`
+    ];
+    lines.push(...(activeMembers.length ? activeMembers.map(formatOperationMemberLine) : ["No one joined yet."]));
+    lines.push("", `Pool: <code>!attacks ${escapeHtml(operation.short_id)}</code>`);
+    return lines.join("\n");
+  }
   const lines = [
     `<b>${escapeHtml(operation.short_id)} ${escapeHtml(operation.type.toUpperCase())}</b>`,
     operation.type === "defense"
