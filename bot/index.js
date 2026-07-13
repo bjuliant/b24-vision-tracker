@@ -41,7 +41,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.7";
+const botBuild = "2026-07-13.8";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -100,7 +100,7 @@ bot.action(/^intel:(B\d{2}:\d{2}:\d{2}(?::\d{2})?)$/, handleIntelButton);
 bot.action(/^bases:(.+)$/, handleBasesButton);
 bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
 bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?(?::(B\d{2}:\d{2}:\d{2}:\d{2}))?$/, handleAttackPoolButton);
-bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})$/, handleAttackTakeButton);
+bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})(?::(\d{1,3}))?$/, handleAttackTakeButton);
 bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
 bot.action(/^noop:(.+)$/, async (ctx) => ctx.answerCbQuery(String(ctx.match?.[1] || "").slice(0, 80)));
 
@@ -1527,7 +1527,7 @@ async function handleAttackTakeButton(ctx) {
     await ctx.answerCbQuery("You do not have permission to claim targets.");
     return;
   }
-  const [, shortId, coord, offsetText] = ctx.match || [];
+  const [, shortId, coord, offsetText, pageText] = ctx.match || [];
   const operation = await findOperation(ctx, shortId);
   if (!operation || operation.type !== "attack") {
     await ctx.answerCbQuery("Attack plan not found.");
@@ -1536,14 +1536,29 @@ async function handleAttackTakeButton(ctx) {
   const offsetMinutes = Number(offsetText || 0);
   const arrivalAt = new Date(new Date(operation.arrival_at).getTime() + offsetMinutes * 60 * 1000);
   const label = formatClockLabel(arrivalAt);
-  await ctx.answerCbQuery(`Claiming ${coord} at ${label}`);
-  return handleTargetClaim(ctx, {
+  const result = await handleTargetClaim(ctx, {
     shortId: operation.short_id,
     coord,
     arrivalAt,
     label,
     note: offsetMinutes ? `wave +${offsetMinutes}m` : "wave 1"
-  }, "$");
+  }, "$", { silent: true });
+  if (!result?.ok) {
+    await ctx.answerCbQuery(result?.message || "Claim failed.");
+    return;
+  }
+  await ctx.answerCbQuery(`Claimed ${coord} W${result.slotIndex}`);
+  const claims = await fetchOperationClaims(operation);
+  const page = Number(pageText || 1) || 1;
+  const message = await formatAttackPool(operation, claims, page, coord);
+  try {
+    return await ctx.editMessageText(message, {
+      parse_mode: "HTML",
+      ...attackPoolKeyboard(operation, claims, page, coord)
+    });
+  } catch (error) {
+    return ctx.reply(result.message, { parse_mode: "HTML" });
+  }
 }
 
 async function addTargetsToAttack(ctx, operation, coords, note = "") {
@@ -1594,10 +1609,11 @@ async function addTargetsToAttack(ctx, operation, coords, note = "") {
   return { added, skipped };
 }
 
-async function handleTargetClaim(ctx, targetClaim, mode) {
+async function handleTargetClaim(ctx, targetClaim, mode, options = {}) {
   const operation = await findOperation(ctx, targetClaim.shortId);
   if (!operation || operation.type !== "attack") {
-    return respond(ctx, mode, `No active attack operation found for ${escapeHtml(targetClaim.shortId)}.`, { parse_mode: "HTML" });
+    const message = `No active attack operation found for ${targetClaim.shortId}.`;
+    return options.silent ? { ok: false, message } : respond(ctx, mode, escapeHtml(message), { parse_mode: "HTML" });
   }
 
   let targetRows = await fetchRows("b24_claims", {
@@ -1613,10 +1629,12 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
   const waveCount = attackWaveCount(operation);
 
   if (!targetRows.length) {
-    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} is not an open target on ${escapeHtml(operation.short_id)}.`, { parse_mode: "HTML" });
+    const message = `${targetClaim.coord} is not an open target on ${operation.short_id}.`;
+    return options.silent ? { ok: false, message } : respond(ctx, mode, escapeHtml(message), { parse_mode: "HTML" });
   }
   if (slotIndex > waveCount) {
-    return respond(ctx, mode, `${escapeHtml(operation.short_id)} only has ${waveCount} waves.`, { parse_mode: "HTML" });
+    const message = `${operation.short_id} only has ${waveCount} waves.`;
+    return options.silent ? { ok: false, message } : respond(ctx, mode, escapeHtml(message), { parse_mode: "HTML" });
   }
   let claim = targetRows.find((row) => claimWaveIndex(operation, row) === slotIndex);
   if (!claim) {
@@ -1637,11 +1655,13 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
       updated_at: new Date().toISOString()
     };
     if (!(await insertRow("b24_claims", claim))) {
-      return respond(ctx, mode, "Target claim failed. I could not create that wave slot in Supabase.");
+      const message = "Target claim failed. I could not create that wave slot in Supabase.";
+      return options.silent ? { ok: false, message } : respond(ctx, mode, message);
     }
   }
   if (claim.claimed_by_user_id && claim.claimed_by_user_id !== telegramUserId(ctx)) {
-    return respond(ctx, mode, `${escapeHtml(targetClaim.coord)} wave ${slotIndex} is already claimed by ${escapeHtml(claim.claimed_by || "someone")}.`, { parse_mode: "HTML" });
+    const message = `${targetClaim.coord} wave ${slotIndex} is already claimed by ${claim.claimed_by || "someone"}.`;
+    return options.silent ? { ok: false, message } : respond(ctx, mode, escapeHtml(message), { parse_mode: "HTML" });
   }
 
   const stamp = new Date().toISOString();
@@ -1656,10 +1676,16 @@ async function handleTargetClaim(ctx, targetClaim, mode) {
     map_id: `eq.${operation.map_id}`,
     claim_id: `eq.${claim.claim_id}`
   });
-  if (!ok) return respond(ctx, mode, "Target claim failed. I could not update Supabase.");
+  if (!ok) {
+    const message = "Target claim failed. I could not update Supabase.";
+    return options.silent ? { ok: false, message } : respond(ctx, mode, message);
+  }
 
   await upsertOperationMember(ctx, operation, "joined", `${targetClaim.coord}${targetClaim.note ? ` ${targetClaim.note}` : ""}`);
-  return respond(ctx, mode, `${escapeHtml(telegramName(ctx))} claimed ${escapeHtml(targetClaim.coord)} W${slotIndex} for ${escapeHtml(operation.short_id)} at ${escapeHtml(targetClaim.label)}.`, { parse_mode: "HTML" });
+  const message = `${telegramName(ctx)} claimed ${targetClaim.coord} W${slotIndex} for ${operation.short_id} at ${targetClaim.label}.`;
+  return options.silent
+    ? { ok: true, message, operation, slotIndex, coord: targetClaim.coord }
+    : respond(ctx, mode, escapeHtml(message), { parse_mode: "HTML" });
 }
 
 async function handleScout(ctx, text, mode) {
@@ -3679,7 +3705,7 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
             : `W${slot.index}`;
           const action = waveClaim?.claimed_by_user_id
             ? `noop:W${slot.index} claimed`
-            : `attacktake:${operation.short_id}:${target.target_coord}:${slot.offsetMinutes}`;
+            : `attacktake:${operation.short_id}:${target.target_coord}:${slot.offsetMinutes}:${pageData.page}`;
           return Markup.button.callback(label, action);
         }));
       }
