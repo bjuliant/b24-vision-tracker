@@ -1244,7 +1244,7 @@
   async function finalizeParsedAttack() {
     const rows = parseBulkTargets(bulkTargetText.value);
     if (!rows.length) {
-      finalizeStatus.textContent = "Paste targets before finalizing.";
+      finalizeStatus.textContent = "Paste targets before claiming unclaimed rows.";
       return;
     }
     if (!attackWindowStart.value) {
@@ -1261,7 +1261,7 @@
       const note = [row.guildTags, row.player].filter(Boolean).join(" ");
       await createClaimForTarget(row.coord, note, arrivalLabel);
     }
-    finalizeStatus.textContent = `Finalized ${toClaim.length} target${toClaim.length === 1 ? "" : "s"} into live claims.`;
+    finalizeStatus.textContent = `Claimed ${toClaim.length} unclaimed target${toClaim.length === 1 ? "" : "s"} under your name.`;
     renderBulkTargets();
   }
 
@@ -1485,7 +1485,7 @@
     if (!attackWindowSummary) return;
     const options = landingWindowOptions();
     if (!options.length) {
-      attackWindowSummary.textContent = "Step 1 required before Claim or Finalize";
+      attackWindowSummary.textContent = "Step 1 required before claiming targets";
       return;
     }
     const start = options[0];
