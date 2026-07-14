@@ -3629,9 +3629,11 @@ function parseRegionCoverageQuery(query, fallbackGalaxy) {
 
 async function regionCoverage(galaxy, scopeId) {
   const mapId = galaxyToMapId(galaxy);
-  const [sectorRows, savedBases] = await Promise.all([
+  const [sectorRows, savedBases, importedBases, stances] = await Promise.all([
     fetchAllRows("b24_sectors", {}, { mapId, select: "sector_id,status,has_friendly,has_scout" }),
-    fetchAllRows("b24_user_bases", { status: "eq.active" }, { mapId, select: "region_id,base_coord" })
+    fetchAllRows("b24_user_bases", { status: "eq.active" }, { mapId, select: "region_id,base_coord" }),
+    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild" }),
+    fetchStanceMap(galaxy)
   ]);
   const covered = new Set(sectorRows
     .filter((row) => row.has_friendly || row.has_scout || row.status === "base" || row.status === "scout")
@@ -3639,6 +3641,15 @@ async function regionCoverage(galaxy, scopeId) {
     .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
   savedBases
     .map((base) => base.region_id || astroToRegion(base.base_coord || ""))
+    .filter(Boolean)
+    .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
+
+  const friendlyTags = new Set([...stances.tag.entries()]
+    .filter(([, stance]) => stance === "friend")
+    .map(([tag]) => tag));
+  importedBases
+    .filter((base) => friendlyTags.has(normalizeStanceTarget(base.guild)))
+    .map((base) => base.region_id || astroToRegion(base.coord || ""))
     .filter(Boolean)
     .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
 
@@ -4173,12 +4184,11 @@ function scoutWatchTargetKeyboard(galaxy, agenda, index, assignment, mine) {
 }
 
 function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
-  const targetCount = agenda?.operations?.length || 0;
-  const assigned = agenda?.operations?.filter((operation) => assignments.has(operation.operation_id)).length || 0;
+  const assigned = agenda?.operations?.filter((operation) => Boolean(assignments.get(operation.operation_id))).length || 0;
   const uncovered = regionsWithoutCoverage(galaxy, coverage).length;
   return [
     `<b>${escapeHtml(agenda?.name || "Region Coverage")} MAP</b>`,
-    `Uncovered: ${uncovered} | Assigned watches: ${assigned}/${targetCount}`,
+    `Uncovered: ${uncovered} | Active watch assignments: ${assigned}`,
     "",
     "🟥 needs coverage   🟩 base, scout, or watch assigned",
     "Tap a red region to take responsibility for its watch."
