@@ -3647,11 +3647,12 @@ async function regionCoverage(galaxy, scopeId) {
   const friendlyTags = new Set([...stances.tag.entries()]
     .filter(([, stance]) => stance === "friend")
     .map(([tag]) => tag));
-  importedBases
+  const friendlyBaseRegions = new Set(importedBases
     .filter((base) => friendlyTags.has(normalizeStanceTarget(base.guild)))
     .map((base) => base.region_id || astroToRegion(base.coord || ""))
     .filter(Boolean)
-    .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
+    .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`));
+  friendlyBaseRegions.forEach((region) => covered.add(region));
 
   const scoutOperations = await fetchActiveOperations(galaxy, scopeId, "scout");
   const assignments = await Promise.all(scoutOperations.map(async (operation) => {
@@ -3667,6 +3668,8 @@ async function regionCoverage(galaxy, scopeId) {
     .filter(Boolean)
     .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
 
+  covered.friendlyTags = friendlyTags;
+  covered.friendlyBaseRegions = friendlyBaseRegions;
   return covered;
 }
 
@@ -4186,9 +4189,12 @@ function scoutWatchTargetKeyboard(galaxy, agenda, index, assignment, mine) {
 function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
   const assigned = agenda?.operations?.filter((operation) => Boolean(assignments.get(operation.operation_id))).length || 0;
   const uncovered = regionsWithoutCoverage(galaxy, coverage).length;
+  const friendlyTags = [...(coverage?.friendlyTags || [])].join(", ") || "none";
+  const friendlyBaseRegions = coverage?.friendlyBaseRegions?.size || 0;
   return [
     `<b>${escapeHtml(agenda?.name || "Region Coverage")} MAP</b>`,
     `Uncovered: ${uncovered} | Active watch assignments: ${assigned}`,
+    `Friendly tags: ${escapeHtml(friendlyTags)} | Base regions: ${friendlyBaseRegions}`,
     "",
     "🟥 needs coverage   🟩 base, scout, or watch assigned",
     "Tap a red region to take responsibility for its watch."
