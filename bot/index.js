@@ -2620,7 +2620,7 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   );
   const shownFrom = Math.min(totalActionable, (pageInfo.page - 1) * 8 + 1);
   const shownTo = Math.min(totalActionable, pageInfo.page * 8);
-  if (totalActionable > 8) {
+  if (addPlan && totalActionable > 8) {
     lines.push("", `Buttons: ${shownFrom}-${shownTo} of ${totalActionable}`);
     if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(queryCommand)} page ${pageInfo.page + 1}</code>`);
   }
@@ -3663,7 +3663,7 @@ function quickSetupKeyboardRows(galaxy, query = "", enabled = false) {
   if (!enabled) return [];
   const encodedQuery = encodeURIComponent(String(query || "")).slice(0, 30);
   const attackButton = (hours) => Markup.button.callback(
-    `Attack ${hours}h`,
+    `Create attack ${hours}h`,
     `quickattack:${hours}:${galaxy}:${encodedQuery}`
   );
   const rows = [
@@ -3795,14 +3795,14 @@ function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null, att
   const pageSize = 8;
   const coords = uniqueBaseCoords(importedRows, savedRows).slice((page - 1) * pageSize, page * pageSize);
   if (!coords.length && !setupRows.length) return {};
+  // Without an active plan, Quick Setup is the only meaningful action on a base list.
+  if (!addPlan?.short_id) return setupRows.length ? Markup.inlineKeyboard(setupRows) : {};
   const addPlanNumber = addPlan ? attackNumberForOperation(attacks, addPlan) : 0;
   const rows = [...setupRows, ...coords.map((coord) => {
     const row = [
       Markup.button.callback(`Intel ${coord}`, `intel:${coord}`)
     ];
-    if (addPlan?.short_id) row.push(Markup.button.callback(`Add ${addPlanNumber || addPlan.short_id}`, `attackadd:${addPlan.short_id}:${coord}`));
-    else row.push(Markup.button.callback("Claim 4h", `claim4h:${coord}`));
-    row.push(Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord)));
+    row.push(Markup.button.callback(`Add ${addPlanNumber || addPlan.short_id}`, `attackadd:${addPlan.short_id}:${coord}`));
     return row;
   })];
   return Markup.inlineKeyboard(rows);
@@ -3885,9 +3885,8 @@ function claimListKeyboard(claims) {
 }
 
 async function intelKeyboard(coord) {
-  const rows = [[Markup.button.url("Open Map", mapUrl(galaxyFromCoord(coord), coord))]];
+  const rows = [];
   if (coord.split(":").length === 4) {
-    rows.push([Markup.button.callback("Claim 4h", `claim4h:${coord}`)]);
     const base = await fetchOne("b24_bases", { coord }, mapIdForCoord(coord));
     const ownerButtons = [];
     if (base?.guild) ownerButtons.push(Markup.button.callback(`Bases ${base.guild}`, `bases:${encodeButtonValue(base.guild)}`));
