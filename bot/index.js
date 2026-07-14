@@ -49,7 +49,8 @@ const preferredCommandAliases = {
   status: ["st", "status"],
   buildplan: ["bp", "buildplan"],
   scout: ["sc", "scout"],
-  scoutings: ["scoutings"],
+  scouts: ["scouting", "scoutings", "scouts"],
+  watches: ["watched", "watches"],
   astros: ["as", "ast", "astr", "astro", "astros"],
   sectors: ["sec", "sector", "sectors"],
   regions: ["region", "regions"],
@@ -61,7 +62,7 @@ const preferredCommandAliases = {
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
   "status", "version", "map", "wakeup", "buildplan", "g", "setgalaxy", "guild",
-  "claim", "take", "attack", "scout", "scoutings", "watches", "attacked", "sos", "intel", "astros",
+  "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
   "targets", "claimed", "mine", "me", "friend", "enemy"
@@ -233,7 +234,7 @@ async function handleText(ctx) {
 
   if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "attacks")) return handleAttacks(ctx, text, mode);
-  if (isCommand(lower, "scoutings")) return handleScoutings(ctx, text, mode);
+  if (isCommand(lower, "scouts")) return handleScoutings(ctx, text, mode);
   if (isCommand(lower, "watches")) return handleWatches(ctx, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
@@ -441,10 +442,10 @@ async function helpText(ctx, input = "") {
       "If minutes are omitted, it stays active for 4 hours.",
       "<code>$scout B24:45:21:10 240 orbit watch</code>",
       "Ask someone to park a scout at that exact enemy base coordinate.",
-      "<code>$scoutings</code>",
+      "<code>$scouts</code>",
       "Shows persistent base-watch agendas created from a base list. Officers can turn an agenda into an attack pool or cancel it.",
       "<code>!watches</code>",
-      "Shows the watch targets currently assigned to you.",
+      "Shows the watch targets currently assigned to you. <code>$scoutings</code> and <code>!watched</code> still work as aliases.",
       "<code>$sectors [APP]</code>",
       "Find sectors near APP-held sectors that do not already contain an APP base.",
       "<code>$sectors B24 near [APP] not [APP]</code>",
@@ -627,7 +628,7 @@ async function helpText(ctx, input = "") {
     "<code>!ready [ID]</code>  <code>!sent [ID]</code>  <code>!leave [ID]</code>",
     "",
     "<b>MANAGE</b>",
-    "<code>$board [attack|defense|scout]</code>  <code>$scoutings</code>  <code>/board</code>",
+    "<code>$board [attack|defense|scout]</code>  <code>$scouts</code>  <code>/board</code>",
     "<code>$op [ID]</code>  <code>$standdown [ID] [reason]</code>",
     "",
     "<b>INTEL</b>",
@@ -762,7 +763,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|buildplan|bp|claim|take|attack|attacks|scoutings|watches|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -845,7 +846,7 @@ function isProtectedOperationalCommand(lowerText) {
     "map",
     "buildplan",
     "scout",
-    "scoutings",
+    "scouts",
     "watches",
     "attacked",
     "sos",
@@ -892,7 +893,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "map",
     "buildplan",
     "scout",
-    "scoutings",
+    "scouts",
     "watches",
     "attacked",
     "sos",
@@ -936,7 +937,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "scoutings", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1753,7 +1754,7 @@ async function handleQuickScoutButton(ctx) {
   return ctx.reply([
     `<b>${escapeHtml(agendaName)} created</b>`,
     `${created}/${targets.length} exact-base watches are active until cancelled.`,
-    `Open: <code>$scoutings</code>`,
+    `Open: <code>$scouts</code>`,
     `When intel is ready, create an attack from this same target pool.`
   ].join("\n"), { parse_mode: "HTML" });
 }
@@ -1795,7 +1796,7 @@ async function handleRegionAgendaButton(ctx) {
   return ctx.reply([
     `<b>${escapeHtml(agendaName)} created</b>`,
     `${created}/${targets.length} uncovered regions are active until cancelled.`,
-    "Members can take responsibility for each region with <code>$scoutings</code>."
+    "Members can take responsibility for each region with <code>$scouts</code>."
   ].join("\n"), { parse_mode: "HTML" });
 }
 
@@ -1836,7 +1837,7 @@ async function handleWatches(ctx, mode) {
     });
   }
   if (!watches.length) {
-    return respond(ctx, mode, `<b>${escapeHtml(galaxy)} My Watches</b>\nNo active watch assignments. Open <code>$scoutings</code> to take one.`, { parse_mode: "HTML" });
+    return respond(ctx, mode, `<b>${escapeHtml(galaxy)} My Watches</b>\nNo active watch assignments. Open <code>$scouts</code> to take one.`, { parse_mode: "HTML" });
   }
   const regionWatches = watches.filter((watch) => /^B\d{2}:\d{1,2}$/.test(String(watch.coord || "")));
   const baseWatches = watches.filter((watch) => !regionWatches.includes(watch));
@@ -1851,7 +1852,7 @@ async function handleWatches(ctx, mode) {
   if (baseWatches.length) {
     lines.push("", `<b>Base Watches (${baseWatches.length})</b>`, ...baseWatches.map(formatWatch));
   }
-  lines.push("", "Use <code>$scoutings</code> to open an agenda or release a watch.");
+  lines.push("", "Use <code>$scouts</code> to open an agenda or release a watch.");
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
