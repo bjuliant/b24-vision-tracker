@@ -45,7 +45,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-14.4";
+const botBuild = "2026-07-14.5";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -6285,12 +6285,14 @@ function miniAppContext(session) {
 async function miniAppCoverage(session) {
   const galaxy = session.g;
   const mapId = galaxyToMapId(galaxy);
-  const [bases, stances, agendas] = await Promise.all([
-    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild" }),
+  const [bases, stances, scoutOperations] = await Promise.all([
+    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild", order: "coord.asc" }),
     fetchStanceMap(galaxy),
-    fetchScoutAgendas(galaxy, session.c)
+    fetchActiveOperations(galaxy, session.c, "scout")
   ]);
-  const assignmentEntries = await Promise.all(agendas.flatMap((agenda) => agenda.operations).map(async (operation) => {
+  const assignmentEntries = await Promise.all(scoutOperations
+    .filter((operation) => scoutAgendaInfo(operation) && /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")))
+    .map(async (operation) => {
     const members = await fetchOperationMembers(operation);
     const watch = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
     return [operation.target_coord, watch || null];
