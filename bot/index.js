@@ -41,14 +41,17 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-13.9";
+const botBuild = "2026-07-14.2";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
-  onboardme: ["on", "onboard", "onboardme"],
+  onboardme: ["enlist", "on", "onboard", "onboardme"],
   status: ["st", "status"],
+  buildplan: ["bp", "buildplan"],
   scout: ["sc", "scout"],
+  scoutings: ["scoutings"],
   astros: ["as", "ast", "astr", "astro", "astros"],
+  sectors: ["sec", "sector", "sectors"],
   report: ["rep", "repo", "repor", "report"],
   attacks: ["attacks"],
   friend: ["fr", "fri", "frie", "frien", "friend"],
@@ -56,12 +59,31 @@ const preferredCommandAliases = {
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
-  "status", "version", "map", "wakeup", "g", "setgalaxy", "guild",
-  "claim", "take", "attack", "scout", "attacked", "sos", "intel", "astros",
-  "stale", "score", "bases", "op", "join", "respond", "ready", "sent", "leave",
+  "status", "version", "map", "wakeup", "buildplan", "g", "setgalaxy", "guild",
+  "claim", "take", "attack", "scout", "scoutings", "attacked", "sos", "intel", "astros",
+  "stale", "score", "bases", "sectors", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
   "targets", "claimed", "mine", "me", "friend", "enemy"
 ];
+
+const buildPlans = new Map([
+  [1, { scope: "your current base", build: "8 MR / 4 RF / 8 SY / 5 SPO / 3 CM / 5 CM", next: 2 }],
+  [2, { scope: "BOTH bases", build: "7 MR / 2 RF / 2 SY / 5 SPO / 5 CM", next: 3 }],
+  [3, { scope: "ALL 3 bases", build: "8 MR / 3 RF / 3 SY / 5 SPO / 7 CM", next: 4 }],
+  [4, { scope: "ALL 4 bases", build: "9 MR / 4 RF / 4 SY / 5 SPO / 8 CM", next: 5 }],
+  [5, { scope: "ALL 5 bases", build: "10 MR / 5 RF / 4 SY / 10 SPO / 9 CM", next: 6 }],
+  [6, { scope: "ALL 6 bases", build: "11 MR / 6 RF / 5 SY / 1 NF / 2 EC / 10 SPO / 10 CM", next: 7 }],
+  [7, { scope: "ALL 7 bases", build: "12 MR / 7 RF / 6 SY / 2 NF / 3 EC / 10 SPO / 11 CM", next: 8 }],
+  [8, { scope: "ALL 8 bases", build: "13 MR / 8 RF / 8 SY / 3 NF / 4 EC / 15 SPO / 12 CM", next: 9 }],
+  [9, { scope: "ALL 9 bases", build: "14 MR / 9 RF / 8 SY / 4 NF / 5 EC / 15 SPO / 14 CM", next: 10 }],
+  [10, { scope: "ALL 10 bases", build: "15 MR / 10 RF / 8 SY / 5 NF / 6 EC / 15 SPO / 15 CM", next: 11 }],
+  [11, { scope: "ALL 11 bases", build: "16 MR / 11 RF / 8 SY / 6 NF / 7 EC / 1 AF / 15 SPO / 16 CM", next: 12 }],
+  [12, { scope: "ALL 12 bases", build: "17 MR / 12 RF / 8 SY / 7 NF / 8 EC / 2 AF / 20 SPO / 17 CM", next: 13 }],
+  [13, { scope: "ALL 13 bases", build: "20 MR / 15 RF / 16 SY / 10 NF / 11 EC / 5 AF / 20 SPO / 20 CM / 3 CAP", next: 14 }],
+  [14, { scope: "ALL 14 bases", build: "22 MR / 17 RF / 16 SY / 1 OSY / 12 NF / 14 EC / 7 AF / 20 SPO / 21 CM / 5 CAP", next: 15 }],
+  [15, { scope: "ALL 15 bases", build: "24 MR / 17 RF / 16 SY / 4 OSY / 14 NF / 14 EC / 9 AF / 25 SPO / 22 CM / 7 CAP", next: 16 }],
+  [16, { scope: "ALL 16 bases", build: "25 MR / 17 RF / 18 SY / 5 OSY / 15 NF / 16 EC / 10 AF / 25 SPO / 22 CM / 9 CAP", next: 17 }]
+]);
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -81,7 +103,7 @@ bot.catch((error, ctx) => {
   }
 });
 
-bot.start(sendMapButton);
+bot.start(handleStart);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
 bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }));
@@ -102,8 +124,14 @@ bot.action(/^claim4h:(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleClaimButton);
 bot.action(/^attackpool:([A-Z]-[A-Z0-9]{3,8})(?::(\d{1,3}))?(?::(B\d{2}:\d{2}:\d{2}:\d{2}))?$/, handleAttackPoolButton);
 bot.action(/^attacktake:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2}):(\d{1,3})(?::(\d{1,3}))?$/, handleAttackTakeButton);
 bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handleAttackAddButton);
+bot.action(/^quickattack:(\d):(B\d{2}):(.*)$/, handleQuickAttackButton);
+bot.action(/^quickscout:(B\d{2}):(.*)$/, handleQuickScoutButton);
+bot.action(/^scoutagenda:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaButton);
+bot.action(/^scoutagendaattack:(B\d{2}):(G-[A-Z0-9]{5}):(\d)$/, handleScoutAgendaAttackButton);
+bot.action(/^scoutagendacancel:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaCancelButton);
 bot.action(/^defpool:(\d{1,3})$/, handleDefensePoolButton);
 bot.action(/^defcover:([^:]+):(\d{1,3})$/, handleDefenseCoverButton);
+bot.action("quick:next", handleQuickNextButton);
 bot.action(/^noop:(.+)$/, async (ctx) => ctx.answerCbQuery(String(ctx.match?.[1] || "").slice(0, 80)));
 
 async function sendMapButton(ctx) {
@@ -118,6 +146,42 @@ async function sendMapButton(ctx) {
       Markup.button.url("Open Map", mapUrl(galaxy, "", scopeId))
     ])
   );
+}
+
+async function handleStart(ctx) {
+  const hasAccess = await userCanUseSensitiveCommands(ctx);
+  const lines = [
+    "<b>Lysander</b>",
+    "Guild intel and operations assistant.",
+    "",
+    hasAccess ? "Access: active" : "Access: not active yet",
+    "",
+    "Start here:",
+    "<code>!enlist</code> - request or refresh your access",
+    "<code>!help</code> - show normal commands",
+    "<code>!map</code> - open the map after access is active"
+  ];
+  const options = { parse_mode: "HTML" };
+  if (hasAccess) {
+    const galaxy = await galaxyForContext(ctx);
+    const scopeId = await operationScopeId(ctx);
+    Object.assign(options, Markup.inlineKeyboard([
+      [
+        Markup.button.url("Open Map", mapUrl(galaxy, "", scopeId)),
+        Markup.button.callback("Next", "quick:next")
+      ]
+    ]));
+  }
+  return ctx.reply(lines.join("\n"), options);
+}
+
+async function handleQuickNextButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for next actions.");
+    return;
+  }
+  await ctx.answerCbQuery("Next actions");
+  return handleNext(ctx, "!next", "!");
 }
 
 async function handleText(ctx) {
@@ -153,6 +217,7 @@ async function handleText(ctx) {
   if (isExactCommand(lower, "version")) return ctx.reply(versionReport());
   if (isExactCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
+  if (isCommand(lower, "buildplan")) return handleBuildPlan(ctx, text, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
   if (isCommand(lower, "guild")) return handleGuild(ctx, text, mode);
@@ -161,11 +226,13 @@ async function handleText(ctx) {
 
   if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "attacks")) return handleAttacks(ctx, text, mode);
+  if (isCommand(lower, "scoutings")) return handleScoutings(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "report")) return handleIncomingReport(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
   if (isAstrosCommand(lower)) return handleAstros(ctx, text, mode);
+  if (isCommand(lower, "sectors")) return handleSectors(ctx, text, mode);
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
   if (isCommand(lower, "score")) return handleScore(ctx, text, mode);
   if (isCommand(lower, "bases")) return handleBases(ctx, text, mode);
@@ -204,7 +271,8 @@ async function handleText(ctx) {
 
   const lookupMode = lookup.mode;
   const includeSavedBases = await userCanUseSensitiveCommands(ctx);
-  const report = await buildLocationReport(lookup, { includeSavedBases });
+  const scopeId = await operationScopeId(ctx);
+  const report = await buildLocationReport(lookup, { includeSavedBases, scopeId });
 
   const keyboard = lookup.coord ? await intelKeyboard(lookup.coord) : {};
   return respond(ctx, lookupMode, report, {
@@ -263,9 +331,10 @@ async function handleOperationButton(ctx) {
 async function handleIntelButton(ctx) {
   const coord = ctx.match?.[1] || "";
   const includeSavedBases = await userCanUseSensitiveCommands(ctx);
+  const scopeId = await operationScopeId(ctx);
   const report = coord.split(":").length === 3
-    ? await buildSystemReport(coord, { includeSavedBases })
-    : await buildAstroReport(coord, { includeSavedBases });
+    ? await buildSystemReport(coord, { includeSavedBases, scopeId })
+    : await buildAstroReport(coord, { includeSavedBases, scopeId });
   await ctx.answerCbQuery("Intel");
   return ctx.reply(report, {
     parse_mode: "HTML",
@@ -359,7 +428,16 @@ async function helpText(ctx, input = "") {
       "<b>Scout Help</b>",
       "",
       "<code>$scout [coord] [due-minutes] [note]</code>",
-      "Requests fresh scouting. If minutes are omitted, it stays active for 4 hours.",
+      "Requests fresh scouting. Use a full base coordinate when you need orbit/fleet surveillance.",
+      "If minutes are omitted, it stays active for 4 hours.",
+      "<code>$scout B24:45:21:10 240 orbit watch</code>",
+      "Ask someone to park a scout at that exact enemy base coordinate.",
+      "<code>$scoutings</code>",
+      "Shows persistent base-watch agendas created from a base list. Officers can turn an agenda into an attack pool or cancel it.",
+      "<code>$sectors [APP]</code>",
+      "Find sectors near APP-held sectors that do not already contain an APP base.",
+      "<code>$sectors B24 near [APP] not [APP]</code>",
+      "Explicit version of the same region-level scouting query.",
       "<code>!join S-9R2JD [role]</code>",
       "<code>!ready S-9R2JD</code>",
       "<code>!sent S-9R2JD [note]</code>"
@@ -380,17 +458,20 @@ async function helpText(ctx, input = "") {
       "<code>$[coord]</code> - post intel in the current chat",
       "<code>!intel [coord]</code> - DM intel to you",
       "<code>$intel [coord]</code> - post intel in the current chat",
+      "<code>!intel [coord] [TAG]</code> - officer-only manual alliance assessment",
       "<code>!friend [tag|coord]</code> - show matching intel with a green dot",
       "<code>!enemy [tag|coord]</code> - show matching intel with a red dot",
       "",
       "Examples:",
       "<code>!B24:34:06:10</code>",
       "<code>!intel B24:34:06:10</code>",
+      "<code>!intel 24452110 [ROTC]</code>",
       "<code>$B23:44:76:20</code>",
       "<code>!B24 02 76 10</code>",
       "<code>!24 02 76 10</code>",
       "<code>!24027610</code>",
       "<code>!B24:02:76</code> - list all known astros in a system",
+      "<code>$sectors [APP]</code> - list scout candidate sectors near APP",
       "<code>!history [coord]</code> is planned but not implemented yet."
     ],
     stale: [
@@ -448,16 +529,42 @@ async function helpText(ctx, input = "") {
       "<code>!me bases</code> - planned base-only view",
       "<code>!save me [coord] [note]</code> - save/update a base note",
       "<code>!bases [name]</code>/<code>$bases [name]</code> - list a player's saved bases",
+      "<code>$bases B24 [ROTC]</code> - list bases for a tag in a specific galaxy",
       "",
       "Example:",
       "<code>!save me B24:06:10:20 needs defense</code>",
-      "<code>$bases storebo</code>"
+      "<code>$bases storebo</code>",
+      "<code>$bases B24 rotc page 2</code>"
     ],
     alerts: [
       "<b>Alerts Help</b>",
       "",
       "<code>!watch mybases</code>, <code>!watch [coord]</code>, and <code>!digest [hours]</code> are planned but not implemented yet.",
       "Current reminders are operation launch/arrival reminders."
+    ],
+    doctrine: [
+      "<b>Doctrine Help</b>",
+      "",
+      "<code>!buildplan [1-16]</code>",
+      "Shows the guild base doctrine for that expansion stage.",
+      "<code>!bp [1-16]</code>",
+      "Short alias.",
+      "",
+      "Examples:",
+      "<code>!buildplan 1</code>",
+      "<code>!buildplan 12</code>"
+    ],
+    buildplan: [
+      "<b>Doctrine Help</b>",
+      "",
+      "<code>!buildplan [1-16]</code>",
+      "Shows the guild base doctrine for that expansion stage.",
+      "<code>!bp [1-16]</code>",
+      "Short alias.",
+      "",
+      "Examples:",
+      "<code>!buildplan 1</code>",
+      "<code>!buildplan 12</code>"
     ],
     guild: [
       "<b>Guild Scope Help</b>",
@@ -507,20 +614,21 @@ async function helpText(ctx, input = "") {
     "<code>!ready [ID]</code>  <code>!sent [ID]</code>  <code>!leave [ID]</code>",
     "",
     "<b>MANAGE</b>",
-    "<code>$board [attack|defense|scout]</code>  <code>/board</code>",
+    "<code>$board [attack|defense|scout]</code>  <code>$scoutings</code>  <code>/board</code>",
     "<code>$op [ID]</code>  <code>$standdown [ID] [reason]</code>",
     "",
     "<b>INTEL</b>",
     "<code>![coord]</code>  <code>$[coord]</code>",
-    "<code>!intel</code>  <code>!stale</code>  <code>!score</code>",
+    "<code>!intel</code>  <code>!sectors [APP]</code>  <code>!stale</code>  <code>!score</code>",
     "<code>!friend [tag|coord]</code>  <code>!enemy [tag|coord]</code>",
     "",
     "<b>PERSONAL</b>",
     "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
+    "<code>!buildplan [1-16]</code> - guild base doctrine",
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, guild, alerts, aliases",
+    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, doctrine, guild, alerts, aliases",
     "",
     "Officers: <code>$ohelp</code>"
   ].join("\n");
@@ -531,7 +639,7 @@ function officerHelpText() {
     "<b>Officer Commands</b>",
     "",
     "<b>Access</b>",
-    "<code>$onboardme</code> - create/update your access request",
+    "<code>$enlist</code> - create/update your access request",
     "<code>$approve [user]</code> - approve a member",
     "<code>$officer [user]</code> - promote to officer",
     "<code>$demote [user]</code> - demote to member",
@@ -563,6 +671,7 @@ function basicHelpText() {
     "$report attacker defended eta size - report incoming",
     "$astros B24 craters a85 m4 c2 - search astros",
     "$bases [TAG] - list known bases",
+    "!buildplan [1-16] - base doctrine",
     "",
     "Full help had a temporary problem. Check Render logs for the line after: help command failed."
   ].join("\n");
@@ -640,7 +749,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|claim|take|attack|attacks|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|buildplan|bp|claim|take|attack|attacks|scoutings|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -721,7 +830,9 @@ function isProtectedOperationalCommand(lowerText) {
     "attack",
     "attacks",
     "map",
+    "buildplan",
     "scout",
+    "scoutings",
     "attacked",
     "sos",
     "op",
@@ -747,6 +858,7 @@ function isProtectedOperationalCommand(lowerText) {
     "astr",
     "astro",
     "astros",
+    "sectors",
     "mine",
     "me",
     "friend",
@@ -763,7 +875,9 @@ function isSensitiveOperationalCommand(lowerText) {
     "attack",
     "attacks",
     "map",
+    "buildplan",
     "scout",
+    "scoutings",
     "attacked",
     "sos",
     "op",
@@ -790,6 +904,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "astr",
     "astro",
     "astros",
+    "sectors",
     "mine",
     "me",
     "friend",
@@ -804,7 +919,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "attack", "attacks", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "intel", "astro", "astros", "sectors", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1124,6 +1239,35 @@ async function handleWakeup(ctx, mode) {
   }
 }
 
+async function handleBuildPlan(ctx, text, mode) {
+  const stage = Number((commandBody(text).match(/\d{1,2}/) || [])[0] || 0);
+  if (!buildPlans.has(stage)) {
+    return respond(ctx, mode, [
+      "<b>Base Doctrine</b>",
+      "",
+      "Use <code>!buildplan 1</code> through <code>!buildplan 16</code>.",
+      "Short form: <code>!bp 4</code>.",
+      "",
+      "Example: <code>!buildplan 6</code>"
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+  return respond(ctx, mode, formatBuildPlan(stage), { parse_mode: "HTML" });
+}
+
+function formatBuildPlan(stage) {
+  const plan = buildPlans.get(stage);
+  return [
+    `<b>${stage} BASE DOCTRINE</b>`,
+    "",
+    `Build on ${escapeHtml(plan.scope)}:`,
+    "",
+    `<code>${escapeHtml(plan.build)}</code>`,
+    "",
+    "When complete:",
+    `-&gt; Establish Base #${plan.next}`
+  ].join("\n");
+}
+
 async function handleUserGalaxy(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !g in a group or private chat so I know who to save.");
   const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
@@ -1310,7 +1454,12 @@ async function handleAttacks(ctx, text, mode) {
   if (!attacks.length) {
     lines.push("No active attack plans.");
     lines.push("", "Create one: <code>!attack 02:00 clowntown 4</code>");
-    return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+    const operations = await fetchActiveOperations(galaxy, scopeId);
+    const canQuickCreate = !operations.length && await safeUserCanUseOfficerCommands(ctx);
+    return respond(ctx, mode, lines.join("\n"), {
+      parse_mode: "HTML",
+      ...quickSetupKeyboard(galaxy, "", canQuickCreate)
+    });
   }
 
   lines.push(...attacks.map((operation, index) => {
@@ -1494,6 +1643,209 @@ async function handleAttackAddButton(ctx) {
   const result = await addTargetsToAttack(ctx, operation, [coord], "added from base list");
   await ctx.answerCbQuery(result.added ? `Added ${coord}` : `${coord} already present`);
   return ctx.reply(`${operation.short_id}: ${coord} ${result.added ? "added to target pool" : "was already in the target pool"}.\nOpen: $attacks ${operation.short_id}`);
+}
+
+async function handleQuickAttackButton(ctx) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    await ctx.answerCbQuery("Officer access required.");
+    return;
+  }
+  const [, hoursText, galaxyText, encodedQuery] = ctx.match || [];
+  const hours = Number(hoursText);
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const query = decodeButtonValue(encodedQuery || "");
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) {
+    await ctx.answerCbQuery("No active operation group.");
+    return;
+  }
+
+  const targets = query ? await matchingBaseCoords(galaxy, scopeId, query) : [];
+  if (query && !targets.length) {
+    await ctx.answerCbQuery("No matching bases found.");
+    return ctx.reply(`No matching bases remain for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
+  }
+
+  const arrivalAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const name = quickAttackName(query);
+  const operation = operationRow(ctx, {
+    type: "attack",
+    targetCoord: targets[0] || "",
+    arrivalAt,
+    note: attackNote(name, 4),
+    chatId: scopeId
+  });
+  operation.map_id = galaxyToMapId(galaxy);
+  if (!(await insertRow("b24_operations", operation))) {
+    await ctx.answerCbQuery("Attack plan could not be saved.");
+    return;
+  }
+  const result = targets.length ? await addTargetsToAttack(ctx, operation, targets, `quick setup: ${name}`) : { added: 0 };
+  const attacks = await fetchActiveOperations(galaxy, scopeId, "attack");
+  const number = attackNumberForOperation(attacks, operation) || "?";
+  await ctx.answerCbQuery(`Attack #${number} created`);
+  return ctx.reply([
+    `<b>Attack #${escapeHtml(number)} created</b>`,
+    `${escapeHtml(name)} - lands in ${escapeHtml(formatEta(arrivalAt))}`,
+    "Waves: 4",
+    targets.length ? `Targets added: ${result.added}/${targets.length}` : "No targets yet. Add them with !attack add.",
+    "",
+    `Open pool: <code>$attacks ${escapeHtml(number)}</code>`
+  ].join("\n"), {
+    parse_mode: "HTML",
+    ...attackPlanKeyboard(operation, [])
+  });
+}
+
+async function handleQuickScoutButton(ctx) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    await ctx.answerCbQuery("Officer access required.");
+    return;
+  }
+  const [, galaxyText, encodedQuery] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const query = decodeButtonValue(encodedQuery || "");
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) {
+    await ctx.answerCbQuery("No active operation group.");
+    return;
+  }
+  const targets = await matchingBaseCoords(galaxy, scopeId, query);
+  if (!targets.length) {
+    await ctx.answerCbQuery("No matching bases found.");
+    return;
+  }
+
+  // The date keeps the existing operation schema usable; agenda display never treats it as a real ETA.
+  const arrivalAt = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+  const agendaKey = newScoutAgendaKey();
+  const agendaName = quickScoutName(query);
+  let created = 0;
+  for (const targetCoord of targets) {
+    const operation = operationRow(ctx, {
+      type: "scout",
+      targetCoord,
+      arrivalAt,
+      note: scoutAgendaNote(agendaKey, agendaName),
+      chatId: scopeId
+    });
+    operation.map_id = galaxyToMapId(galaxy);
+    if (await insertRow("b24_operations", operation)) created += 1;
+  }
+  await ctx.answerCbQuery(`Created ${created} scout requests`);
+  return ctx.reply([
+    `<b>${escapeHtml(agendaName)} created</b>`,
+    `${created}/${targets.length} exact-base watches are active until cancelled.`,
+    `Open: <code>$scoutings</code>`,
+    `When intel is ready, create an attack from this same target pool.`
+  ].join("\n"), { parse_mode: "HTML" });
+}
+
+async function handleScoutings(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
+  if (!agendas.length) {
+    return respond(ctx, mode, [
+      `<b>${galaxy} Scouting Agendas</b>`,
+      "No persistent scouting agendas.",
+      "Start from a base list: <code>$bases [tag or player]</code>"
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+
+  const lines = [`<b>${galaxy} Scouting Agendas</b>`];
+  agendas.forEach((agenda, index) => lines.push(`${index + 1}. ${escapeHtml(agenda.name)} - ${agenda.operations.length} base watches - active until cancelled`));
+  return respond(ctx, mode, lines.join("\n"), {
+    parse_mode: "HTML",
+    ...scoutAgendaListKeyboard(galaxy, agendas)
+  });
+}
+
+async function handleScoutAgendaButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, agendaKey] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  if (!agenda) {
+    await ctx.answerCbQuery("Scouting agenda not found.");
+    return;
+  }
+  await ctx.answerCbQuery("Scouting agenda");
+  return ctx.reply(formatScoutAgenda(agenda), {
+    parse_mode: "HTML",
+    ...scoutAgendaKeyboard(galaxy, agenda, await safeUserCanUseOfficerCommands(ctx))
+  });
+}
+
+async function handleScoutAgendaAttackButton(ctx) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    await ctx.answerCbQuery("Officer access required.");
+    return;
+  }
+  const [, galaxyText, agendaKey, hoursText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  if (!agenda?.operations.length) {
+    await ctx.answerCbQuery("Scouting agenda not found.");
+    return;
+  }
+  const hours = Math.max(1, Math.min(4, Number(hoursText) || 4));
+  const arrivalAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const coords = agenda.operations.map((operation) => operation.target_coord).filter(Boolean);
+  const operation = operationRow(ctx, {
+    type: "attack",
+    targetCoord: coords[0] || "",
+    arrivalAt,
+    note: attackNote(`${agenda.name} Attack`, 4),
+    chatId: scopeId
+  });
+  operation.map_id = galaxyToMapId(galaxy);
+  if (!(await insertRow("b24_operations", operation))) {
+    await ctx.answerCbQuery("Attack plan could not be saved.");
+    return;
+  }
+  const result = await addTargetsToAttack(ctx, operation, coords, `from scouting agenda ${agenda.key}`);
+  const attacks = await fetchActiveOperations(galaxy, scopeId, "attack");
+  const number = attackNumberForOperation(attacks, operation) || "?";
+  await ctx.answerCbQuery(`Attack #${number} created`);
+  return ctx.reply([
+    `<b>Attack #${escapeHtml(number)} created from ${escapeHtml(agenda.name)}</b>`,
+    `Lands in ${escapeHtml(formatEta(arrivalAt))}`,
+    `Targets added: ${result.added}/${coords.length}`,
+    "Waves: 4",
+    `Open pool: <code>$attacks ${escapeHtml(number)}</code>`
+  ].join("\n"), { parse_mode: "HTML", ...attackPlanKeyboard(operation, []) });
+}
+
+async function handleScoutAgendaCancelButton(ctx) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    await ctx.answerCbQuery("Officer access required.");
+    return;
+  }
+  const [, galaxyText, agendaKey] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  if (!agenda) {
+    await ctx.answerCbQuery("Scouting agenda not found.");
+    return;
+  }
+  const stamp = new Date().toISOString();
+  const outcomes = await Promise.all(agenda.operations.map((operation) => updateRows("b24_operations", {
+    status: "stood_down",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    operation_id: `eq.${operation.operation_id}`
+  })));
+  await ctx.answerCbQuery("Agenda cancelled");
+  return ctx.reply(`${escapeHtml(agenda.name)} cancelled: ${outcomes.filter(Boolean).length}/${agenda.operations.length} watch requests closed.`, { parse_mode: "HTML" });
 }
 
 async function handleAttackPoolButton(ctx) {
@@ -2051,14 +2403,46 @@ async function insertIncomingRows(ctx, rows, scopeId) {
 
 async function handleIntel(ctx, text, mode) {
   const query = commandBody(text);
-  const parsed = parseLocation(query, await galaxyForContext(ctx));
+  const galaxy = await galaxyForContext(ctx);
+  const parsed = parseLocation(query, galaxy);
   if (!parsed) {
     if (query) return sendBasesReport(ctx, mode, query);
     return respond(ctx, mode, "Use: !intel B24, B24:34, B24:34:06, B24:34:06:10, or !intel [player/guild]");
   }
 
+  const scopeId = await operationScopeId(ctx);
+  if (parsed.kind === "astro" && parsed.remainder) {
+    const alliance = normalizeStanceTarget(parsed.remainder);
+    if (!alliance) return respond(ctx, mode, "Use: !intel B24:45:21:10 [ROTC]");
+    if (!(await safeUserCanUseOfficerCommands(ctx))) {
+      return respond(ctx, mode, "Only Lysander officers can set a manual alliance assessment.");
+    }
+    if (!scopeId) return respond(ctx, mode, "No active operation group set. Open the approved guild group first.");
+
+    const stamp = new Date().toISOString();
+    const saved = await upsertRow("b24_intel_annotations", {
+      map_id: galaxyToMapId(parsed.galaxy),
+      chat_id: scopeId,
+      coord: parsed.coord,
+      alliance,
+      updated_by: telegramName(ctx),
+      updated_by_user_id: telegramUserId(ctx),
+      created_at: stamp,
+      updated_at: stamp
+    }, "map_id,chat_id,coord");
+    if (!saved) {
+      return respond(ctx, mode, "Manual alliance save failed. Run supabase-intel-annotations.sql, then verify SUPABASE_SERVICE_ROLE_KEY in Render.");
+    }
+
+    const report = await buildLocationReport({ ...parsed, remainder: "" }, { includeSavedBases: true, scopeId });
+    return respond(ctx, mode, `Lysander alliance saved: <code>${escapeHtml(parsed.coord)}</code> -> <b>${escapeHtml(alliance)}</b>\n\n${report}`, {
+      parse_mode: "HTML",
+      ...(await intelKeyboard(parsed.coord))
+    });
+  }
+
   const includeSavedBases = await userCanUseSensitiveCommands(ctx);
-  const report = await buildLocationReport(parsed, { includeSavedBases });
+  const report = await buildLocationReport(parsed, { includeSavedBases, scopeId });
   return respond(ctx, mode, report, {
     parse_mode: "HTML",
     ...(parsed.coord ? await intelKeyboard(parsed.coord) : {})
@@ -2069,6 +2453,13 @@ async function handleAstros(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const query = commandBody(text);
   const report = await buildAstrosReport(query, galaxy);
+  return respond(ctx, mode, report, { parse_mode: "HTML" });
+}
+
+async function handleSectors(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const query = commandBody(text);
+  const report = await buildSectorScoutReport(query, galaxy);
   return respond(ctx, mode, report, { parse_mode: "HTML" });
 }
 
@@ -2112,9 +2503,12 @@ async function handleUnknownCommand(ctx, text, mode) {
 }
 
 async function handleBases(ctx, text, mode) {
-  const query = commandBody(text).replace(/^@/, "");
-  if (!query) return respond(ctx, mode, "Use: !bases playername");
-  return sendBasesReport(ctx, mode, query);
+  const parsed = parseBasesQuery(commandBody(text).replace(/^@/, ""), await galaxyForContext(ctx));
+  if (!parsed.query) return respond(ctx, mode, "Use: !bases playername or !bases B24 [ROTC]");
+  if (looksLikeAstroSearch(parsed.query)) {
+    return respond(ctx, mode, `That is an astro search. Use <code>${escapeHtml(mode)}astros ${escapeHtml(parsed.galaxy)} ${escapeHtml(parsed.query)}</code> for terrain, attributes, empty/occupied, or alliance filters.`, { parse_mode: "HTML" });
+  }
+  return sendBasesReport(ctx, mode, parsed.query, parsed.galaxy);
 }
 
 async function handleStance(ctx, text, mode, stance) {
@@ -2150,21 +2544,27 @@ async function handleStance(ctx, text, mode, stance) {
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
 
-async function sendBasesReport(ctx, mode, query) {
-  const galaxy = await galaxyForContext(ctx);
+async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
+  const galaxy = normalizeGalaxy(galaxyOverride) || await galaxyForContext(ctx);
   const pageInfo = parsePageFromQuery(query);
   query = pageInfo.query;
+  const queryCommand = galaxyOverride ? `${galaxy} ${query}` : query;
   const scopeId = await operationScopeId(ctx);
-  const [savedRows, importedRows] = await Promise.all([
+  const [savedRows, importedRows, annotations] = await Promise.all([
     fetchRows("b24_user_bases", {
       status: "eq.active"
     }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" }),
-    fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" })
+    fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" }),
+    scopeId ? fetchRows("b24_intel_annotations", {
+      chat_id: `eq.${scopeId}`
+    }, { mapId: galaxyToMapId(galaxy), order: "coord.asc" }) : []
   ]);
   const stances = await fetchStanceMap(galaxy);
-  const activeAttackPlans = scopeId && await safeUserCanUseOfficerCommands(ctx)
-    ? await fetchActiveOperations(galaxy, scopeId, "attack")
+  const canManageOperations = Boolean(scopeId && await safeUserCanUseOfficerCommands(ctx));
+  const activeOperations = canManageOperations
+    ? await fetchActiveOperations(galaxy, scopeId)
     : [];
+  const activeAttackPlans = activeOperations.filter((operation) => operation.type === "attack");
   const addPlan = newestAttackPlan(activeAttackPlans);
 
   const needle = searchText(query);
@@ -2184,18 +2584,20 @@ async function sendBasesReport(ctx, mode, query) {
   const importedMatches = importedRows.filter((row) => {
     return searchText(`${row.guild || ""} ${row.label || ""}`).includes(needle);
   });
+  const annotationMatches = annotations.filter((row) => searchText(row.alliance).includes(needle));
 
-  if (!savedMatches.length && !importedMatches.length) {
+  if (!savedMatches.length && !importedMatches.length && !annotationMatches.length) {
     return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
   }
 
   const owners = [...new Set([
     ...savedMatches.map((row) => row.owner_label || query),
-    ...importedMatches.map((row) => [row.guild, row.label].filter(Boolean).join(" ") || query)
+    ...importedMatches.map((row) => [row.guild, row.label].filter(Boolean).join(" ") || query),
+    ...annotationMatches.map((row) => `Lysander ${row.alliance}`)
   ])].join(", ");
   const lines = [
     `<b>${escapeHtml(owners)}</b>`,
-    `${importedMatches.length} imported / ${savedMatches.length} saved bases in ${galaxy}`
+    `${importedMatches.length} imported / ${savedMatches.length} saved / ${annotationMatches.length} Lysander-assessed bases in ${galaxy}`
   ];
   if (importedMatches.length) {
     lines.push("", "<b>Imported Intel</b>");
@@ -2205,21 +2607,34 @@ async function sendBasesReport(ctx, mode, query) {
     lines.push("", "<b>Saved By Users</b>");
     savedMatches.forEach((row) => lines.push(formatUserBaseLine(row)));
   }
-  const totalActionable = uniqueBaseCoords(importedMatches, savedMatches).length;
+  if (annotationMatches.length) {
+    lines.push("", "<b>Lysander Assessments</b>");
+    annotationMatches.forEach((row) => lines.push(`${escapeHtml(row.coord)} - Lysander alliance ${escapeHtml(row.alliance)}`));
+  }
+  const rowsForButtons = [...importedMatches, ...annotationMatches];
+  const totalActionable = uniqueBaseCoords(rowsForButtons, savedMatches).length;
+  const quickSetupRows = quickSetupKeyboardRows(
+    galaxy,
+    query,
+    Boolean(canManageOperations && !activeOperations.length && totalActionable)
+  );
   const shownFrom = Math.min(totalActionable, (pageInfo.page - 1) * 8 + 1);
   const shownTo = Math.min(totalActionable, pageInfo.page * 8);
   if (totalActionable > 8) {
     lines.push("", `Buttons: ${shownFrom}-${shownTo} of ${totalActionable}`);
-    if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(query)} page ${pageInfo.page + 1}</code>`);
+    if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(queryCommand)} page ${pageInfo.page + 1}</code>`);
   }
   if (addPlan) {
     const addPlanNumber = attackNumberForOperation(activeAttackPlans, addPlan) || "?";
     lines.push("", `Officer shortcut: buttons add rows to attack <code>${escapeHtml(addPlanNumber)}</code> (${escapeHtml(attackDisplayName(addPlan))}).`);
     if (activeAttackPlans.length > 1) lines.push(`Other plans: <code>$attacks</code>`);
+  } else if (quickSetupRows.length) {
+    lines.push("", "<b>Quick Setup</b>");
+    lines.push(`Create <b>${escapeHtml(quickAttackName(query))}</b> from all ${totalActionable} matching bases, or create a 4-hour scout agenda.`);
   }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...baseListKeyboard(importedMatches, savedMatches, pageInfo.page, addPlan, activeAttackPlans)
+    ...baseListKeyboard(rowsForButtons, savedMatches, pageInfo.page, addPlan, activeAttackPlans, quickSetupRows)
   });
 }
 
@@ -2546,14 +2961,15 @@ async function handleSaveMe(ctx, text, mode) {
 
 async function buildAstroReport(coord, options = {}) {
   const includeSavedBases = Boolean(options.includeSavedBases);
-  const [astro, base, savedBases, stances] = await Promise.all([
+  const [astro, base, savedBases, stances, annotation] = await Promise.all([
     fetchOne("b24_astros", { coord }, mapIdForCoord(coord)),
     fetchOne("b24_bases", { coord }, mapIdForCoord(coord)),
     includeSavedBases ? fetchRows("b24_user_bases", {
       base_coord: `eq.${coord}`,
       status: "eq.active"
     }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" }) : [],
-    fetchStanceMap(galaxyFromCoord(coord))
+    fetchStanceMap(galaxyFromCoord(coord)),
+    fetchIntelAnnotation(coord, options.scopeId)
   ]);
 
   if (!astro && !base && !savedBases.length) return `No intel found for ${escapeHtml(coord)} yet.`;
@@ -2572,6 +2988,7 @@ async function buildAstroReport(coord, options = {}) {
     if (base.guild) lines.push(`Guild: ${escapeHtml(base.guild)}`);
     if (base.label) lines.push(`Owner: ${escapeHtml(base.label)}`);
   }
+  if (annotation?.alliance) lines.push(`Lysander alliance: ${escapeHtml(annotation.alliance)}`);
   if (savedBases.length) {
     lines.push("Saved by:");
     savedBases.forEach((saved) => {
@@ -2767,6 +3184,51 @@ async function buildAstrosReport(query, fallbackGalaxy) {
   return buildAstroSearch(parsed);
 }
 
+async function buildSectorScoutReport(query, fallbackGalaxy) {
+  const parsed = parseSectorScoutQuery(query, fallbackGalaxy);
+  const mapId = galaxyToMapId(parsed.galaxy);
+  const [bases, astros] = await Promise.all([
+    fetchAllRows("b24_bases", {}, { mapId, select: "coord,region_id,guild,label,updated_at", order: "coord.asc" }),
+    fetchAllRows("b24_astros", {}, { mapId, select: "coord,region_id,has_base", order: "coord.asc" })
+  ]);
+
+  const nearRegions = regionsForTags(bases, parsed.nearTags);
+  if (!nearRegions.size) {
+    return `No ${escapeHtml(parsed.nearTags.map((tag) => tag.value).join(", "))} base regions found in ${escapeHtml(parsed.galaxy)}.`;
+  }
+  const excludedRegions = regionsForTags(bases, parsed.excludedTags);
+  const adjacentCandidates = adjacentRegionSet(nearRegions);
+  const candidateRegions = [...adjacentCandidates]
+    .filter((region) => !excludedRegions.has(region))
+    .filter((region) => !region.endsWith(":0"))
+    .sort(compareRegionIds);
+
+  const astroCounts = countRegions(astros);
+  const baseCounts = countRegions(bases);
+  const title = [
+    `<b>Scout Regions ${escapeHtml(parsed.galaxy)}</b>`,
+    `Near: ${escapeHtml(parsed.nearTags.map((tag) => tag.value).join(", "))}`,
+    `Without: ${escapeHtml(parsed.excludedTags.map((tag) => tag.value).join(", "))}`,
+    `Source regions: ${nearRegions.size} | Candidates: ${candidateRegions.length}`,
+    ""
+  ];
+
+  if (!candidateRegions.length) {
+    return [...title, "No adjacent sectors match that filter."].join("\n");
+  }
+
+  const lines = [...title, "<pre>"];
+  candidateRegions.slice(0, 60).forEach((region) => {
+    const astrosKnown = String(astroCounts.get(region) || 0).padStart(2, " ");
+    const basesKnown = String(baseCounts.get(region) || 0).padStart(2, " ");
+    lines.push(`${displayRegionId(region).padEnd(6, " ")} astros ${astrosKnown} bases ${basesKnown}`);
+  });
+  lines.push("</pre>");
+  if (candidateRegions.length > 60) lines.push(`${candidateRegions.length - 60} more not shown.`);
+  lines.push("", `Use <code>$sectors ${escapeHtml(parsed.galaxy)} ${escapeHtml(parsed.excludedTags[0]?.value || "[APP]")}</code> for the quick form.`);
+  return lines.join("\n");
+}
+
 async function buildAstroBreakdown(galaxy, region = "") {
   const mapId = galaxyToMapId(galaxy);
   const filters = {};
@@ -2885,6 +3347,33 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   return { galaxy, region, filter, page, attrFilters, excludedTags, includedTags, nearTags, emptyOnly };
 }
 
+function parseSectorScoutQuery(query, fallbackGalaxy) {
+  const original = String(query || "").trim();
+  const explicitGalaxy = normalizeGalaxy((original.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
+  const galaxy = explicitGalaxy || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  let working = explicitGalaxy ? original.replace(new RegExp(`\\b${explicitGalaxy}\\b`, "i"), " ") : original;
+  let nearTags = parseNearTags(working);
+  nearTags.forEach((tag) => {
+    working = working.replace(tag.regex, " ");
+  });
+  let excludedTags = parseExcludedTags(working);
+  excludedTags.forEach((tag) => {
+    working = working.replace(tag.regex, " ");
+  });
+  working = working.replace(/\b(sectors?|regions?|scout|without|near|adjacent)\b/gi, " ").trim();
+  const plainTag = normalizeStanceTarget(working.split(/\s+/).find(Boolean) || "");
+  if (!nearTags.length && !excludedTags.length) {
+    const tag = plainTag || "[APP]";
+    nearTags = [{ value: tag }];
+    excludedTags = [{ value: tag }];
+  } else if (nearTags.length && !excludedTags.length) {
+    excludedTags = nearTags.map((tag) => ({ value: tag.value }));
+  } else if (!nearTags.length && excludedTags.length) {
+    nearTags = excludedTags.map((tag) => ({ value: tag.value }));
+  }
+  return { galaxy, nearTags, excludedTags };
+}
+
 function astrosNextQuery(parsed, page) {
   const scope = parsed.region || parsed.galaxy;
   return [scope, parsed.filter, ...parsed.attrFilters.map((filter) => filter.token), parsed.emptyOnly ? "empty" : "", ...parsed.includedTags.map((tag) => `yes ${tag.value}`), ...parsed.nearTags.map((tag) => `near ${tag.value}`), ...parsed.excludedTags.map((tag) => `no ${tag.value}`), `page ${page}`].filter(Boolean).join(" ");
@@ -2992,6 +3481,37 @@ async function tagBaseFootprint(parsed, tagKey) {
     coords: new Set(matches.map((row) => row.coord).filter(Boolean)),
     regions: new Set(matches.map((row) => row.region_id || (row.coord ? astroToRegion(row.coord) : "")).filter(Boolean))
   };
+}
+
+function regionsForTags(baseRows, tags) {
+  const selected = new Set((tags || []).map((tag) => normalizeStanceTarget(tag.value)).filter(Boolean));
+  if (!selected.size) return new Set();
+  return new Set(baseRows
+    .filter((row) => selected.has(normalizeStanceTarget(row.guild)))
+    .map((row) => row.region_id || (row.coord ? astroToRegion(row.coord) : ""))
+    .filter(Boolean));
+}
+
+function countRegions(rows) {
+  const counts = new Map();
+  rows.forEach((row) => {
+    const region = row.region_id || (row.coord ? astroToRegion(row.coord) : "");
+    if (!region) return;
+    counts.set(region, (counts.get(region) || 0) + 1);
+  });
+  return counts;
+}
+
+function compareRegionIds(a, b) {
+  const [galaxyA, regionA] = String(a).split(":");
+  const [galaxyB, regionB] = String(b).split(":");
+  return galaxyA.localeCompare(galaxyB) || Number(regionA) - Number(regionB);
+}
+
+function displayRegionId(region) {
+  const match = String(region || "").match(/^(B\d{2}):(\d{1,2})$/i);
+  if (!match) return String(region || "?");
+  return `${normalizeGalaxy(match[1])}:${String(Number(match[2])).padStart(2, "0")}`;
 }
 
 async function tagAdjacentFootprints(parsed) {
@@ -3134,12 +3654,144 @@ function basesSuggestionKeyboard(owners) {
   ]));
 }
 
-function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null, attacks = []) {
+function quickSetupKeyboardRows(galaxy, query = "", enabled = false) {
+  if (!enabled) return [];
+  const encodedQuery = encodeURIComponent(String(query || "")).slice(0, 30);
+  const attackButton = (hours) => Markup.button.callback(
+    `Attack ${hours}h`,
+    `quickattack:${hours}:${galaxy}:${encodedQuery}`
+  );
+  const rows = [
+    [attackButton(1), attackButton(2)],
+    [attackButton(3), attackButton(4)]
+  ];
+  if (query) rows.push([Markup.button.callback("Create scout agenda", `quickscout:${galaxy}:${encodedQuery}`)]);
+  return rows;
+}
+
+function quickSetupKeyboard(galaxy, query = "", enabled = false) {
+  const rows = quickSetupKeyboardRows(galaxy, query, enabled);
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
+function quickAttackName(query = "") {
+  const clean = String(query || "")
+    .replace(/[\[\]]/g, "")
+    .replace(/[^a-z0-9 _-]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return "Main Attack";
+  return `${clean.slice(0, 28)} Bash`;
+}
+
+function quickScoutName(query = "") {
+  const attackName = quickAttackName(query);
+  return attackName === "Main Attack" ? "Main Watch" : attackName.replace(/\s+Bash$/i, " Watch");
+}
+
+function newScoutAgendaKey() {
+  const suffix = Math.random().toString(36).slice(2, 7).toUpperCase().padEnd(5, "X");
+  return `G-${suffix}`;
+}
+
+function scoutAgendaNote(key, name) {
+  return `agenda:${key}|${String(name || "Scout Watch").slice(0, 48)}`;
+}
+
+function scoutAgendaInfo(operation) {
+  if (operation?.type !== "scout") return null;
+  const match = String(operation.note || "").match(/^agenda:(G-[A-Z0-9]{5})\|(.+)$/i);
+  return match ? { key: match[1].toUpperCase(), name: match[2].trim() || "Scout Watch" } : null;
+}
+
+function groupScoutAgendas(operations) {
+  const grouped = new Map();
+  operations.forEach((operation) => {
+    const info = scoutAgendaInfo(operation);
+    if (!info) return;
+    if (!grouped.has(info.key)) grouped.set(info.key, { ...info, operations: [] });
+    grouped.get(info.key).operations.push(operation);
+  });
+  return [...grouped.values()]
+    .map((agenda) => ({ ...agenda, operations: agenda.operations.sort((a, b) => String(a.target_coord).localeCompare(String(b.target_coord))) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function fetchScoutAgendas(galaxy, scopeId) {
+  const scouts = await fetchActiveOperations(galaxy, scopeId, "scout");
+  return scouts.filter((operation) => scoutAgendaInfo(operation));
+}
+
+async function findScoutAgenda(galaxy, scopeId, agendaKey) {
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
+  return agendas.find((agenda) => agenda.key === String(agendaKey || "").toUpperCase()) || null;
+}
+
+function formatScoutAgenda(agenda) {
+  const coords = agenda.operations.map((operation) => operation.target_coord).filter(Boolean);
+  return [
+    `<b>${escapeHtml(agenda.name)} SCOUTING AGENDA</b>`,
+    `Status: persistent until cancelled`,
+    `Watch targets: ${coords.length}`,
+    "",
+    `<pre>${coords.map((coord, index) => `${String(index + 1).padStart(2, "0")} ${coord}`).join("\n")}</pre>`,
+    "",
+    "Create an attack pool from these exact watched bases, or cancel the agenda."
+  ].join("\n");
+}
+
+function scoutAgendaListKeyboard(galaxy, agendas) {
+  return Markup.inlineKeyboard(agendas.slice(0, 8).map((agenda) => [
+    Markup.button.callback(`Open ${agenda.name}`.slice(0, 40), `scoutagenda:${galaxy}:${agenda.key}`)
+  ]));
+}
+
+function scoutAgendaKeyboard(galaxy, agenda, canManage) {
+  const rows = [];
+  if (canManage) {
+    rows.push([
+      Markup.button.callback("Attack 1h", `scoutagendaattack:${galaxy}:${agenda.key}:1`),
+      Markup.button.callback("Attack 2h", `scoutagendaattack:${galaxy}:${agenda.key}:2`)
+    ], [
+      Markup.button.callback("Attack 3h", `scoutagendaattack:${galaxy}:${agenda.key}:3`),
+      Markup.button.callback("Attack 4h", `scoutagendaattack:${galaxy}:${agenda.key}:4`)
+    ], [
+      Markup.button.callback("Cancel agenda", `scoutagendacancel:${galaxy}:${agenda.key}`)
+    ]);
+  }
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
+async function matchingBaseCoords(galaxy, scopeId, query) {
+  const needle = searchText(query);
+  if (!needle) return [];
+  const mapId = galaxyToMapId(galaxy);
+  const [savedBases, bases, annotations] = await Promise.all([
+    fetchAllRows("b24_user_bases", { status: "eq.active" }, { mapId, order: "base_coord.asc" }),
+    fetchAllRows("b24_bases", {}, { mapId, order: "coord.asc" }),
+    scopeId
+      ? fetchAllRows("b24_intel_annotations", { chat_id: `eq.${scopeId}` }, { mapId, order: "coord.asc" })
+      : []
+  ]);
+  return [...new Set([
+    ...savedBases
+      .filter((row) => searchText(row.owner_label).includes(needle))
+      .map((row) => row.base_coord),
+    ...bases
+      .filter((row) => searchText(`${row.guild || ""} ${row.label || ""}`).includes(needle))
+      .map((row) => row.coord),
+    ...annotations
+      .filter((row) => searchText(row.alliance).includes(needle))
+      .map((row) => row.coord)
+  ].filter(Boolean))].sort();
+}
+
+function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null, attacks = [], setupRows = []) {
   const pageSize = 8;
   const coords = uniqueBaseCoords(importedRows, savedRows).slice((page - 1) * pageSize, page * pageSize);
-  if (!coords.length) return {};
+  if (!coords.length && !setupRows.length) return {};
   const addPlanNumber = addPlan ? attackNumberForOperation(attacks, addPlan) : 0;
-  return Markup.inlineKeyboard(coords.map((coord) => {
+  const rows = [...setupRows, ...coords.map((coord) => {
     const row = [
       Markup.button.callback(`Intel ${coord}`, `intel:${coord}`)
     ];
@@ -3147,7 +3799,8 @@ function baseListKeyboard(importedRows, savedRows, page = 1, addPlan = null, att
     else row.push(Markup.button.callback("Claim 4h", `claim4h:${coord}`));
     row.push(Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord)));
     return row;
-  }));
+  })];
+  return Markup.inlineKeyboard(rows);
 }
 
 function uniqueBaseCoords(importedRows, savedRows) {
@@ -3165,6 +3818,23 @@ function parsePageFromQuery(query) {
     page,
     query: raw.replace(/(?:^|\s)(?:page\s*|p)\d+(?=\s|$)/i, " ").trim()
   };
+}
+
+function parseBasesQuery(query, fallbackGalaxy = defaultGalaxy) {
+  let raw = String(query || "").trim();
+  let galaxy = normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  const explicitGalaxy = raw.match(/^(B\d{2})(?:\b|:)\s*/i);
+  const leadingDigits = raw.match(/^(\d{2})\s+/);
+
+  if (explicitGalaxy) {
+    galaxy = normalizeGalaxy(explicitGalaxy[1]) || galaxy;
+    raw = raw.slice(explicitGalaxy[0].length).trim();
+  } else if (leadingDigits) {
+    galaxy = normalizeGalaxy(`B${leadingDigits[1]}`) || galaxy;
+    raw = raw.slice(leadingDigits[0].length).trim();
+  }
+
+  return { galaxy, query: raw };
 }
 
 async function fetchStanceMap(galaxy) {
@@ -3243,6 +3913,13 @@ function searchText(value) {
     .trim();
 }
 
+function looksLikeAstroSearch(value) {
+  const raw = String(value || "").toLowerCase();
+  return /(?:^|\s)(?:(?:a|s|f|m|g|c)\s*\d+|\d+\s*(?:a|s|f|m|g|c))\b/.test(raw) ||
+    /\b(?:asteroid|arid|craters?|earthly|gas|glacial|metallic|oceanic|radioactive|rocky|tundra|volcanic|empty|occupied)\b/.test(raw) ||
+    /\b(?:no|yes)\s+\[?[a-z0-9_-]+\]?\b/.test(raw);
+}
+
 function intelAgeLabel(value) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "unknown age";
@@ -3268,6 +3945,14 @@ async function fetchOne(table, filters, forcedMapId = null, includeMap = true) {
   Object.entries(filters).forEach(([key, value]) => params.set(key, `eq.${value}`));
   const rows = await requestRows(table, params);
   return rows[0] || null;
+}
+
+async function fetchIntelAnnotation(coord, scopeId) {
+  if (!coord || !scopeId) return null;
+  return fetchOne("b24_intel_annotations", {
+    coord,
+    chat_id: String(scopeId)
+  }, mapIdForCoord(coord));
 }
 
 async function fetchRows(table, filters, options = {}) {
@@ -4084,12 +4769,18 @@ function formatBoardClaimLine(claim) {
 
 function formatBoardOperationCompact(operation, members = [], claims = []) {
   const eta = formatCompactEta(new Date(operation.arrival_at));
+  const scoutAgenda = scoutAgendaInfo(operation);
   const activeMembers = members.filter((member) => member.state !== "withdrawn");
   const stateCounts = countBy(activeMembers, "state");
   const joined = String(activeMembers.length).padStart(2, " ");
   const ready = String(stateCounts.ready || 0).padStart(2, " ");
   const sent = String(stateCounts.sent || 0).padStart(2, " ");
   const id = String(operation.short_id || "?").padEnd(7, " ");
+
+  if (scoutAgenda) {
+    const target = String(operation.target_coord || "?").padEnd(12, " ");
+    return escapeHtml(`WATCH ${id} ${target} ${compactLabel(scoutAgenda.name, 14)}`);
+  }
 
   if (operation.type === "defense") {
     const defended = operation.defended_coord || operation.target_coord || "?";
@@ -4173,6 +4864,19 @@ async function coordIntelSummary(coord) {
 async function formatOperationStatus(operation, members) {
   const intel = await operationIntelSummary(operation);
   const activeMembers = members.filter((member) => member.state !== "withdrawn");
+  const scoutAgenda = scoutAgendaInfo(operation);
+  if (scoutAgenda) {
+    return [
+      `<b>${escapeHtml(operation.short_id)} SCOUT WATCH</b>`,
+      `Agenda: ${escapeHtml(scoutAgenda.name)}`,
+      `Target: ${escapeHtml(operation.target_coord || "?")}`,
+      "Status: persistent until the agenda is cancelled",
+      `Intel: ${escapeHtml(intel)}`,
+      "",
+      `<b>Members</b> (${activeMembers.length})`,
+      ...(activeMembers.length ? activeMembers.map(formatOperationMemberLine) : ["No scout assigned yet."])
+    ].join("\n");
+  }
   if (operation.type === "attack" && !operation.target_coord) {
     const claims = await fetchOperationClaims(operation);
     const targets = groupAttackTargets(operation, claims);
@@ -4637,6 +5341,10 @@ function parseLocation(value, fallbackGalaxy = defaultGalaxy) {
   const raw = String(value || "").trim().toUpperCase();
   if (!raw) return null;
 
+  // Let the coordinate parser own compact formats such as 24452110 and 21452110.
+  const directCoordinate = parseCoordinate(raw, fallbackGalaxy);
+  if (directCoordinate) return directCoordinate;
+
   let working = raw.replace(/^!|\$/g, "").trim();
   let galaxy = normalizeGalaxy((working.match(/\bB\d{2}\b/) || [])[0]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
 
@@ -4920,6 +5628,12 @@ function parseScoutRequest(value, fallbackGalaxy) {
 
 function parseCoordinate(value, fallbackGalaxy) {
   const raw = String(value || "").trim().toUpperCase();
+  const fullCompact = raw.replace(/^[!$]/, "").trim().match(/^(\d{2})(\d{2})(\d{2})(\d{2})(?!\d)([\s\S]*)$/);
+  if (fullCompact) {
+    const [, galaxyPart, regionPart, systemPart, astroPart, remainder] = fullCompact;
+    const nums = [regionPart, systemPart, astroPart].map(Number);
+    if (nums.every(validCoordPart)) return coordinateResult(`B${galaxyPart}`, nums, remainder || "");
+  }
   const galaxy = normalizeGalaxy((raw.match(/B\d{2}/) || [])[0]) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
   let working = raw.replace(/^!|\$/g, "").trim();
 
