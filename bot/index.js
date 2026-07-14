@@ -127,6 +127,10 @@ bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handl
 bot.action(/^quickattack:(\d):(B\d{2}):(.*)$/, handleQuickAttackButton);
 bot.action(/^quickscout:(B\d{2}):(.*)$/, handleQuickScoutButton);
 bot.action(/^scoutagenda:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaButton);
+bot.action(/^scoutwatchlist:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchListButton);
+bot.action(/^scoutwatchtarget:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchTargetButton);
+bot.action(/^scoutwatchtake:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchTakeButton);
+bot.action(/^scoutwatchrelease:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchReleaseButton);
 bot.action(/^scoutagendaattack:(B\d{2}):(G-[A-Z0-9]{5}):(\d)$/, handleScoutAgendaAttackButton);
 bot.action(/^scoutagendacancel:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaCancelButton);
 bot.action(/^defpool:(\d{1,3})$/, handleDefensePoolButton);
@@ -1775,11 +1779,118 @@ async function handleScoutAgendaButton(ctx) {
     await ctx.answerCbQuery("Scouting agenda not found.");
     return;
   }
+  const assignments = await scoutAgendaAssignments(agenda);
   await ctx.answerCbQuery("Scouting agenda");
-  return ctx.reply(formatScoutAgenda(agenda), {
+  return ctx.reply(formatScoutAgenda(agenda, assignments), {
     parse_mode: "HTML",
-    ...scoutAgendaKeyboard(galaxy, agenda, await safeUserCanUseOfficerCommands(ctx))
+    ...scoutAgendaKeyboard(galaxy, agenda, assignments, await safeUserCanUseOfficerCommands(ctx))
   });
+}
+
+async function handleScoutWatchListButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, agendaKey, pageText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  if (!agenda) {
+    await ctx.answerCbQuery("Scouting agenda not found.");
+    return;
+  }
+  const page = Math.max(1, Number(pageText) || 1);
+  const assignments = await scoutAgendaAssignments(agenda);
+  await ctx.answerCbQuery("Watch targets");
+  return ctx.reply(formatScoutWatchList(agenda, assignments, page), {
+    parse_mode: "HTML",
+    ...scoutWatchListKeyboard(galaxy, agenda, assignments, page)
+  });
+}
+
+async function handleScoutWatchTargetButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, agendaKey, indexText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  const index = Number(indexText) - 1;
+  const operation = agenda?.operations[index];
+  if (!operation) {
+    await ctx.answerCbQuery("Watch target not found.");
+    return;
+  }
+  const assignments = await scoutAgendaAssignments(agenda);
+  const assignment = assignments.get(operation.operation_id);
+  const mine = assignment?.user_id === telegramUserId(ctx);
+  await ctx.answerCbQuery(assignment ? "Watch assignment" : "Choose watch ship");
+  return ctx.reply(formatScoutWatchTarget(operation, assignment), {
+    parse_mode: "HTML",
+    ...scoutWatchTargetKeyboard(galaxy, agenda, index + 1, assignment, mine)
+  });
+}
+
+async function handleScoutWatchTakeButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, agendaKey, indexText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  const index = Number(indexText) - 1;
+  const operation = agenda?.operations[index];
+  if (!operation) {
+    await ctx.answerCbQuery("Watch target not found.");
+    return;
+  }
+  const assignments = await scoutAgendaAssignments(agenda);
+  const existing = assignments.get(operation.operation_id);
+  if (existing && existing.user_id !== telegramUserId(ctx)) {
+    await ctx.answerCbQuery(`Already watched by ${String(existing.display_name || "another member").slice(0, 40)}.`);
+    return;
+  }
+  const saved = await upsertOperationMember(ctx, operation, "joined", "watch");
+  if (!saved) {
+    await ctx.answerCbQuery("Could not save that watch assignment.");
+    return;
+  }
+  await ctx.answerCbQuery("Watch assigned");
+  return ctx.reply(`${escapeHtml(telegramName(ctx))} is now watching <code>${escapeHtml(operation.target_coord)}</code>.`, { parse_mode: "HTML" });
+}
+
+async function handleScoutWatchReleaseButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, agendaKey, indexText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  const agenda = scopeId ? await findScoutAgenda(galaxy, scopeId, agendaKey) : null;
+  const operation = agenda?.operations[Number(indexText) - 1];
+  if (!operation) {
+    await ctx.answerCbQuery("Watch target not found.");
+    return;
+  }
+  const assignments = await scoutAgendaAssignments(agenda);
+  const existing = assignments.get(operation.operation_id);
+  if (!existing || existing.user_id !== telegramUserId(ctx)) {
+    await ctx.answerCbQuery("Only the assigned watcher can release this target.");
+    return;
+  }
+  const saved = await upsertOperationMember(ctx, operation, "withdrawn", "watch released");
+  if (!saved) {
+    await ctx.answerCbQuery("Could not release that watch assignment.");
+    return;
+  }
+  await ctx.answerCbQuery("Watch released");
+  return ctx.reply(`<code>${escapeHtml(operation.target_coord)}</code> is open for a watcher.`, { parse_mode: "HTML" });
 }
 
 async function handleScoutAgendaAttackButton(ctx) {
@@ -3732,16 +3843,30 @@ async function findScoutAgenda(galaxy, scopeId, agendaKey) {
   return agendas.find((agenda) => agenda.key === String(agendaKey || "").toUpperCase()) || null;
 }
 
-function formatScoutAgenda(agenda) {
+async function scoutAgendaAssignments(agenda) {
+  const entries = await Promise.all(agenda.operations.map(async (operation) => {
+    const members = await fetchOperationMembers(operation);
+    const assigned = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+    return [operation.operation_id, assigned || null];
+  }));
+  return new Map(entries);
+}
+
+function formatScoutAgenda(agenda, assignments = new Map()) {
   const coords = agenda.operations.map((operation) => operation.target_coord).filter(Boolean);
+  const covered = agenda.operations.filter((operation) => assignments.has(operation.operation_id)).length;
   return [
     `<b>${escapeHtml(agenda.name)} SCOUTING AGENDA</b>`,
     `Status: persistent until cancelled`,
-    `Watch targets: ${coords.length}`,
+    `Watch targets: ${coords.length} | Assigned: ${covered} | Open: ${coords.length - covered}`,
     "",
-    `<pre>${coords.map((coord, index) => `${String(index + 1).padStart(2, "0")} ${coord}`).join("\n")}</pre>`,
+    `<pre>${agenda.operations.map((operation, index) => {
+      const assignment = assignments.get(operation.operation_id);
+      const state = assignment ? assignment.display_name || "assigned" : "open";
+      return `${String(index + 1).padStart(2, "0")} ${operation.target_coord} ${state}`;
+    }).join("\n")}</pre>`,
     "",
-    "Create an attack pool from these exact watched bases, or cancel the agenda."
+    "Choose Watch targets to take responsibility for a coordinate."
   ].join("\n");
 }
 
@@ -3751,8 +3876,8 @@ function scoutAgendaListKeyboard(galaxy, agendas) {
   ]));
 }
 
-function scoutAgendaKeyboard(galaxy, agenda, canManage) {
-  const rows = [];
+function scoutAgendaKeyboard(galaxy, agenda, assignments, canManage) {
+  const rows = [[Markup.button.callback(`Watch targets (${agenda.operations.length})`, `scoutwatchlist:${galaxy}:${agenda.key}:1`)]];
   if (canManage) {
     rows.push([
       Markup.button.callback("Attack 1h", `scoutagendaattack:${galaxy}:${agenda.key}:1`),
@@ -3765,6 +3890,64 @@ function scoutAgendaKeyboard(galaxy, agenda, canManage) {
     ]);
   }
   return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
+function formatScoutWatchList(agenda, assignments, page = 1) {
+  const pageSize = 12;
+  const from = (page - 1) * pageSize;
+  const shown = agenda.operations.slice(from, from + pageSize);
+  const covered = agenda.operations.filter((operation) => assignments.has(operation.operation_id)).length;
+  return [
+    `<b>${escapeHtml(agenda.name)} WATCH TARGETS</b>`,
+    `Assigned: ${covered}/${agenda.operations.length} | Open: ${agenda.operations.length - covered}`,
+    `Page ${page}/${Math.max(1, Math.ceil(agenda.operations.length / pageSize))}`,
+    "",
+    `<pre>${shown.map((operation, offset) => {
+      const assignment = assignments.get(operation.operation_id);
+      const state = assignment ? assignment.display_name || "assigned" : "open";
+      return `${String(from + offset + 1).padStart(2, "0")} ${operation.target_coord} ${state}`;
+    }).join("\n")}</pre>`,
+    "Tap a target to claim or review its watch assignment."
+  ].join("\n");
+}
+
+function scoutWatchListKeyboard(galaxy, agenda, assignments, page = 1) {
+  const pageSize = 12;
+  const from = (page - 1) * pageSize;
+  const rows = agenda.operations.slice(from, from + pageSize).map((operation, offset) => {
+    const index = from + offset + 1;
+    const assignment = assignments.get(operation.operation_id);
+    const status = assignment ? `${assignment.display_name || "assigned"}` : "open";
+    return [Markup.button.callback(`${String(index).padStart(2, "0")} ${operation.target_coord} - ${status}`.slice(0, 60), `scoutwatchtarget:${galaxy}:${agenda.key}:${index}`)];
+  });
+  const totalPages = Math.max(1, Math.ceil(agenda.operations.length / pageSize));
+  if (page < totalPages) rows.push([Markup.button.callback("Next targets", `scoutwatchlist:${galaxy}:${agenda.key}:${page + 1}`)]);
+  if (page > 1) rows.push([Markup.button.callback("Previous targets", `scoutwatchlist:${galaxy}:${agenda.key}:${page - 1}`)]);
+  return Markup.inlineKeyboard(rows);
+}
+
+function formatScoutWatchTarget(operation, assignment) {
+  if (!assignment) {
+    return [
+      `<b>WATCH ${escapeHtml(operation.target_coord)}</b>`,
+      "Open watch target.",
+      "Take responsibility for watching this coordinate."
+    ].join("\n");
+  }
+  return [
+    `<b>WATCH ${escapeHtml(operation.target_coord)}</b>`,
+    `Assigned: ${escapeHtml(assignment.display_name || "Unknown")}`,
+    "Status: watch assigned"
+  ].join("\n");
+}
+
+function scoutWatchTargetKeyboard(galaxy, agenda, index, assignment, mine) {
+  if (assignment) {
+    return mine
+      ? Markup.inlineKeyboard([[Markup.button.callback("Release watch", `scoutwatchrelease:${galaxy}:${agenda.key}:${index}`)]])
+      : {};
+  }
+  return Markup.inlineKeyboard([[Markup.button.callback("Take watch", `scoutwatchtake:${galaxy}:${agenda.key}:${index}`)]]);
 }
 
 async function matchingBaseCoords(galaxy, scopeId, query) {
