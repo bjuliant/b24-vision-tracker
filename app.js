@@ -18,6 +18,7 @@
   const selectedBases = document.querySelector("#selectedBases");
   const selectedOperations = document.querySelector("#selectedOperations");
   const sectorPanelTitle = document.querySelector("#sectorPanelTitle");
+  const sectorPanel = document.querySelector("#sectorPanel");
   const sectorCounts = document.querySelector("#sectorCounts");
   const claimsPanelTitle = document.querySelector("#claimsPanelTitle");
   const claimCounts = document.querySelector("#claimCounts");
@@ -60,6 +61,8 @@
   const importResult = document.querySelector("#importResult");
 
   const urlParams = new URLSearchParams(location.search);
+  const miniAppAccess = urlParams.get("access") || "";
+  const botApiUrl = String(config.BOT_API_URL || "https://b24-vision-bot.onrender.com").replace(/\/$/, "");
   const defaultGalaxy = normalizeGalaxy(config.GALAXY || galaxyFromMapId(config.MAP_ID) || "B24");
   const initialLocation = normalizeExternalLocation(urlParams.get("loc"));
   let galaxy = normalizeGalaxy(urlParams.get("gal")) || galaxyFromLocation(initialLocation) || defaultGalaxy;
@@ -74,6 +77,8 @@
   let client = null;
   let realtimeChannel = null;
   let intel = loadLocalState();
+  let miniAppSession = null;
+  let coverageByRegion = new Map();
 
   init();
 
@@ -85,6 +90,16 @@
 
     tg?.ready();
     tg?.expand();
+
+    if (miniAppAccess) {
+      miniAppSession = await loadMiniAppSession();
+      if (!miniAppSession) {
+        renderAccessRequired("This map link has expired or your Lysander access was removed.");
+        return;
+      }
+      galaxy = normalizeGalaxy(miniAppSession.galaxy) || galaxy;
+      telegramChatId = miniAppSession.chatId || telegramChatId;
+    }
 
     if (hasSupabase && !urlParams.get("gal") && !initialLocation) {
       client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
@@ -99,6 +114,14 @@
     }
 
     populateArrivalOptions();
+    if (miniAppSession) {
+      try {
+        await loadCoverage();
+      } catch {
+        renderAccessRequired("Lysander could not load the live coverage map. Please try /map again.");
+        return;
+      }
+    }
     renderGrid();
     bindControls();
     selectSector(selected);
@@ -135,21 +158,57 @@
   function shouldBlockDirectAccess() {
     if (location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1") return false;
     if (!/github\.io$/i.test(location.hostname)) return false;
-    if (urlParams.get("chat_id")) return false;
-    return !tg?.initData;
+    return !miniAppAccess;
   }
 
-  function renderAccessRequired() {
+  function renderAccessRequired(reason = "Open this map from Lysander in Telegram.") {
     document.body.classList.add("access-locked");
     const shell = document.querySelector(".app-shell");
     if (!shell) return;
     shell.innerHTML = [
       `<section class="access-lock">`,
       `<h1>VisionBot Access Required</h1>`,
-      `<p>Open this map from Lysander in Telegram.</p>`,
+      `<p>${escapeHtml(reason)}</p>`,
       `<p>Use <code>/map</code> in your approved guild group or DM.</p>`,
       `</section>`
     ].join("");
+  }
+
+  async function loadMiniAppSession() {
+    try {
+      const response = await fetch(`${botApiUrl}/api/miniapp/session?access=${encodeURIComponent(miniAppAccess)}`);
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadCoverage() {
+    if (!miniAppAccess) return;
+    const response = await fetch(`${botApiUrl}/api/miniapp/coverage?access=${encodeURIComponent(miniAppAccess)}`);
+    if (!response.ok) throw new Error("Could not load live map coverage.");
+    const payload = await response.json();
+    coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
+  }
+
+  async function updateWatch(region, action) {
+    try {
+      const response = await fetch(`${botApiUrl}/api/miniapp/watch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access: miniAppAccess, region, action })
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Could not update this watch.");
+      coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
+      paintAll();
+      selectSector(region);
+      setSync("Live", true);
+    } catch (error) {
+      setSync(error.message || "Watch update failed");
+      window.alert(error.message || "Could not update this watch.");
+    }
   }
 
   function renderGrid() {
@@ -177,7 +236,12 @@
 
   function bindControls() {
     toolButtons.forEach((button) => {
+      if (miniAppSession) {
+        button.disabled = true;
+        button.title = "Map status is managed by Lysander intel and watch assignments.";
+      }
       button.addEventListener("click", () => {
+        if (miniAppSession) return;
         applyFlag(button.dataset.flag);
       });
     });
@@ -219,6 +283,10 @@
       if (unclaimButton) unclaim(unclaimButton.dataset.unclaim);
     });
     confirmFleetButton.addEventListener("click", confirmFleetPaste);
+    sectorPanel.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-watch-action]");
+      if (button) updateWatch(button.dataset.watchRegion, button.dataset.watchAction);
+    });
   }
 
   async function connectSupabase() {
@@ -1012,6 +1080,12 @@
     }
 
     const sector = getSector(id);
+    const coverage = coverageByRegion.get(id);
+    const appBase = Boolean(coverage?.app);
+    const friendlyBase = Boolean(coverage?.friendly);
+    const enemyBase = Boolean(coverage?.enemy);
+    const watchNeeded = Boolean(coverage?.watchNeeded);
+    const watchAssigned = Boolean(coverage?.watchAssigned);
     cell.className = "cell unknown";
     cell.classList.toggle("selected", id === selected);
     cell.classList.toggle("has-friendly", sector.friendly);
@@ -1019,11 +1093,16 @@
     cell.classList.toggle("has-scout", sector.scout);
     cell.classList.toggle("has-reserved", sector.reserved);
     cell.classList.toggle("highlighted-target", id === highlightedSector);
+    cell.classList.toggle("has-app", appBase);
+    cell.classList.toggle("has-friendly", friendlyBase || (!coverage && sector.friendly));
+    cell.classList.toggle("has-enemy", enemyBase || (!coverage && sector.enemy));
+    cell.classList.toggle("has-scout-needed", watchNeeded);
+    cell.classList.toggle("has-scout-assigned", watchAssigned);
 
-    setFlag(cell, "F", sector.friendly, "on-f");
-    setFlag(cell, "E", sector.enemy, "on-e");
-    setFlag(cell, "S", sector.scout, "on-s");
-    setFlag(cell, "R", sector.reserved, "on-r");
+    setFlag(cell, "A", appBase, "on-a");
+    setFlag(cell, "F", friendlyBase || (!coverage && sector.friendly), "on-f");
+    setFlag(cell, "E", enemyBase || (!coverage && sector.enemy), "on-e");
+    setFlag(cell, "S", watchAssigned ? "assigned" : watchNeeded ? "needed" : (!coverage && sector.scout), watchAssigned ? "on-s-assigned" : watchNeeded ? "on-s-needed" : "on-s");
 
     const systems = getSystemCount(id);
     const bases = getBaseCount(id);
@@ -1045,9 +1124,10 @@
     PLAYABLE_SECTORS.forEach(paintSector);
 
     const sector = getSector(id);
-    const flags = Object.keys(FLAG_LABELS)
-      .filter((flag) => sector[flag])
-      .map((flag) => FLAG_LABELS[flag]);
+    const coverage = coverageByRegion.get(id);
+    const flags = coverage
+      ? [coverage.app && "A", coverage.friendly && "F", coverage.enemy && "E", coverage.watchAssigned ? "S" : coverage.watchNeeded ? "S needed" : ""].filter(Boolean)
+      : Object.keys(FLAG_LABELS).filter((flag) => sector[flag]).map((flag) => FLAG_LABELS[flag]);
 
     selectedSector.textContent = id;
     headerGalaxy.textContent = galaxy;
@@ -1087,6 +1167,26 @@
       }).join("");
     } else {
       systemList.textContent = "No systems imported for this sector.";
+    }
+
+    const coverage = coverageByRegion.get(id);
+    let watchRow = sectorPanel.querySelector(".watch-action-row");
+    if (!coverage) {
+      watchRow?.remove();
+      return;
+    }
+    if (!watchRow) {
+      watchRow = document.createElement("div");
+      watchRow.className = "watch-action-row";
+      sectorPanel.querySelector("details").appendChild(watchRow);
+    }
+    if (coverage.app) {
+      watchRow.innerHTML = `<strong>APP base coverage is present in ${escapeHtml(id)}.</strong>`;
+    } else if (coverage.watchAssigned) {
+      const own = String(coverage.watchOwnerId || "") === String(miniAppSession?.userId || "");
+      watchRow.innerHTML = `<span>Watching: <strong>${escapeHtml(coverage.watchOwner || "Guild member")}</strong></span>${own ? `<button class="command-button" type="button" data-watch-action="release" data-watch-region="${escapeHtml(id)}">Release Watch</button>` : ""}`;
+    } else {
+      watchRow.innerHTML = `<span>Scout needed: no APP base or active watch.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
     }
   }
 
