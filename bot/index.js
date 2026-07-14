@@ -1,5 +1,6 @@
 import { Telegraf, Markup } from "telegraf";
 import http from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -14,6 +15,9 @@ const officerUserIds = parseCsv(process.env.OFFICER_USER_IDS);
 const webhookPathSecret = process.env.WEBHOOK_PATH_SECRET || token?.slice(-16).replace(/[^a-zA-Z0-9_-]/g, "");
 const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
 const requireAccessControl = /^(1|true|yes)$/i.test(process.env.REQUIRE_ACCESS_CONTROL || "");
+const miniAppAccessSecret = process.env.MINI_APP_ACCESS_SECRET || token;
+const miniAppTokenMinutes = Math.max(5, Math.min(60, Number(process.env.MINI_APP_TOKEN_MINUTES || 20)));
+const primaryGuildTag = normalizeStanceTarget(process.env.PRIMARY_GUILD_TAG || "APP");
 const accessMemberCache = new Map();
 
 if (!token) throw new Error("BOT_TOKEN is required");
@@ -41,7 +45,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-14.3";
+const botBuild = "2026-07-14.4";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -148,10 +152,11 @@ async function sendMapButton(ctx) {
   }
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
+  const accessUrl = mapUrlForContext(ctx, galaxy, "", scopeId);
   return ctx.reply(
     `${galaxy} Vision Tracker`,
     Markup.inlineKeyboard([
-      Markup.button.url("Open Map", mapUrl(galaxy, "", scopeId))
+      Markup.button.url("Open Map", accessUrl)
     ])
   );
 }
@@ -173,9 +178,10 @@ async function handleStart(ctx) {
   if (hasAccess) {
     const galaxy = await galaxyForContext(ctx);
     const scopeId = await operationScopeId(ctx);
+    const accessUrl = mapUrlForContext(ctx, galaxy, "", scopeId);
     Object.assign(options, Markup.inlineKeyboard([
       [
-        Markup.button.url("Open Map", mapUrl(galaxy, "", scopeId)),
+        Markup.button.url("Open Map", accessUrl),
         Markup.button.callback("Next", "quick:next")
       ]
     ]));
@@ -4338,10 +4344,7 @@ function normalizeStanceTarget(value) {
 function claimListKeyboard(claims) {
   const coords = [...new Set(claims.map((claim) => claim.target_coord).filter(Boolean))].slice(0, 8);
   if (!coords.length) return {};
-  return Markup.inlineKeyboard(coords.map((coord) => [
-    Markup.button.callback(`Intel ${coord}`, `intel:${coord}`),
-    Markup.button.url("Map", mapUrl(galaxyFromCoord(coord), coord))
-  ]));
+  return Markup.inlineKeyboard(coords.map((coord) => [Markup.button.callback(`Intel ${coord}`, `intel:${coord}`)]));
 }
 
 async function intelKeyboard(coord) {
@@ -4902,9 +4905,7 @@ function operationMessageOptions(operation) {
 function operationKeyboard(operation) {
   const disabled = operation.status !== "active";
   if (disabled) return {};
-  const target = operation.target_coord || operation.defended_coord || operation.hostile_origin || "";
   const rows = [];
-  if (target) rows.push([Markup.button.url("Open Target", mapUrl(galaxyFromCoord(target), target))]);
   rows.push(
     [
       Markup.button.callback("Join", `op:join:${operation.operation_id}`),
@@ -4922,8 +4923,6 @@ function operationKeyboard(operation) {
 
 function attackPlanKeyboard(operation, claims) {
   const rows = [];
-  const firstTarget = claims[0]?.target_coord || operation.target_coord || "";
-  if (firstTarget) rows.push([Markup.button.url("Open First Target", mapUrl(galaxyFromCoord(firstTarget), firstTarget))]);
   rows.push([
     Markup.button.callback("Target Pool", `attackpool:${operation.short_id}`),
     Markup.button.callback("Status", `op:status:${operation.operation_id}`),
@@ -4935,8 +4934,7 @@ function attackPlanKeyboard(operation, claims) {
 function attackListKeyboard(attacks) {
   const rows = attacks.slice(0, 8).map((operation, index) => [
     Markup.button.callback(`Open ${index + 1}`, `attackpool:${operation.short_id}`),
-    Markup.button.callback("Stand down", `op:close:${operation.operation_id}`),
-    Markup.button.url("Open", mapUrl(galaxyFromCoord(operation.target_coord || defaultGalaxy), operation.target_coord || ""))
+    Markup.button.callback("Stand down", `op:close:${operation.operation_id}`)
   ]);
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
@@ -4973,7 +4971,6 @@ function attackPoolKeyboard(operation, claims, page = 1, selectedCoord = "") {
   if (pageData.page > 1) nav.push(Markup.button.callback("Prev", `attackpool:${operation.short_id}:${pageData.page - 1}`));
   if (pageData.page < pageData.pages) nav.push(Markup.button.callback("Next", `attackpool:${operation.short_id}:${pageData.page + 1}`));
   if (nav.length) rows.push(nav);
-  if (operation.target_coord) rows.push([Markup.button.url("Open First Target", mapUrl(galaxyFromCoord(operation.target_coord), operation.target_coord))]);
   rows.push([Markup.button.callback("Status", `op:status:${operation.operation_id}`)]);
   return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
@@ -6235,12 +6232,152 @@ function parseCsv(value) {
     .filter(Boolean);
 }
 
-function mapUrl(galaxy, loc = "", chatId = "") {
+function mapUrlForContext(ctx, galaxy, loc = "", chatId = "") {
+  const payload = {
+    u: telegramUserId(ctx),
+    c: String(chatId || chatScopeId(ctx) || ""),
+    g: normalizeGalaxy(galaxy) || defaultGalaxy,
+    l: loc || "",
+    e: Date.now() + miniAppTokenMinutes * 60 * 1000
+  };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", miniAppAccessSecret).update(encoded).digest("base64url");
   const separator = webAppUrl.includes("?") ? "&" : "?";
-  const params = new URLSearchParams({ gal: galaxy, v: botBuild });
-  if (loc) params.set("loc", loc);
-  if (chatId) params.set("chat_id", String(chatId));
-  return `${webAppUrl}${separator}${params.toString()}`;
+  return `${webAppUrl}${separator}${new URLSearchParams({ gal: payload.g, v: botBuild, access: `${encoded}.${signature}` })}`;
+}
+
+function verifyMiniAppAccess(value) {
+  const [encoded, signature] = String(value || "").split(".");
+  if (!encoded || !signature || !miniAppAccessSecret) return null;
+  const expected = createHmac("sha256", miniAppAccessSecret).update(encoded).digest("base64url");
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!payload.u || !payload.c || !normalizeGalaxy(payload.g) || Number(payload.e) <= Date.now()) return null;
+    return { ...payload, u: String(payload.u), c: String(payload.c), g: normalizeGalaxy(payload.g) };
+  } catch {
+    return null;
+  }
+}
+
+async function verifiedMiniAppSession(accessToken) {
+  const session = verifyMiniAppAccess(accessToken);
+  if (!session) return null;
+  if (approvedChatIds.length && !approvedChatIds.includes(session.c)) return null;
+  const member = await fetchAccessMember(session.c, session.u);
+  if (!member || member.status !== "active" || !["member", "officer", "owner"].includes(member.role)) return null;
+  return { ...session, member };
+}
+
+function miniAppContext(session) {
+  return {
+    from: {
+      id: session.u,
+      username: session.member.username || "",
+      first_name: session.member.display_name || `Telegram ${session.u}`
+    },
+    chat: { id: session.c, type: "group", title: "VisionBot Map" }
+  };
+}
+
+async function miniAppCoverage(session) {
+  const galaxy = session.g;
+  const mapId = galaxyToMapId(galaxy);
+  const [bases, stances, agendas] = await Promise.all([
+    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild" }),
+    fetchStanceMap(galaxy),
+    fetchScoutAgendas(galaxy, session.c)
+  ]);
+  const assignmentEntries = await Promise.all(agendas.flatMap((agenda) => agenda.operations).map(async (operation) => {
+    const members = await fetchOperationMembers(operation);
+    const watch = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+    return [operation.target_coord, watch || null];
+  }));
+  const watches = new Map(assignmentEntries.filter(([, member]) => member));
+  const byRegion = new Map(Array.from({ length: 99 }, (_, index) => [`${galaxy}:${index + 1}`, {
+    region: `${galaxy}:${index + 1}`,
+    app: false,
+    friendly: false,
+    enemy: false,
+    watchNeeded: false,
+    watchAssigned: false,
+    watchOwner: "",
+    watchOwnerId: ""
+  }]));
+  bases.forEach((base) => {
+    const region = astroToRegion(base.region_id || base.coord || "");
+    const entry = byRegion.get(region);
+    if (!entry) return;
+    const tag = normalizeStanceTarget(base.guild);
+    if (tag === primaryGuildTag) entry.app = true;
+    else if (stances.tag.get(tag) === "friend") entry.friendly = true;
+    else if (tag) entry.enemy = true;
+  });
+  watches.forEach((watch, region) => {
+    const entry = byRegion.get(region);
+    if (!entry) return;
+    entry.watchAssigned = true;
+    entry.watchOwner = watch.display_name || "Guild member";
+    entry.watchOwnerId = String(watch.user_id || "");
+  });
+  byRegion.forEach((entry) => {
+    entry.watchNeeded = !entry.app && !entry.watchAssigned;
+  });
+  return [...byRegion.values()];
+}
+
+async function ensureMiniAppRegionOperation(session, region) {
+  const normalizedRegion = `${session.g}:${Number(String(region || "").split(":")[1])}`;
+  if (!/^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(normalizedRegion)) return null;
+  const agendaName = `${session.g} Region Coverage`;
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(session.g, session.c));
+  let agenda = agendas.find((item) => item.name === agendaName) || null;
+  let operation = agenda?.operations.find((item) => item.target_coord === normalizedRegion) || null;
+  if (operation) return operation;
+  const context = miniAppContext(session);
+  operation = operationRow(context, {
+    type: "scout",
+    targetCoord: normalizedRegion,
+    arrivalAt: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000),
+    note: scoutAgendaNote(agenda?.key || newScoutAgendaKey(), agendaName),
+    chatId: session.c
+  });
+  operation.map_id = galaxyToMapId(session.g);
+  if (!(await insertRow("b24_operations", operation))) return null;
+  return operation;
+}
+
+async function updateMiniAppWatch(session, region, action) {
+  const operation = await ensureMiniAppRegionOperation(session, region);
+  if (!operation) throw new Error("Invalid watch region");
+  const existing = (await fetchOperationMembers(operation))
+    .find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+  if (action === "release") {
+    if (!existing || String(existing.user_id) !== session.u) throw new Error("Only the assigned watcher can release this region");
+    await upsertOperationMember(miniAppContext(session), operation, "withdrawn");
+    return;
+  }
+  if (existing && String(existing.user_id) !== session.u) throw new Error(`${existing.display_name || "Another member"} is already watching this region`);
+  await upsertOperationMember(miniAppContext(session), operation, "joined", "watch");
+}
+
+function writeJson(response, status, payload) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Access-Control-Allow-Origin": "https://bjuliant.github.io",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  });
+  response.end(JSON.stringify(payload));
+}
+
+async function readJson(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
 function wait(ms) {
@@ -6266,8 +6403,50 @@ function sanitizeLogText(value) {
 
 const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
 
-http.createServer((request, response) => {
-  const path = new URL(request.url || "/", "http://localhost").pathname;
+http.createServer(async (request, response) => {
+  const url = new URL(request.url || "/", "http://localhost");
+  const path = url.pathname;
+  if (request.method === "OPTIONS" && path.startsWith("/api/miniapp/")) {
+    return writeJson(response, 204, {});
+  }
+  if (path === "/api/miniapp/session" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, {
+        galaxy: session.g,
+        chatId: session.c,
+        userId: session.u,
+        displayName: session.member.display_name || "Guild member",
+        expiresAt: Number(session.e)
+      });
+    } catch (error) {
+      console.error("Mini app session lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not verify map access." });
+    }
+  }
+  if (path === "/api/miniapp/coverage" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, { sectors: await miniAppCoverage(session) });
+    } catch (error) {
+      console.error("Mini app coverage lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load region coverage." });
+    }
+  }
+  if (path === "/api/miniapp/watch" && request.method === "POST") {
+    try {
+      const body = await readJson(request);
+      const session = await verifiedMiniAppSession(body.access);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      await updateMiniAppWatch(session, body.region, body.action === "release" ? "release" : "take");
+      return writeJson(response, 200, { sectors: await miniAppCoverage(session) });
+    } catch (error) {
+      console.error("Mini app watch update failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not update this watch." });
+    }
+  }
   if (webhookHandler && path === webhookPath) {
     if (telegramWebhookSecret && request.headers["x-telegram-bot-api-secret-token"] !== telegramWebhookSecret) {
       response.writeHead(403, { "Content-Type": "text/plain" });
