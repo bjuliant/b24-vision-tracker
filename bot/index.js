@@ -45,13 +45,14 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-15.1";
+const botBuild = "2026-07-15.2";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
   onboardme: ["enlist", "on", "onboard", "onboardme"],
   status: ["st", "status"],
   buildplan: ["bp", "buildplan"],
+  researchplan: ["rp", "researchplan"],
   scout: ["sc", "scout"],
   scouts: ["scouting", "scoutings", "scouts"],
   watches: ["watched", "watches"],
@@ -65,7 +66,7 @@ const preferredCommandAliases = {
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
-  "status", "version", "map", "wakeup", "buildplan", "g", "setgalaxy", "guild",
+  "status", "version", "map", "wakeup", "buildplan", "researchplan", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
@@ -89,6 +90,66 @@ const buildPlans = new Map([
   [14, { scope: "ALL 14 bases", build: "22 MR / 17 RF / 16 SY / 1 OSY / 12 NF / 14 EC / 7 AF / 20 SPO / 21 CM / 5 CAP", next: 15 }],
   [15, { scope: "ALL 15 bases", build: "24 MR / 17 RF / 16 SY / 4 OSY / 14 NF / 14 EC / 9 AF / 25 SPO / 22 CM / 7 CAP", next: 16 }],
   [16, { scope: "ALL 16 bases", build: "25 MR / 17 RF / 18 SY / 5 OSY / 15 NF / 16 EC / 10 AF / 25 SPO / 22 CM / 9 CAP", next: 17 }]
+]);
+
+const researchPlans = new Map([
+  [1, {
+    target: "C2 -> E6 -> SD4 -> E8 -> WD1",
+    guidance: "Maintain RL8 and SY8. This unlocks Robotic Factories, the Outpost Ship, and the Shipyards needed to build it.",
+    reserve: 200,
+    next: 2,
+    priorities: ["Computer 2", "Energy 6", "Stellar Drive 4", "Energy 8", "Warp Drive 1"]
+  }],
+  [2, {
+    target: "C4 / E8 / L2 / SD4 / WD1",
+    guidance: "This is a pacing target, not a hard expansion requirement. Research only above the protected reserve.",
+    reserve: 300,
+    next: 3,
+    priorities: ["Protect the Base #3 reserve", "Computer toward 4", "Laser toward 2"]
+  }],
+  [3, {
+    target: "C6 / E8 / L4 / SD4 / WD1",
+    guidance: "This is a pacing target, not a hard expansion requirement. Research only above the protected reserve.",
+    reserve: 600,
+    next: 4,
+    priorities: ["Protect the Base #4 reserve", "Computer toward 6", "Laser toward 4"]
+  }],
+  [4, {
+    target: "C8 / E8 / L6 / SD4 / WD1",
+    guidance: "This is a pacing target, not a hard expansion requirement. Research only above the protected reserve.",
+    reserve: 1100,
+    next: 5,
+    priorities: ["Protect the Base #5 reserve", "Computer toward 8", "Laser toward 6"]
+  }],
+  [5, {
+    target: "C10 / E8 / L8 / SD4 / WD1",
+    guidance: "Reach Computer 10 and Laser 8 before the six-base development cycle is complete.",
+    reserve: 2100,
+    next: 6,
+    unlocks: ["Economic Centers at Computer 10", "Nanite Factories at Computer 10 + Laser 8"],
+    priorities: ["Computer toward 10", "Laser toward 8", "Establish Base #6"]
+  }],
+  [6, {
+    target: "C10 / E8 / L8 / SD4 / WD1",
+    guidance: "Hold the core target. Optional Energy 10 only when energy or area is blocking development.",
+    reserve: 5100,
+    next: 7,
+    priorities: ["Protect the Base #7 reserve", "Pause nonessential research", "Optional Energy 10 only when blocked"]
+  }],
+  [7, {
+    target: "C10 / E8 / L8 / SD4 / WD1",
+    guidance: "Freeze nonessential research. Optional Warp Drive 2 only when Outpost travel is the actual bottleneck.",
+    reserve: 10100,
+    next: 8,
+    priorities: ["Protect the Base #8 reserve", "Freeze optional research", "Optional Warp Drive 2 only for a travel bottleneck"]
+  }],
+  [8, {
+    target: "C10 / E8 / L8 / SD4 / WD1",
+    guidance: "Expansion sprint complete. Select the next doctrine: economy, defense, fleet, or advanced expansion.",
+    reserve: null,
+    next: null,
+    priorities: ["Choose the next strategic doctrine", "Keep expansion reserves separate from optional research"]
+  }]
 ]);
 
 bot.use(async (ctx, next) => {
@@ -232,6 +293,7 @@ async function handleText(ctx) {
   if (isExactCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "buildplan")) return handleBuildPlan(ctx, text, mode);
+  if (isCommand(lower, "researchplan")) return handleResearchPlan(ctx, text, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
   if (isCommand(lower, "guild")) return handleGuild(ctx, text, mode);
@@ -479,8 +541,8 @@ async function helpText(ctx, input = "") {
       "<code>!intel [coord]</code> - DM intel to you",
       "<code>$intel [coord]</code> - post intel in the current chat",
       "<code>!intel [coord] [TAG]</code> - officer-only manual alliance assessment",
-      "<code>!friend [tag|coord]</code> - show matching intel with a green dot",
-      "<code>!enemy [tag|coord]</code> - show matching intel with a red dot",
+      "<code>!friend [tag|coord]</code> - officer-only: mark a shared friendly classification",
+      "<code>!enemy [tag|coord]</code> - officer-only: mark a shared hostile classification",
       "",
       "Examples:",
       "<code>!B24:34:06:10</code>",
@@ -570,9 +632,17 @@ async function helpText(ctx, input = "") {
       "<code>!bp [1-16]</code>",
       "Short alias.",
       "",
+      "<code>!researchplan [1-8]</code>",
+      "Shows the lean expansion-research doctrine and protected reserve.",
+      "<code>!researchplan 5 detail</code>",
+      "Shows targets, unlocks, and research priorities.",
+      "<code>!rp [1-8]</code>",
+      "Short alias.",
+      "",
       "Examples:",
       "<code>!buildplan 1</code>",
-      "<code>!buildplan 12</code>"
+      "<code>!buildplan 12</code>",
+      "<code>!researchplan 5 detail</code>"
     ],
     buildplan: [
       "<b>Doctrine Help</b>",
@@ -585,6 +655,24 @@ async function helpText(ctx, input = "") {
       "Examples:",
       "<code>!buildplan 1</code>",
       "<code>!buildplan 12</code>"
+    ],
+    researchplan: [
+      "<b>Expansion Research Help</b>",
+      "",
+      "<code>!researchplan [1-8]</code>",
+      "Shows the lean research target and colonization reserve for that base count.",
+      "<code>!researchplan [1-8] detail</code>",
+      "Adds unlocks, priorities, and the abbreviation key.",
+      "<code>!researchplan [1-7] credits [amount]</code>",
+      "Checks whether the next-base reserve is protected.",
+      "<code>!rp [1-8]</code>",
+      "Short alias.",
+      "",
+      "Examples:",
+      "<code>!researchplan 1</code>",
+      "<code>!researchplan 5 detail</code>",
+      "<code>!researchplan 5 credits 730</code>",
+      "<code>!rp 7</code>"
     ],
     guild: [
       "<b>Guild Scope Help</b>",
@@ -645,6 +733,7 @@ async function helpText(ctx, input = "") {
     "<b>PERSONAL</b>",
     "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
     "<code>!buildplan [1-16]</code> - guild base doctrine",
+    "<code>!researchplan [1-8]</code> - expansion research doctrine",
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
@@ -692,6 +781,7 @@ function basicHelpText() {
     "$astros B24 craters a85 m4 c2 - search astros",
     "$bases [TAG] - list known bases",
     "!buildplan [1-16] - base doctrine",
+    "!researchplan [1-8] - expansion research doctrine",
     "",
     "Full help had a temporary problem. Check Render logs for the line after: help command failed."
   ].join("\n");
@@ -769,7 +859,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -851,6 +941,7 @@ function isProtectedOperationalCommand(lowerText) {
     "attacks",
     "map",
     "buildplan",
+    "researchplan",
     "scout",
     "scouts",
     "watches",
@@ -898,6 +989,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "attacks",
     "map",
     "buildplan",
+    "researchplan",
     "scout",
     "scouts",
     "watches",
@@ -943,7 +1035,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1289,6 +1381,137 @@ function formatBuildPlan(stage) {
     "When complete:",
     `-&gt; Establish Base #${plan.next}`
   ].join("\n");
+}
+
+async function handleResearchPlan(ctx, text, mode) {
+  const body = commandBody(text);
+  const stage = Number((body.match(/\b(?:[1-8])\b/) || [])[0] || 0);
+  const detailed = /\bdetail(?:ed)?\b/i.test(body);
+  const creditsMatch = body.match(/\bcredits?\s+([\d,]+)/i);
+  const currentCredits = creditsMatch ? Number(creditsMatch[1].replace(/,/g, "")) : null;
+  if (!researchPlans.has(stage)) {
+    return respond(ctx, mode, [
+      "<b>Expansion Research Doctrine</b>",
+      "",
+      "Use <code>!researchplan 1</code> through <code>!researchplan 8</code>.",
+      "Short form: <code>!rp 5</code>.",
+      "Add <code>detail</code> for targets, unlocks, and priorities.",
+      "Add <code>credits 730</code> to check the protected reserve.",
+      "",
+      "Examples:",
+      "<code>!researchplan 1</code>",
+      "<code>!researchplan 5 detail</code>",
+      "<code>!researchplan 5 credits 730</code>"
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+  const output = Number.isFinite(currentCredits)
+    ? formatResearchReserveCheck(stage, currentCredits)
+    : detailed
+      ? formatResearchPlanDetail(stage)
+      : formatResearchPlan(stage);
+  return respond(ctx, mode, output, { parse_mode: "HTML" });
+}
+
+function formatResearchPlan(stage) {
+  const plan = researchPlans.get(stage);
+  const lines = [
+    `<b>${stage} ${stage === 1 ? "BASE" : "BASES"}: EXPANSION RESEARCH</b>`,
+    "",
+    `<code>${escapeHtml(plan.target)}</code>`,
+    "",
+    escapeHtml(plan.guidance)
+  ];
+  if (plan.reserve) {
+    lines.push("", `Protected reserve: <b>${plan.reserve.toLocaleString("en-US")} credits</b>`);
+  }
+  if (plan.next) {
+    lines.push("", "When complete:", `-&gt; Establish Base #${plan.next}`);
+  }
+  lines.push("", `Detail: <code>!researchplan ${stage} detail</code>`);
+  return lines.join("\n");
+}
+
+function formatResearchPlanDetail(stage) {
+  const plan = researchPlans.get(stage);
+  const lines = [
+    `<b>${stage}-BASE EXPANSION RESEARCH</b>`,
+    "",
+    "<b>Required target</b>",
+    ...expandResearchTarget(plan.target).map((item) => escapeHtml(item))
+  ];
+  if (plan.unlocks?.length) {
+    lines.push("", "<b>Unlocks</b>", ...plan.unlocks.map((item) => `- ${escapeHtml(item)}`));
+  }
+  if (plan.reserve) {
+    lines.push("", "<b>Colonization reserve</b>", `${plan.reserve.toLocaleString("en-US")} credits protected`);
+  }
+  lines.push("", "<b>Priority</b>", ...plan.priorities.map((item, index) => `${index + 1}. ${escapeHtml(item)}`));
+  lines.push(
+    "",
+    `<i>${escapeHtml(plan.guidance)}</i>`,
+    "",
+    "<b>Abbreviations</b>",
+    "C Computer | E Energy | L Laser",
+    "SD Stellar Drive | WD Warp Drive",
+    "RL Research Labs | SY Shipyards",
+    "",
+    "Lysander does not currently receive your live credits or technology levels, so this is doctrine guidance rather than a live affordability check."
+  );
+  return lines.join("\n");
+}
+
+function formatResearchReserveCheck(stage, currentCredits) {
+  const plan = researchPlans.get(stage);
+  if (!plan.reserve || !plan.next) {
+    return [
+      "<b>EXPANSION SPRINT COMPLETE</b>",
+      "",
+      "Base #8 has no next-base reserve in this doctrine.",
+      `Current credits: <b>${currentCredits.toLocaleString("en-US")}</b>`,
+      "Choose the next economy, defense, fleet, or advanced-expansion doctrine."
+    ].join("\n");
+  }
+  const difference = currentCredits - plan.reserve;
+  if (difference < 0) {
+    return [
+      "<b>RESEARCH HOLD</b>",
+      "",
+      "Your next base is the current priority.",
+      "",
+      `Required Base #${plan.next} reserve: <b>${plan.reserve.toLocaleString("en-US")}</b>`,
+      `Current credits: <b>${currentCredits.toLocaleString("en-US")}</b>`,
+      `Shortfall: <b>${Math.abs(difference).toLocaleString("en-US")}</b>`,
+      "",
+      "Recommendation:",
+      "Pause optional research and continue saving for the next base."
+    ].join("\n");
+  }
+  return [
+    "<b>RESEARCH AVAILABLE</b>",
+    "",
+    `Base #${plan.next} reserve protected: <b>${plan.reserve.toLocaleString("en-US")}</b>`,
+    `Surplus credits: <b>${difference.toLocaleString("en-US")}</b>`,
+    "",
+    "Doctrine target:",
+    `<code>${escapeHtml(plan.target)}</code>`,
+    "",
+    escapeHtml(plan.guidance)
+  ].join("\n");
+}
+
+function expandResearchTarget(target) {
+  const names = {
+    C: "Computer",
+    E: "Energy",
+    L: "Laser",
+    SD: "Stellar Drive",
+    WD: "Warp Drive"
+  };
+  return String(target || "")
+    .split(/\s*(?:\/|->)\s*/)
+    .map((token) => token.match(/^(SD|WD|C|E|L)(\d+)$/i))
+    .filter(Boolean)
+    .map((match) => `${names[match[1].toUpperCase()]} ${match[2]}`);
 }
 
 async function handleUserGalaxy(ctx, text, mode) {
@@ -2759,6 +2982,9 @@ async function handleBases(ctx, text, mode) {
 }
 
 async function handleStance(ctx, text, mode, stance) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    return respond(ctx, mode, "Only Lysander officers can change shared friend/enemy classifications.");
+  }
   const raw = commandBody(text);
   if (!raw) return respond(ctx, mode, `Use: !${stance} [tag] or !${stance} B24:92:15:10`);
   const galaxy = await galaxyForContext(ctx);
@@ -6615,6 +6841,33 @@ async function miniAppIncoming(session) {
   };
 }
 
+async function miniAppBattles(session) {
+  const mapId = galaxyToMapId(session.g);
+  const [reports, occupations] = await Promise.all([
+    fetchAllRows("b24_battle_reports", { chat_id: `eq.${session.c}` }, { mapId, order: "battle_time.desc", limit: 60 }),
+    fetchAllRows("b24_occupations", { chat_id: `eq.${session.c}`, state: "eq.occupied" }, { mapId, order: "observed_at.desc", limit: 60 })
+  ]);
+  const party = (guild, player) => [guild, player].filter(Boolean).join(" ") || "Unknown";
+  return {
+    reports: reports.map((row) => ({
+      coord: row.coord,
+      battleTime: row.battle_time || row.created_at,
+      attacker: party(row.attacker_guild, row.attacker_player),
+      defender: party(row.defender_guild, row.defender_player),
+      outcome: row.outcome || "inconclusive",
+      destroyed: row.destroyed_total,
+      debris: row.debris,
+      pillage: row.pillage_credits
+    })),
+    occupations: occupations.map((row) => ({
+      coord: row.coord,
+      owner: party(row.owner_guild, row.owner_player),
+      occupier: party(row.occupier_guild, row.occupier_player),
+      observedAt: row.observed_at
+    }))
+  };
+}
+
 async function miniAppFindIncoming(session, incomingId) {
   const row = await fetchOne("b24_incoming", {
     incoming_id: String(incomingId || ""),
@@ -7581,6 +7834,16 @@ http.createServer(async (request, response) => {
     } catch (error) {
       console.error("Mini app scouting update failed", error?.message || error);
       return writeJson(response, 400, { error: error?.message || "Could not update scouting." });
+    }
+  }
+  if (path === "/api/miniapp/battles" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await miniAppBattles(session));
+    } catch (error) {
+      console.error("Mini app battle history lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load battle history." });
     }
   }
   if (path === "/api/miniapp/intel" && request.method === "GET") {
