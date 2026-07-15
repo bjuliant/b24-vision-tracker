@@ -45,7 +45,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-14.11";
+const botBuild = "2026-07-15.1";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3208,7 +3208,7 @@ async function handleSaveMe(ctx, text, mode) {
 
 async function buildAstroReport(coord, options = {}) {
   const includeSavedBases = Boolean(options.includeSavedBases);
-  const [astro, base, savedBases, stances, annotation] = await Promise.all([
+  const [astro, base, savedBases, stances, annotation, battleReports] = await Promise.all([
     fetchOne("b24_astros", { coord }, mapIdForCoord(coord)),
     fetchOne("b24_bases", { coord }, mapIdForCoord(coord)),
     includeSavedBases ? fetchRows("b24_user_bases", {
@@ -3216,10 +3216,16 @@ async function buildAstroReport(coord, options = {}) {
       status: "eq.active"
     }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" }) : [],
     fetchStanceMap(galaxyFromCoord(coord)),
-    fetchIntelAnnotation(coord, options.scopeId)
+    fetchIntelAnnotation(coord, options.scopeId),
+    fetchRows("b24_battle_reports", { coord: `eq.${coord}` }, {
+      mapId: mapIdForCoord(coord),
+      order: "created_at.desc",
+      limit: 1
+    })
   ]);
 
-  if (!astro && !base && !savedBases.length) return `No intel found for ${escapeHtml(coord)} yet.`;
+  const latestBattle = battleReports[0] || null;
+  if (!astro && !base && !savedBases.length && !latestBattle) return `No intel found for ${escapeHtml(coord)} yet.`;
 
   const icon = base ? stanceIcon(resolveBaseStance(base, stances)) : "";
   const lines = [`<b>${escapeHtml(`${icon ? `${icon} ` : ""}${coord}`)}</b>`];
@@ -3242,6 +3248,17 @@ async function buildAstroReport(coord, options = {}) {
       const note = saved.note ? ` - ${escapeHtml(saved.note)}` : "";
       lines.push(`${escapeHtml(saved.owner_label || "Unknown")}${note}`);
     });
+  }
+  if (latestBattle) {
+    const attacker = [latestBattle.attacker_guild, latestBattle.attacker_player].filter(Boolean).join(" ") || "Unknown attacker";
+    const defender = [latestBattle.defender_guild, latestBattle.defender_player].filter(Boolean).join(" ") || "Unknown defender";
+    const outcome = String(latestBattle.outcome || "inconclusive").replace(/_/g, " ");
+    lines.push("", `<b>Latest battle</b>: ${escapeHtml(latestBattle.battle_time || "time unknown")} - ${escapeHtml(outcome)}`);
+    lines.push(`${escapeHtml(attacker)} vs ${escapeHtml(defender)}`);
+    if (latestBattle.destroyed_total != null) {
+      lines.push(`Destroyed: ${Number(latestBattle.destroyed_total).toLocaleString("en-US")} | Debris: ${Number(latestBattle.debris || 0).toLocaleString("en-US")}`);
+    }
+    if (latestBattle.occupied) lines.push(`Occupied by: ${escapeHtml(attacker)} (ownership unchanged)`);
   }
   return lines.join("\n");
 }
@@ -6931,10 +6948,178 @@ function stableMiniAppImportId(parts) {
   return createHmac("sha256", miniAppAccessSecret).update(parts.join("|")).digest("hex").slice(0, 24);
 }
 
+function miniAppPageTimestamp(text) {
+  const match = String(text || "").match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4}),\s+(\d{2}):(\d{2}):(\d{2})\b/i);
+  if (!match) return new Date();
+  const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(match[2].toLowerCase());
+  const value = new Date(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]));
+  return Number.isFinite(value.getTime()) ? value : new Date();
+}
+
+function miniAppDurationMs(value) {
+  const parts = String(value || "").split(":").map(Number);
+  if (!parts.length || parts.length > 3 || !parts.every(Number.isFinite)) return 0;
+  if (parts.length === 3) return (((parts[0] * 60) + parts[1]) * 60 + parts[2]) * 1000;
+  if (parts.length === 2) return ((parts[0] * 60) + parts[1]) * 60000;
+  return parts[0] * 60000;
+}
+
+function miniAppGuildTag(value) {
+  const match = String(value || "").replace(/\\([\[\]])/g, "$1").match(/\[([^\]]{1,24})\]/);
+  return match ? normalizeStanceTarget(match[1]) : "";
+}
+
+function miniAppMovementRows(payload, sourceText, session) {
+  const observedAt = miniAppPageTimestamp(sourceText);
+  return (Array.isArray(payload.fleetMovements) ? payload.fleetMovements : []).map((row) => {
+    const coord = normalizeAstro(row.defendedCoord || row.destinationCoord || row.coord);
+    const duration = miniAppDurationMs(row.eta || row.etaText || "");
+    const suppliedArrival = new Date(row.arrivalAt || row.arrival_at || "");
+    const arrival = Number.isFinite(suppliedArrival.getTime()) ? suppliedArrival : new Date(observedAt.getTime() + duration);
+    if (!coord || mapIdForCoord(coord) !== galaxyToMapId(session.g) || !duration || arrival <= observedAt) return null;
+    const fleetId = String(row.fleetId || "").replace(/\D/g, "").slice(0, 40);
+    const playerId = String(row.playerId || "").replace(/\D/g, "").slice(0, 40);
+    const guild = miniAppGuildTag(row.guild || row.player || row.rawLine);
+    return {
+      movementId: `move-${stableMiniAppImportId([fleetId, coord, arrival.toISOString(), row.player || ""])}`,
+      server: String(row.server || "Borealis").slice(0, 80), fleetId, fleetName: String(row.fleetName || "").slice(0, 240),
+      playerId, player: String(row.player || "").replace(/^\[[^\]]+\]\s*/, "").slice(0, 160), guild,
+      destinationCoord: coord, arrivalAt: arrival.toISOString(), etaSeconds: Math.round(duration / 1000),
+      size: finiteNumberOrNull(String(row.size || "").replace(/,/g, "")), sourceKind: String(row.sourceKind || "scanner").slice(0, 40),
+      observedAt: observedAt.toISOString(), rawLine: String(row.rawLine || "").slice(0, 4000)
+    };
+  }).filter(Boolean).slice(0, 5000);
+}
+
+function miniAppSplitBattleReports(text) {
+  const raw = String(text || "");
+  const matches = [...raw.matchAll(/Battle Report\s*\r?\nLocation\b/gi)];
+  return matches.map((match, index) => raw.slice(match.index, matches[index + 1]?.index ?? raw.length));
+}
+
+function miniAppLabeled(lines, label, start = 0, end = lines.length) {
+  const pattern = new RegExp(`^${label}(?:\\s+|$)`, "i");
+  const line = lines.slice(start, end).find((item) => pattern.test(item));
+  return line ? line.replace(pattern, "").trim() : "";
+}
+
+function miniAppBattleParty(lines, start, end) {
+  const playerText = miniAppLabeled(lines, "Player", start, end);
+  const match = playerText.match(/^(.*?)\s+lvl\s+([\d.]+)$/i);
+  const identity = (match?.[1] || playerText).replace(/^\[|\]$/g, "").trim();
+  const guild = miniAppGuildTag(identity);
+  const fleetText = miniAppLabeled(lines, "Fleet Name", start, end);
+  return {
+    guild,
+    player: identity.replace(/^\[[^\]]+\]\s*/, "").trim(),
+    level: finiteNumberOrNull(match?.[2]),
+    fleet: fleetText.replace(/\s*\(Destroyed\)\s*/i, "").trim(),
+    destroyed: /\(Destroyed\)/i.test(fleetText),
+    commandCenters: finiteNumberOrNull(miniAppLabeled(lines, "Command Centers", start, end)),
+    startDefenses: finiteNumberOrNull(miniAppLabeled(lines, "Start Defenses", start, end).replace(/%$/, "")),
+    endDefenses: finiteNumberOrNull(miniAppLabeled(lines, "End Defenses", start, end).replace(/%$/, ""))
+  };
+}
+
+function miniAppBattleUnits(lines, start, end) {
+  return lines.slice(start, end).map((line) => {
+    const match = line.match(/^(.+?)\s+([\d,.?]+)\s+([\d,.?]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/);
+    return match ? { unit: match[1].trim(), start: finiteNumberOrNull(match[2]?.replace(/,/g, "")), end: finiteNumberOrNull(match[3]?.replace(/,/g, "")), attack: finiteNumberOrNull(match[4]), armour: finiteNumberOrNull(match[5]), shield: finiteNumberOrNull(match[6]) } : null;
+  }).filter(Boolean);
+}
+
+function miniAppBattleReportsFromText(text, galaxy) {
+  return miniAppSplitBattleReports(text).map((raw) => {
+    const lines = raw.replace(/\*\*/g, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const attackHeaders = lines.map((line, index) => line.toLowerCase() === "attack force" ? index : -1).filter((index) => index >= 0);
+    const defenseHeaders = lines.map((line, index) => line.toLowerCase() === "defensive force" ? index : -1).filter((index) => index >= 0);
+    const coord = normalizeAstro((raw.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    if (!coord || attackHeaders.length < 2 || defenseHeaders.length < 2) return null;
+    const attacker = miniAppBattleParty(lines, attackHeaders[0] + 1, defenseHeaders[0]);
+    const defender = miniAppBattleParty(lines, defenseHeaders[0] + 1, attackHeaders[1]);
+    const attackerUnits = miniAppBattleUnits(lines, attackHeaders[1] + 1, defenseHeaders[1]);
+    const defenderUnits = miniAppBattleUnits(lines, defenseHeaders[1] + 1, lines.length);
+    const destroyed = raw.match(/Total cost of units destroyed:\s*([\d,]+)\s*\(\s*Attacker:\s*([\d,]+)\s*;\s*Defender:\s*([\d,]+)/i);
+    const loot = raw.match(/Loot:\s*\(\s*Attacker:\s*([+\-]?[\d,]+)\s*;\s*Defender:\s*([+\-]?[\d,]+)/i);
+    const experience = raw.match(/Experience:\s*\(\s*Attacker:\s*([+\-]?[\d,]+)\s*;\s*Defender:\s*([+\-]?[\d,]+)/i);
+    const occupied = /attacker conquered the base/i.test(raw);
+    const battleTime = miniAppLabeled(lines, "Time");
+    if (!battleTime || !/Total cost of units destroyed|New debris in space|conquered the base/i.test(raw)) return null;
+    const attackerEnd = attackerUnits.reduce((sum, row) => sum + (row.end || 0), 0);
+    const defenderEnd = defenderUnits.reduce((sum, row) => sum + (row.end || 0), 0);
+    return { complete: true, server: miniAppLabeled(lines, "Server"), coord, locationLabel: miniAppLabeled(lines, "Location").replace(coord, "").replace(/[()]/g, "").trim(), battleTime, attacker, defender, attackerUnits, defenderUnits, totals: { destroyed: finiteNumberOrNull(destroyed?.[1]?.replace(/,/g, "")), attackerDestroyed: finiteNumberOrNull(destroyed?.[2]?.replace(/,/g, "")), defenderDestroyed: finiteNumberOrNull(destroyed?.[3]?.replace(/,/g, "")), attackerLoot: finiteNumberOrNull(loot?.[1]?.replace(/,/g, "")), defenderLoot: finiteNumberOrNull(loot?.[2]?.replace(/,/g, "")), attackerExperience: finiteNumberOrNull(experience?.[1]?.replace(/,/g, "")), defenderExperience: finiteNumberOrNull(experience?.[2]?.replace(/,/g, "")), debris: finiteNumberOrNull((raw.match(/New debris in space:\s*([\d,]+)/i) || [])[1]?.replace(/,/g, "")), pillage: finiteNumberOrNull((raw.match(/got\s+([\d,]+)\s+credits for pillaging/i) || [])[1]?.replace(/,/g, "")) }, occupied, liberated: false, outcome: occupied ? "occupied" : (!attackerEnd && !defenderEnd ? "mutual_destruction" : attackerEnd && !defenderEnd ? "attacker_win" : !attackerEnd && defenderEnd ? "defender_win" : "inconclusive"), resultText: raw.slice(-2000), rawReport: raw };
+  }).filter(Boolean);
+}
+
+function miniAppFleetObservationFromText(text, sourceUrl, galaxy) {
+  const raw = String(text || "");
+  if (!/Fleet Size:\s*[\d,]+/i.test(raw) || !/\bUnits\b/i.test(raw)) return [];
+  const coord = normalizeAstro((raw.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+  const fleetId = (String(sourceUrl || "").match(/[?&]fleet=(\d+)/i) || [])[1] || "";
+  const fleetName = (raw.match(/\b(Fleet\s+\d+)(?:\s+-|\b)/i) || [])[1] || "";
+  const size = finiteNumberOrNull((raw.match(/Fleet Size:\s*([\d,]+)/i) || [])[1]?.replace(/,/g, ""));
+  const detectionSeconds = finiteNumberOrNull((raw.match(/Detection time:\s*(\d+)s/i) || [])[1]);
+  const unitBlock = raw.split(/\bUnits\b/i)[1]?.split(/Fleet Size:/i)[0] || "";
+  const units = unitBlock.split(/\r?\n/).map((line) => {
+    const match = line.replace(/\*\*/g, "").trim().match(/^(.+?)\s+([\d,]+)$/);
+    return match ? { unit: match[1].trim(), quantity: finiteNumberOrNull(match[2].replace(/,/g, "")) } : null;
+  }).filter(Boolean).slice(0, 100);
+  const observedAt = miniAppPageTimestamp(raw).toISOString();
+  return [{
+    observationId: `fleet-${stableMiniAppImportId([fleetId, coord, observedAt, size])}`,
+    server: (raw.match(/Server\s+([A-Za-z][A-Za-z0-9 _-]+)/i) || [])[1] || "Borealis",
+    fleetId, fleetName, coord, size, units, detectionSeconds,
+    sourceKind: "fleet_overview", observedAt, rawLine: raw.slice(0, 4000)
+  }];
+}
+
+function miniAppOccupationRowsFromText(text, sourceUrl, galaxy) {
+  const raw = String(text || "");
+  const coord = normalizeAstro((raw.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+  if (!coord) return [];
+  const observedAt = miniAppPageTimestamp(raw).toISOString();
+  const server = (raw.match(/Server\s+([A-Za-z][A-Za-z0-9 _-]+)/i) || [])[1] || "Borealis";
+  if (/\bRevolt Successful\b/i.test(raw)) {
+    return [{ coord, server, state: "liberated", revoltState: "successful", observedAt, resolvedAt: observedAt, sourceKind: "revolt_page" }];
+  }
+  const revoltIndex = raw.search(/Revolt\s*\(you must destroy occupier's fleet first\)/i);
+  if (revoltIndex < 0) return [];
+  const nearbyLines = raw.slice(Math.max(0, revoltIndex - 3000), revoltIndex).split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
+  const playerLine = nearbyLines.find((line) => /\[[^\]]+\].*\b[\d,]+\s*$/.test(line)) || "";
+  const fleetMatch = playerLine.match(/^(.*?)\s+\[([^\]]+)\]\s+(.+?)\s+([\d,]+)\s*$/);
+  const size = finiteNumberOrNull(fleetMatch?.[4]?.replace(/,/g, ""));
+  return [{
+    coord, server, occupierGuild: normalizeStanceTarget(fleetMatch?.[2] || miniAppGuildTag(playerLine)),
+    occupierPlayer: String(fleetMatch?.[3] || "").trim().slice(0, 160),
+    occupyingFleetName: String(fleetMatch?.[1] || "").trim().slice(0, 240),
+    occupyingFleetSize: size, state: "occupied", revoltState: "blocked", observedAt,
+    sourceKind: "occupation_page"
+  }];
+}
+
+function miniAppGameEventsFromText(text, galaxy) {
+  const raw = String(text || "");
+  const observedAt = miniAppPageTimestamp(raw).toISOString();
+  const server = (raw.match(/Server\s+([A-Za-z][A-Za-z0-9 _-]+)/i) || [])[1] || "Borealis";
+  const events = [];
+  for (const match of raw.matchAll(/Revolt Report[\s\S]*?Revolts at\s+([^\r\n]+?)\s+caused this base occupation to end\./gi)) {
+    const coord = normalizeAstro((match[0].match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    events.push({ type: "revolt_success", coord, baseLabel: match[1].trim(), occurredAt: observedAt, server, rawLine: match[0].slice(0, 2000) });
+  }
+  for (const match of raw.matchAll(/Trade Route Attacked[\s\S]*?(?=Trade Route Attacked|Revolt Report|Battle Report\s*\r?\nLocation|$)/gi)) {
+    const coord = normalizeAstro((match[0].match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    events.push({ type: "trade_route_attacked", coord, actorGuild: miniAppGuildTag(match[0]), occurredAt: observedAt, server, rawLine: match[0].slice(0, 2000) });
+  }
+  return events;
+}
+
 async function miniAppImportIntel(session, body) {
   const mapId = galaxyToMapId(session.g);
   const stamp = new Date().toISOString();
   const payload = body.intel && typeof body.intel === "object" ? body.intel : {};
+  const sourceText = String(payload.sourceText || "").slice(0, 1000000);
+  const sourceUrl = String(payload.sourceUrl || "").slice(0, 2000);
+  const stances = await fetchStanceMap(session.g);
   const systems = [...new Map((Array.isArray(payload.systems) ? payload.systems : []).map((row) => {
     const location = normalizeLocation(row.coord || row);
     if (!location || location.galaxy !== session.g || location.coord.split(":").length !== 3) return ["", null];
@@ -6951,7 +7136,42 @@ async function miniAppImportIntel(session, body) {
     const attributes = (Array.isArray(row.attributes) ? row.attributes : []).slice(0, 6).map(Number);
     return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), astro_no: coord.split(":")[3], terrain: String(row.terrain || "").slice(0, 40), astro_type: String(row.type || row.astroType || "").slice(0, 40), attributes: attributes.every(Number.isFinite) ? attributes : [], has_base: Boolean(row.hasBase ?? row.has_base), updated_at: stamp }];
   }).filter(([coord]) => coord)).values()].slice(0, 10000);
-  const incoming = (Array.isArray(payload.incoming) ? payload.incoming : []).map((row) => {
+  const movementRows = miniAppMovementRows(payload, sourceText, session).map((row) => {
+    const coordStance = stances.coord.get(row.destinationCoord);
+    const tagStance = row.guild ? stances.tag.get(row.guild) : "";
+    const classification = coordStance === "enemy" || tagStance === "enemy"
+      ? "hostile"
+      : coordStance === "friend" || tagStance === "friend" || row.guild === primaryGuildTag
+        ? "friendly"
+        : "unknown";
+    return {
+      map_id: mapId,
+      movement_id: row.movementId,
+      server: row.server,
+      fleet_id: row.fleetId || null,
+      fleet_name: row.fleetName || null,
+      player_id: row.playerId || null,
+      player: row.player || null,
+      guild: row.guild || null,
+      destination_coord: row.destinationCoord,
+      destination_region_id: astroToRegion(row.destinationCoord),
+      destination_system_id: astroToSystem(row.destinationCoord),
+      arrival_at: row.arrivalAt,
+      eta_seconds: row.etaSeconds,
+      arrival_precision: "countdown",
+      size: row.size,
+      classification,
+      source_kind: row.sourceKind,
+      observed_at: row.observedAt,
+      raw_line: row.rawLine,
+      imported_by: session.member.display_name || "VisionBot exporter",
+      imported_by_user_id: session.u,
+      chat_id: session.c,
+      status: new Date(row.arrivalAt).getTime() > Date.now() ? "active" : "arrived",
+      updated_at: stamp
+    };
+  });
+  const manualIncoming = (Array.isArray(payload.incoming) ? payload.incoming : []).map((row) => {
     const defendedCoord = normalizeAstro(row.defendedCoord || row.defended_coord);
     const attackerCoord = normalizeAstro(row.attackerCoord || row.attacker_coord);
     const arrivalAt = new Date(row.arrivalAt || row.arrival_at);
@@ -6979,13 +7199,199 @@ async function miniAppImportIntel(session, body) {
       updated_at: stamp
     };
   }).filter(Boolean).slice(0, 2000);
-  const [systemCount, baseCount, astroCount, incomingCount] = await Promise.all([
+  const movementIncoming = movementRows.filter((row) => row.classification === "hostile" && row.status === "active").map((row) => ({
+    map_id: mapId,
+    incoming_id: `movement-${row.movement_id}`,
+    defended_coord: row.destination_coord,
+    defended_region_id: row.destination_region_id,
+    defended_system_id: row.destination_system_id,
+    attacker_coord: null,
+    region_id: null,
+    system_id: null,
+    eta_minutes: Math.max(1, Math.ceil((new Date(row.arrival_at).getTime() - Date.now()) / 60000)),
+    arrival_at: row.arrival_at,
+    reported_by: session.member.display_name || "VisionBot exporter",
+    reported_by_user_id: session.u,
+    chat_id: session.c,
+    hostile_fleet: row.raw_line || [row.guild, row.player, row.fleet_name].filter(Boolean).join(" "),
+    severity: "",
+    verified: true,
+    note: [row.guild, row.player, row.fleet_name, row.size ? `size ${row.size}` : ""].filter(Boolean).join(" | ").slice(0, 500),
+    status: "active",
+    updated_at: stamp
+  }));
+  const incoming = [...new Map([...manualIncoming, ...movementIncoming].map((row) => [row.incoming_id, row])).values()].slice(0, 5000);
+  const sourceBattleReports = miniAppBattleReportsFromText(sourceText, session.g);
+  const suppliedBattleReports = Array.isArray(payload.battleReports) ? payload.battleReports : [];
+  const battleReports = [...suppliedBattleReports, ...sourceBattleReports].map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (!coord || mapIdForCoord(coord) !== mapId || !row.complete) return null;
+    const rawReport = String(row.rawReport || row.raw_report || "").slice(0, 200000);
+    const attacker = row.attacker && typeof row.attacker === "object" ? row.attacker : {};
+    const defender = row.defender && typeof row.defender === "object" ? row.defender : {};
+    const totals = row.totals && typeof row.totals === "object" ? row.totals : {};
+    const reportId = `battle-${stableMiniAppImportId([
+      String(row.server || ""),
+      coord,
+      String(row.battleTime || row.battle_time || ""),
+      String(attacker.playerId || attacker.player || ""),
+      String(defender.playerId || defender.player || ""),
+      rawReport
+    ])}`;
+    return {
+      map_id: mapId,
+      report_id: reportId,
+      server: String(row.server || "").slice(0, 80),
+      coord,
+      region_id: astroToRegion(coord),
+      system_id: astroToSystem(coord),
+      location_label: String(row.locationLabel || row.location_label || "").slice(0, 240),
+      battle_time: String(row.battleTime || row.battle_time || "").slice(0, 40),
+      attacker_guild: String(attacker.guild || "").slice(0, 80),
+      attacker_player: String(attacker.player || "").slice(0, 160),
+      attacker_player_id: String(attacker.playerId || "").slice(0, 40),
+      attacker_level: finiteNumberOrNull(attacker.level),
+      attacker_fleet: String(attacker.fleet || "").slice(0, 240),
+      attacker_destroyed: Boolean(attacker.destroyed),
+      attacker_command_centers: finiteNumberOrNull(attacker.commandCenters),
+      defender_guild: String(defender.guild || "").slice(0, 80),
+      defender_player: String(defender.player || "").slice(0, 160),
+      defender_player_id: String(defender.playerId || "").slice(0, 40),
+      defender_level: finiteNumberOrNull(defender.level),
+      defender_fleet: String(defender.fleet || "").slice(0, 240),
+      defender_destroyed: Boolean(defender.destroyed),
+      defender_command_centers: finiteNumberOrNull(defender.commandCenters),
+      start_defenses: finiteNumberOrNull(defender.startDefenses),
+      end_defenses: finiteNumberOrNull(defender.endDefenses),
+      attacker_units: Array.isArray(row.attackerUnits) ? row.attackerUnits.slice(0, 100) : [],
+      defender_units: Array.isArray(row.defenderUnits) ? row.defenderUnits.slice(0, 100) : [],
+      destroyed_total: finiteNumberOrNull(totals.destroyed),
+      attacker_destroyed_cost: finiteNumberOrNull(totals.attackerDestroyed),
+      defender_destroyed_cost: finiteNumberOrNull(totals.defenderDestroyed),
+      attacker_loot: finiteNumberOrNull(totals.attackerLoot),
+      defender_loot: finiteNumberOrNull(totals.defenderLoot),
+      attacker_experience: finiteNumberOrNull(totals.attackerExperience),
+      defender_experience: finiteNumberOrNull(totals.defenderExperience),
+      debris: finiteNumberOrNull(totals.debris),
+      pillage_credits: finiteNumberOrNull(totals.pillage),
+      outcome: String(row.outcome || "inconclusive").slice(0, 40),
+      occupied: Boolean(row.occupied),
+      liberated: Boolean(row.liberated),
+      result_text: String(row.resultText || row.result_text || "").slice(0, 2000),
+      raw_report: rawReport,
+      imported_by: session.member.display_name || "VisionBot importer",
+      imported_by_user_id: session.u,
+      chat_id: session.c,
+      updated_at: stamp
+    };
+  }).filter(Boolean);
+  const uniqueBattleReports = [...new Map(battleReports.map((row) => [row.report_id, row])).values()].slice(0, 500);
+  const suppliedObservations = Array.isArray(payload.fleetObservations) ? payload.fleetObservations : [];
+  const pageObservations = miniAppFleetObservationFromText(sourceText, sourceUrl, session.g);
+  const battleObservations = uniqueBattleReports.flatMap((report) => [
+    {
+      observationId: `battle-${report.report_id}-attacker`, server: report.server, fleetName: report.attacker_fleet,
+      playerId: report.attacker_player_id, player: report.attacker_player, guild: report.attacker_guild,
+      coord: report.coord, units: report.attacker_units, destroyed: report.attacker_destroyed,
+      side: "attacker", sourceKind: "battle_report", observedAt: report.battle_time, rawLine: report.raw_report
+    },
+    {
+      observationId: `battle-${report.report_id}-defender`, server: report.server, fleetName: report.defender_fleet,
+      playerId: report.defender_player_id, player: report.defender_player, guild: report.defender_guild,
+      coord: report.coord, units: report.defender_units, destroyed: report.defender_destroyed,
+      side: "defender", sourceKind: "battle_report", observedAt: report.battle_time, rawLine: report.raw_report
+    }
+  ]);
+  const fleetObservations = [...suppliedObservations, ...pageObservations, ...battleObservations].map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (coord && mapIdForCoord(coord) !== mapId) return null;
+    const observedDate = new Date(row.observedAt || row.observed_at || stamp);
+    const observedAt = Number.isFinite(observedDate.getTime()) ? observedDate.toISOString() : stamp;
+    const observationId = String(row.observationId || row.observation_id || "") || `obs-${stableMiniAppImportId([row.server || "", row.fleetId || "", row.fleetName || "", coord || "", observedAt, row.side || ""])}`;
+    return {
+      map_id: mapId, observation_id: observationId.slice(0, 100), server: String(row.server || "Borealis").slice(0, 80),
+      fleet_id: String(row.fleetId || row.fleet_id || "").slice(0, 40) || null,
+      fleet_name: String(row.fleetName || row.fleet_name || "").slice(0, 240) || null,
+      player_id: String(row.playerId || row.player_id || "").slice(0, 40) || null,
+      player: String(row.player || "").slice(0, 160) || null, guild: String(row.guild || "").slice(0, 80) || null,
+      coord: coord || null, size: finiteNumberOrNull(row.size), units: Array.isArray(row.units) ? row.units.slice(0, 100) : [],
+      detection_seconds: finiteNumberOrNull(row.detectionSeconds || row.detection_seconds), destroyed: Boolean(row.destroyed),
+      side: String(row.side || "").slice(0, 20) || null, source_kind: String(row.sourceKind || row.source_kind || "observation").slice(0, 40),
+      observed_at: observedAt, raw_line: String(row.rawLine || row.raw_line || "").slice(0, 10000),
+      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+    };
+  }).filter(Boolean);
+  const uniqueFleetObservations = [...new Map(fleetObservations.map((row) => [row.observation_id, row])).values()].slice(0, 2000);
+  const sourceOccupations = miniAppOccupationRowsFromText(sourceText, sourceUrl, session.g);
+  const battleOccupations = uniqueBattleReports.filter((report) => report.occupied || report.liberated).map((report) => ({
+    coord: report.coord, server: report.server, ownerGuild: report.defender_guild, ownerPlayer: report.defender_player,
+    occupierGuild: report.occupied ? report.attacker_guild : "", occupierPlayer: report.occupied ? report.attacker_player : "",
+    state: report.liberated ? "liberated" : "occupied", revoltState: report.liberated ? "successful" : "blocked",
+    observedAt: report.battle_time, resolvedAt: report.liberated ? report.battle_time : null, sourceKind: "battle_report"
+  }));
+  const occupationRows = [...(Array.isArray(payload.occupations) ? payload.occupations : []), ...sourceOccupations, ...battleOccupations].map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (!coord || mapIdForCoord(coord) !== mapId) return null;
+    const observed = new Date(row.observedAt || row.observed_at || stamp);
+    const resolved = row.resolvedAt || row.resolved_at ? new Date(row.resolvedAt || row.resolved_at) : null;
+    return {
+      map_id: mapId, coord, server: String(row.server || "Borealis").slice(0, 80),
+      owner_guild: String(row.ownerGuild || row.owner_guild || "").slice(0, 80) || null,
+      owner_player: String(row.ownerPlayer || row.owner_player || "").slice(0, 160) || null,
+      occupier_guild: String(row.occupierGuild || row.occupier_guild || "").slice(0, 80) || null,
+      occupier_player: String(row.occupierPlayer || row.occupier_player || "").slice(0, 160) || null,
+      occupier_player_id: String(row.occupierPlayerId || row.occupier_player_id || "").slice(0, 40) || null,
+      occupying_fleet_id: String(row.occupyingFleetId || row.occupying_fleet_id || "").slice(0, 40) || null,
+      occupying_fleet_name: String(row.occupyingFleetName || row.occupying_fleet_name || "").slice(0, 240) || null,
+      occupying_fleet_size: finiteNumberOrNull(row.occupyingFleetSize || row.occupying_fleet_size),
+      state: ["occupied", "occupier_destroyed", "unresolved", "liberated"].includes(row.state) ? row.state : "unresolved",
+      revolt_state: ["blocked", "available", "successful", "unknown"].includes(row.revoltState || row.revolt_state) ? (row.revoltState || row.revolt_state) : "unknown",
+      observed_at: Number.isFinite(observed.getTime()) ? observed.toISOString() : stamp,
+      resolved_at: resolved && Number.isFinite(resolved.getTime()) ? resolved.toISOString() : null,
+      source_kind: String(row.sourceKind || row.source_kind || "observation").slice(0, 40),
+      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+    };
+  }).filter(Boolean);
+  const uniqueOccupations = [...new Map(occupationRows.map((row) => [row.coord, row])).values()].slice(0, 1000);
+  const sourceEvents = miniAppGameEventsFromText(sourceText, session.g);
+  const gameEvents = [...(Array.isArray(payload.gameEvents) ? payload.gameEvents : []), ...sourceEvents].map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (coord && mapIdForCoord(coord) !== mapId) return null;
+    const occurred = new Date(row.occurredAt || row.occurred_at || stamp);
+    const occurredAt = Number.isFinite(occurred.getTime()) ? occurred.toISOString() : stamp;
+    const eventId = String(row.eventId || row.event_id || "") || `event-${stableMiniAppImportId([row.type || row.event_type || "", coord || "", row.baseLabel || "", occurredAt, row.rawLine || ""])}`;
+    return {
+      map_id: mapId, event_id: eventId.slice(0, 100), server: String(row.server || "Borealis").slice(0, 80),
+      event_type: String(row.type || row.event_type || "event").slice(0, 60), coord: coord || null,
+      base_label: String(row.baseLabel || row.base_label || "").slice(0, 240) || null,
+      actor_guild: String(row.actorGuild || row.actor_guild || "").slice(0, 80) || null,
+      actor_player: String(row.actorPlayer || row.actor_player || "").slice(0, 160) || null,
+      occurred_at: occurredAt, raw_line: String(row.rawLine || row.raw_line || "").slice(0, 10000),
+      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+    };
+  }).filter(Boolean);
+  const uniqueGameEvents = [...new Map(gameEvents.map((row) => [row.event_id, row])).values()].slice(0, 2000);
+  const [systemCount, baseCount, astroCount, movementCount, incomingCount, battleReportCount, observationCount, occupationCount, gameEventCount] = await Promise.all([
     upsertRows("b24_systems", systems, "map_id,coord"),
     upsertRows("b24_bases", bases, "map_id,coord"),
     upsertRows("b24_astros", astros, "map_id,coord"),
-    upsertRows("b24_incoming", incoming, "map_id,incoming_id")
+    upsertRows("b24_fleet_movements", movementRows, "map_id,movement_id"),
+    upsertRows("b24_incoming", incoming, "map_id,incoming_id"),
+    upsertRows("b24_battle_reports", uniqueBattleReports, "map_id,report_id"),
+    upsertRows("b24_fleet_observations", uniqueFleetObservations, "map_id,observation_id"),
+    upsertRows("b24_occupations", uniqueOccupations, "map_id,coord"),
+    upsertRows("b24_game_events", uniqueGameEvents, "map_id,event_id")
   ]);
-  return { systems: systemCount, bases: baseCount, astros: astroCount, incoming: incomingCount };
+  return {
+    systems: systemCount, bases: baseCount, astros: astroCount, fleetMovements: movementCount,
+    incoming: incomingCount, battleReports: battleReportCount, fleetObservations: observationCount,
+    occupations: occupationCount, gameEvents: gameEventCount
+  };
+}
+
+function finiteNumberOrNull(value) {
+  const number = Number(value);
+  return value === null || value === "" || !Number.isFinite(number) ? null : number;
 }
 
 async function ensureMiniAppRegionOperation(session, region) {
