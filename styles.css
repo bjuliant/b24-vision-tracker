@@ -87,28 +87,22 @@ button {
 }
 
 .brand-lockup {
-  display: flex;
+  display: block;
+  width: min(48vw, 520px);
   min-width: 0;
-  align-items: center;
-  gap: 14px;
 }
 
-.brand-mark {
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
-  border: 1px solid rgba(244, 197, 66, 0.55);
-  border-radius: 50%;
-  overflow: hidden;
-  background: #080b0e;
-  box-shadow: 0 0 24px rgba(244, 197, 66, 0.12);
-}
-
-.brand-mark img {
+.brand-logo {
+  display: block;
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  max-height: 104px;
+  object-fit: contain;
   object-position: left center;
+  border: 1px solid rgba(244, 197, 66, 0.55);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 0 24px rgba(244, 197, 66, 0.12);
 }
 
 .eyebrow,
@@ -1579,6 +1573,14 @@ h1 {
   .panel-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .brand-lockup {
+    width: 100%;
+  }
+
+  .brand-logo {
+    max-height: none;
   }
 
   .top-stats {
