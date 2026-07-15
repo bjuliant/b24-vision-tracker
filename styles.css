@@ -183,6 +183,68 @@ h1 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.workspace-section {
+  min-width: 0;
+}
+
+.map-section {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(7, 17, 24, 0.34);
+}
+
+.workspace-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  list-style: none;
+  border-bottom: 1px solid transparent;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.workspace-summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-summary::before {
+  content: "\25B8";
+  color: var(--muted);
+  font-size: 0.8rem;
+  transition: transform 140ms ease;
+}
+
+.workspace-section[open] > .workspace-summary {
+  border-bottom-color: var(--line);
+}
+
+.workspace-section[open] > .workspace-summary::before {
+  transform: rotate(90deg);
+}
+
+.workspace-summary em {
+  margin-left: auto;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.workspace-section-body {
+  min-width: 0;
+}
+
+.map-workspace-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
 .legend-item {
   min-height: 44px;
   border: 1px solid var(--line);
@@ -1110,6 +1172,19 @@ h1 {
   padding: 14px;
 }
 
+details.shared-attacks-panel,
+details.shared-incoming-panel,
+details.shared-scouting-panel {
+  overflow: hidden;
+  padding: 0;
+}
+
+details.shared-attacks-panel > .workspace-section-body,
+details.shared-incoming-panel > .workspace-section-body,
+details.shared-scouting-panel > .workspace-section-body {
+  padding: 0 14px 14px;
+}
+
 .shared-attacks-panel h2,
 .shared-incoming-panel h2,
 .shared-scouting-panel h2,
@@ -1561,6 +1636,37 @@ h1 {
   font-style: normal;
 }
 
+@media (min-width: 1180px) {
+  .app-shell {
+    width: min(100%, 1680px);
+    padding-right: clamp(24px, 3.5vw, 64px);
+    padding-left: clamp(24px, 3.5vw, 64px);
+  }
+
+  .topbar {
+    justify-content: flex-start;
+  }
+
+  .top-stats {
+    margin-left: clamp(22px, 3vw, 56px);
+  }
+
+  .toolbar.legend {
+    width: min(100%, 1040px);
+  }
+
+  .sector-lists {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .base-list,
+  .system-list,
+  .astro-list {
+    max-height: 220px;
+  }
+}
+
 @media (max-width: 560px) {
   .app-shell {
     gap: 12px;
@@ -1583,6 +1689,22 @@ h1 {
   .top-stats {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .map-workspace-body {
+    gap: 12px;
+    padding: 0;
+  }
+
+  .map-section {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .map-section > .workspace-summary {
+    border: 1px solid var(--line);
+    border-radius: 8px;
   }
 
   .stat-card {

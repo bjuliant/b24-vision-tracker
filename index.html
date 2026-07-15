@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vision Tracker</title>
-    <link rel="stylesheet" href="./styles.css?v=20260714-14" />
+    <link rel="stylesheet" href="./styles.css?v=20260715-2" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   </head>
@@ -28,41 +28,49 @@
         </div>
       </header>
 
-      <section class="toolbar legend" aria-label="Map legend">
-        <div class="legend-item"><span class="flag-chip app">A</span><span>APP Base</span></div>
-        <div class="legend-item"><span class="flag-chip scout">F</span><span>Friendly</span></div>
-        <div class="legend-item"><span class="flag-chip enemy">E</span><span>Enemy</span></div>
-        <div class="legend-item"><span class="flag-chip needed">S</span><span>Scout Need / Watch</span></div>
-      </section>
+      <details class="workspace-section map-section" open>
+        <summary class="workspace-summary">
+          <span>Galaxy Map</span>
+          <em>Coverage overview</em>
+        </summary>
+        <div class="workspace-section-body map-workspace-body">
+          <section class="toolbar legend" aria-label="Map legend">
+            <div class="legend-item"><span class="flag-chip app">A</span><span>APP Base</span></div>
+            <div class="legend-item"><span class="flag-chip scout">F</span><span>Friendly</span></div>
+            <div class="legend-item"><span class="flag-chip enemy">E</span><span>Enemy</span></div>
+            <div class="legend-item"><span class="flag-chip needed">S</span><span>Scout Need / Watch</span></div>
+          </section>
 
-      <section class="board-wrap" aria-label="Sector map">
-        <div class="grid" id="grid"></div>
-      </section>
+          <section class="board-wrap" aria-label="Sector map">
+            <div class="grid" id="grid"></div>
+          </section>
 
-      <footer class="details-panel" aria-live="polite">
-        <div>
-          <p class="label">Selected</p>
-          <strong id="selectedSector">B24:1</strong>
-        </div>
-        <div>
-          <p class="label">Flags</p>
-          <strong id="selectedStatus">None</strong>
-        </div>
-        <div>
-          <p class="label">Systems</p>
-          <strong id="selectedSystems">0 known</strong>
-        </div>
-        <div>
-          <p class="label">Bases</p>
-          <strong id="selectedBases">0 known</strong>
-        </div>
-        <div>
-          <p class="label">Operations</p>
-          <strong id="selectedOperations">0 active</strong>
-        </div>
-      </footer>
+          <footer class="details-panel" aria-live="polite">
+            <div>
+              <p class="label">Selected</p>
+              <strong id="selectedSector">B24:1</strong>
+            </div>
+            <div>
+              <p class="label">Flags</p>
+              <strong id="selectedStatus">None</strong>
+            </div>
+            <div>
+              <p class="label">Systems</p>
+              <strong id="selectedSystems">0 known</strong>
+            </div>
+            <div>
+              <p class="label">Bases</p>
+              <strong id="selectedBases">0 known</strong>
+            </div>
+            <div>
+              <p class="label">Operations</p>
+              <strong id="selectedOperations">0 active</strong>
+            </div>
+          </footer>
 
-      <div class="watch-action-row watch-action-summary" id="watchActionRow" aria-live="polite" hidden></div>
+          <div class="watch-action-row watch-action-summary" id="watchActionRow" aria-live="polite" hidden></div>
+        </div>
+      </details>
 
       <section class="sector-panel" id="sectorPanel" aria-live="polite">
         <details open>
@@ -88,14 +96,14 @@
         </details>
       </section>
 
-      <section class="shared-attacks-panel" id="sharedAttacksPanel" hidden>
+      <details class="shared-attacks-panel workspace-section" id="sharedAttacksPanel" open hidden>
+        <summary class="workspace-summary"><span>Guild Attacks</span><em id="sharedAttackCounts">0 active</em></summary>
+        <div class="workspace-section-body">
         <div class="panel-heading">
           <div>
-            <h2>Guild Attacks</h2>
             <p>Live attack plans shared with Lysander in Telegram.</p>
           </div>
           <div class="shared-panel-actions">
-            <span id="sharedAttackCounts">0 active</span>
             <button class="ghost-button" id="refreshSharedAttacks" type="button">Refresh</button>
           </div>
         </div>
@@ -108,16 +116,17 @@
         </form>
         <div class="shared-view-status" id="sharedAttackStatus">Loading attack plans...</div>
         <div class="shared-attack-list" id="sharedAttackList"></div>
-      </section>
+        </div>
+      </details>
 
-      <section class="shared-incoming-panel" id="sharedIncomingPanel" hidden>
+      <details class="shared-incoming-panel workspace-section" id="sharedIncomingPanel" open hidden>
+        <summary class="workspace-summary"><span>Defense &amp; Incoming</span><em id="sharedIncomingCounts">0 active</em></summary>
+        <div class="workspace-section-body">
         <div class="panel-heading">
           <div>
-            <h2>Defense &amp; Incoming</h2>
             <p>Live hostile arrivals shared with Lysander in Telegram.</p>
           </div>
           <div class="shared-panel-actions">
-            <span id="sharedIncomingCounts">0 active</span>
             <button class="ghost-button" id="refreshSharedIncoming" type="button">Refresh</button>
           </div>
         </div>
@@ -135,16 +144,17 @@
         </details>
         <div class="shared-view-status" id="sharedIncomingStatus">Loading incoming reports...</div>
         <div class="shared-incoming-list" id="sharedIncomingList"></div>
-      </section>
+        </div>
+      </details>
 
-      <section class="shared-scouting-panel" id="sharedScoutingPanel" hidden>
+      <details class="shared-scouting-panel workspace-section" id="sharedScoutingPanel" open hidden>
+        <summary class="workspace-summary"><span>Scouting &amp; Coverage</span><em id="sharedScoutingCounts">0 agendas</em></summary>
+        <div class="workspace-section-body">
         <div class="panel-heading">
           <div>
-            <h2>Scouting &amp; Coverage</h2>
             <p>Exact-base watches and region responsibilities shared with Lysander.</p>
           </div>
           <div class="shared-panel-actions">
-            <span id="sharedScoutingCounts">0 agendas</span>
             <button class="ghost-button" id="refreshSharedScouting" type="button">Refresh</button>
           </div>
         </div>
@@ -163,7 +173,8 @@
         <div class="shared-watch-summary" id="sharedMyWatches">You have no active watch responsibilities.</div>
         <div class="shared-view-status" id="sharedScoutingStatus">Loading scouting agendas...</div>
         <div class="shared-scouting-list" id="sharedScoutingList"></div>
-      </section>
+        </div>
+      </details>
 
       <section class="attack-setup-panel legacy-operational">
         <div class="panel-heading">
