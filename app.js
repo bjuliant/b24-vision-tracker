@@ -1103,7 +1103,8 @@
       if (miniAppSession) {
         importResult.textContent = "Uploading through Lysander...";
         const saved = await miniAppApi("/api/miniapp/import", { method: "POST", body: { intel: parsed } });
-        importResult.textContent = `Saved ${saved.systems} systems, ${saved.bases} bases, ${saved.astros} astros, ${saved.incoming} incoming`;
+        const previewText = parsed.battlePreviews?.length ? `, ${parsed.battlePreviews.length} unfinished battle preview skipped` : "";
+        importResult.textContent = `Saved ${saved.systems} systems, ${saved.bases} bases, ${saved.astros} astros, ${saved.fleetMovements || 0} movements, ${saved.incoming} hostile incoming, ${saved.battleReports || 0} battle reports, ${saved.occupations || 0} occupations${previewText}`;
         importText.value = "";
         sharedIntelByRegion.clear();
         await Promise.all([loadCoverage(), loadSharedIntel(selected, true), loadSharedIncoming()]);
@@ -1115,7 +1116,8 @@
       saveLocalState();
       paintAll();
       selectSector(selected);
-      importResult.textContent = `Imported ${parsed.systems.length} systems, ${parsed.bases.length} bases, ${parsed.astros.length} astros, ${parsed.incoming.length} incoming`;
+      const previewText = parsed.battlePreviews?.length ? `, ${parsed.battlePreviews.length} unfinished battle preview skipped` : "";
+      importResult.textContent = `Imported ${parsed.systems.length} systems, ${parsed.bases.length} bases, ${parsed.astros.length} astros, ${parsed.fleetMovements.length} movements, ${parsed.incoming.length} hostile incoming, ${parsed.battleReports.length} battle reports, ${parsed.occupations.length} occupations${previewText}`;
       importText.value = "";
 
       if (client) await syncImportedIntel(parsed);
@@ -1309,9 +1311,19 @@
     return `javascript:(async()=>{const G=${JSON.stringify(galaxy)},A=${JSON.stringify(miniAppAccess)},API=${JSON.stringify(endpoint)};const re3=new RegExp(G+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(G+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g'),html=document.documentElement.innerHTML,txt=document.body.innerText||'';const systems=[...new Set(html.match(re3)||[])].map(coord=>({coord}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const value of Object.values(mapToolBox_data||{})){const raw=String(value||''),coord=(raw.match(re4)||[])[0];if(!coord)continue;const guild=(raw.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',label=raw.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').replace(coord,' ').trim();bases.push({coord,guild,label})}}const astros=[];for(const line of txt.split(/\\r?\\n/)){const coord=(line.match(re4)||[])[0];if(!coord)continue;const m=line.replace(coord,'').trim().match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(m)astros.push({coord,terrain:m[1],type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),hasBase:m[4]==='Yes'})}const duration=value=>{const p=String(value||'').split(':').map(Number);return p.length===2?((p[0]*60+p[1])*60000):p.length===3?(((p[0]*60+p[1])*60+p[2])*1000):0};const incoming=[];document.querySelectorAll('tr').forEach(tr=>{const cells=[...tr.querySelectorAll('td,th')].map(td=>td.innerText.trim());if(cells.length<4||!/\\d{1,4}:\\d{2}(?::\\d{2})?/.test(cells[2]||''))return;const dest=tr.querySelectorAll('td,th')[1],sizeCell=tr.querySelectorAll('td,th')[3],link=dest&&dest.querySelector('a[href*="loc="]'),fleet=sizeCell&&sizeCell.querySelector('a[href*="fleet="]'),coord=((((link&&link.href)||'').match(/loc=([^&]+)/)||[])[1]||(cells[1].match(re4)||[])[0]||'').toUpperCase(),ms=duration(cells[2]);if(!coord||!coord.startsWith(G+':')||!ms)return;incoming.push({defendedCoord:coord,arrivalAt:new Date(Date.now()+ms).toISOString(),fleetId:(((fleet&&fleet.href)||'').match(/fleet=(\\d+)/)||[])[1]||'',player:cells[0],size:(cells[3].match(/[\\d,]+/)||[])[0]||'',rawLine:tr.innerText.replace(/\\s+/g,' ').trim()})});const unique=rows=>[...new Map(rows.map(row=>[row.coord,row])).values()];try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access:A,intel:{systems:unique(systems),bases:unique(bases),astros:unique(astros),incoming}})}),result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Import failed');alert('VisionBot import complete for '+G+': '+result.systems+' systems, '+result.bases+' bases, '+result.astros+' astros, '+result.incoming+' incoming')}catch(error){console.error(error);alert('VisionBot import failed: '+error.message)}})()`;
   }
 
+  function signedExporterBookmarkletV2() {
+    const endpoint = `${botApiUrl}/api/miniapp/import`;
+    return `javascript:(async()=>{const G=${JSON.stringify(galaxy)},A=${JSON.stringify(miniAppAccess)},API=${JSON.stringify(endpoint)},txt=document.body.innerText||'',html=document.documentElement.innerHTML,re3=new RegExp(G+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(G+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const systems=[...new Set(html.match(re3)||[])].map(coord=>({coord})),bases=[];if(typeof mapToolBox_data!=='undefined'){for(const value of Object.values(mapToolBox_data||{})){const raw=String(value||''),coord=(raw.match(re4)||[])[0];if(!coord)continue;const guild=(raw.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',label=raw.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').replace(coord,' ').trim();bases.push({coord,guild,label})}}const astros=[];for(const line of txt.split(/\\r?\\n/)){const coord=(line.match(re4)||[])[0];if(!coord)continue;const m=line.replace(coord,'').trim().match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(m)astros.push({coord,terrain:m[1],type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),hasBase:m[4]==='Yes'})}const unique=rows=>[...new Map(rows.map(row=>[row.coord,row])).values()];try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access:A,intel:{systems:unique(systems),bases:unique(bases),astros:unique(astros),sourceText:txt,sourceUrl:location.href}})}),result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Import failed');alert('VisionBot import complete for '+G+': '+result.systems+' systems, '+result.bases+' bases, '+result.astros+' astros, '+(result.fleetMovements||0)+' movements, '+result.incoming+' hostile incoming, '+(result.battleReports||0)+' battles')}catch(error){console.error(error);alert('VisionBot import failed: '+error.message)}})()`;
+  }
+
+  function signedExporterBookmarkletV3() {
+    const endpoint = `${botApiUrl}/api/miniapp/import`;
+    return `javascript:(async()=>{const G=${JSON.stringify(galaxy)},A=${JSON.stringify(miniAppAccess)},API=${JSON.stringify(endpoint)},txt=document.body.innerText||'',html=document.documentElement.innerHTML,re3=new RegExp(G+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(G+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const systems=[...new Set(html.match(re3)||[])].map(coord=>({coord})),bases=[];if(typeof mapToolBox_data!=='undefined'){for(const value of Object.values(mapToolBox_data||{})){const raw=String(value||''),coord=(raw.match(re4)||[])[0];if(!coord)continue;const guild=(raw.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',label=raw.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').replace(coord,' ').trim();bases.push({coord,guild,label})}}const astros=[];for(const line of txt.split(/\\r?\\n/)){const coord=(line.match(re4)||[])[0];if(!coord)continue;const m=line.replace(coord,'').trim().match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(m)astros.push({coord,terrain:m[1],type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),hasBase:m[4]==='Yes'})}const pageCoord=(txt.match(re4)||[])[0]||'',fleetMovements=[];document.querySelectorAll('tr').forEach(tr=>{const cells=[...tr.querySelectorAll('td,th')],v=cells.map(td=>td.innerText.trim());if(v.length<4||!/\\d{1,4}:\\d{2}(?::\\d{2})?/.test(v[2]||''))return;const loc=cells[1]?.querySelector('a[href*="loc="]'),baseFleetTable=!loc&&/base\\.aspx/i.test(location.pathname)&&/Fleet\\s+Player\\s+Arrival\\s+Size/i.test(tr.closest('table')?.innerText||'');if(!loc&&!baseFleetTable)return;const playerCell=loc?cells[0]:cells[1],fleetLink=cells[0]?.querySelector('a[href*="fleet="]')||cells[3]?.querySelector('a[href*="fleet="]'),profile=playerCell?.querySelector('a[href*="player="]'),coord=decodeURIComponent((((loc?.href||'').match(/loc=([^&]+)/)||[])[1]||(v[1].match(re4)||[])[0]||(baseFleetTable?pageCoord:'')||'')).toUpperCase();if(!coord||!coord.startsWith(G+':'))return;fleetMovements.push({defendedCoord:coord,eta:v[2],size:(v[3].match(/[\\d,]+/)||[])[0]||'',player:playerCell?.innerText.trim()||'',playerId:((profile?.href||'').match(/player=(\\d+)/)||[])[1]||'',fleetId:((fleetLink?.href||'').match(/fleet=(\\d+)/)||[])[1]||'',fleetName:loc?'':v[0],rawLine:tr.innerText.replace(/\\s+/g,' ').trim(),sourceKind:loc?'scanner':'base_fleet'})});const unique=rows=>[...new Map(rows.map(row=>[row.coord,row])).values()];try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access:A,intel:{systems:unique(systems),bases:unique(bases),astros:unique(astros),fleetMovements,sourceText:txt,sourceUrl:location.href}})}),result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Import failed');alert('VisionBot import complete for '+G+': '+result.systems+' systems, '+result.bases+' bases, '+result.astros+' astros, '+(result.fleetMovements||0)+' movements, '+result.incoming+' hostile incoming, '+(result.battleReports||0)+' battles, '+(result.occupations||0)+' occupations')}catch(error){console.error(error);alert('VisionBot import failed: '+error.message)}})()`;
+  }
+
   async function copyBookmarklet() {
     if (miniAppSession) {
-      const code = signedExporterBookmarklet();
+      const code = signedExporterBookmarkletV3();
       try {
         await navigator.clipboard.writeText(code);
         importResult.textContent = "Secure bookmarklet copied. Recopy it after your /map link expires.";
@@ -1337,8 +1349,15 @@
     }
   }
 
+  function emptyIntelParseResult() {
+    return {
+      systems: [], bases: [], astros: [], incoming: [], battleReports: [], battlePreviews: [],
+      fleetMovements: [], fleetObservations: [], occupations: [], gameEvents: []
+    };
+  }
+
   function parseIntel(text) {
-    const result = { systems: [], bases: [], astros: [], incoming: [] };
+    const result = emptyIntelParseResult();
 
     try {
       const json = JSON.parse(text);
@@ -1364,7 +1383,8 @@
         });
       });
 
-      result.incoming.push(...parseIncomingMovementText(text));
+      mergeOperationalIntel(result, text);
+      mergeBattleReportParse(result, text);
       return result;
     } catch {
       return parseTextIntel(text);
@@ -1372,7 +1392,7 @@
   }
 
   function parseTextIntel(text) {
-    const result = { systems: [], bases: [], astros: [], incoming: [] };
+    const result = emptyIntelParseResult();
     const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
     lines.forEach((line) => {
@@ -1393,13 +1413,208 @@
       });
     });
 
-    result.incoming.push(...parseIncomingMovementText(text));
+    mergeOperationalIntel(result, text);
+    mergeBattleReportParse(result, text);
     return result;
   }
 
-  function parseIncomingMovementText(text) {
+  function mergeBattleReportParse(result, text) {
+    splitBattleReportText(text).forEach((segment) => {
+      const report = parseBattleReportText(segment);
+      if (!report) return;
+      if (!report.complete) {
+        result.battlePreviews.push(report);
+        return;
+      }
+      result.battleReports.push(report);
+      if (report.coord && report.defender?.player) {
+        result.bases.push({
+          coord: report.coord,
+          region: astroToRegion(report.coord),
+          system: astroToSystem(report.coord),
+          guild: report.defender.guild || "",
+          label: report.defender.player
+        });
+      }
+      result.fleetObservations.push(...battleFleetObservations(report));
+      const occupation = battleOccupation(report);
+      if (occupation) result.occupations.push(occupation);
+    });
+  }
+
+  function splitBattleReportText(text) {
+    const raw = String(text || "");
+    const matches = [...raw.matchAll(/Battle Report\s*\r?\nLocation\b/gi)];
+    if (!matches.length) return /^Battle Report\b/im.test(raw) ? [raw] : [];
+    return matches.map((match, index) => raw.slice(match.index, matches[index + 1]?.index ?? raw.length));
+  }
+
+  function parseBattleReportText(text) {
+    const raw = String(text || "").trim();
+    if (!/^Battle Report\b/im.test(raw) || !/\bAttack Force\b/i.test(raw) || !/\bDefensive Force\b/i.test(raw)) return null;
+
+    const normalized = raw
+      .replace(/\*\*/g, "")
+      .replace(/\]\(https?:\/\/[^)]+\)/gi, "]")
+      .replace(/\\([\[\]])/g, "$1");
+    const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const attackHeaders = lineIndexes(lines, "Attack Force");
+    const defenseHeaders = lineIndexes(lines, "Defensive Force");
+    if (!attackHeaders.length || !defenseHeaders.length) return null;
+
+    const coord = normalizeAstro((normalized.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    if (!coord) return null;
+    const firstAttack = attackHeaders[0];
+    const firstDefense = defenseHeaders.find((index) => index > firstAttack) ?? lines.length;
+    const secondAttack = attackHeaders.find((index) => index > firstDefense) ?? lines.length;
+    const secondDefense = defenseHeaders.find((index) => index > secondAttack) ?? lines.length;
+    const attacker = parseBattleParty(lines, firstAttack + 1, firstDefense);
+    const defender = parseBattleParty(lines, firstDefense + 1, secondAttack);
+    const attackerUnits = parseBattleUnits(lines, secondAttack + 1, secondDefense);
+    const defenderUnits = parseBattleUnits(lines, secondDefense + 1, lines.length);
+    const profileIds = [...raw.matchAll(/profile\.aspx\?player=(\d+)/gi)].map((match) => match[1]);
+    attacker.playerId = profileIds[0] || "";
+    defender.playerId = profileIds[1] || "";
+
+    const battleTime = labeledValue(lines, "Time");
+    const server = labeledValue(lines, "Server");
+    const locationLine = lines.find((line) => /^Location\b/i.test(line)) || "";
+    const locationLabel = locationLine
+      .replace(/^Location\s*/i, "")
+      .replace(new RegExp(`\\(?${escapeRegExp(coord)}\\)?`, "i"), "")
+      .replace(/^\[|\]$/g, "")
+      .trim();
+    const totals = parseBattleTotals(normalized);
+    const occupied = /attacker conquered the base/i.test(normalized);
+    const liberated = /defender liberated the base|base was liberated/i.test(normalized);
+    const complete = Boolean(battleTime && /Total cost of units destroyed|New debris in space|conquered the base/i.test(normalized));
+
+    return {
+      complete,
+      server,
+      galaxy,
+      coord,
+      locationLabel,
+      battleTime,
+      attacker,
+      defender,
+      attackerUnits,
+      defenderUnits,
+      totals,
+      occupied,
+      liberated,
+      outcome: battleOutcome(attackerUnits, defenderUnits, occupied, liberated),
+      resultText: battleResultText(lines),
+      rawReport: raw
+    };
+  }
+
+  function lineIndexes(lines, value) {
+    return lines.map((line, index) => line.toLowerCase() === value.toLowerCase() ? index : -1).filter((index) => index >= 0);
+  }
+
+  function labeledValue(lines, label, start = 0, end = lines.length) {
+    const pattern = new RegExp(`^${escapeRegExp(label)}(?:\\s+|$)`, "i");
+    const line = lines.slice(start, end).find((item) => pattern.test(item));
+    return line ? line.replace(pattern, "").trim() : "";
+  }
+
+  function parseBattleParty(lines, start, end) {
+    const playerText = labeledValue(lines, "Player", start, end);
+    const playerMatch = playerText.match(/^(.*?)\s+lvl\s+([\d.]+)$/i);
+    let identity = (playerMatch?.[1] || playerText).trim();
+    if (identity.startsWith("[[") && identity.endsWith("]")) identity = identity.slice(1, -1).trim();
+    const guildMatch = identity.match(/^\[([^\]]+)\]\s*/);
+    const fleetText = labeledValue(lines, "Fleet Name", start, end);
+    return {
+      guild: guildMatch ? `[${guildMatch[1]}]` : "",
+      player: identity.replace(/^\[[^\]]+\]\s*/, "").trim(),
+      playerId: "",
+      level: Number(playerMatch?.[2]) || null,
+      fleet: fleetText.replace(/\s*\(Destroyed\)\s*/i, "").trim(),
+      destroyed: /\(Destroyed\)/i.test(fleetText),
+      commandCenters: Number(labeledValue(lines, "Command Centers", start, end)) || 0,
+      startDefenses: numberOrNull(labeledValue(lines, "Start Defenses", start, end).replace("%", "")),
+      endDefenses: numberOrNull(labeledValue(lines, "End Defenses", start, end).replace("%", ""))
+    };
+  }
+
+  function parseBattleUnits(lines, start, end) {
     const rows = [];
-    const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    lines.slice(start, end).forEach((line) => {
+      if (/^Unit\b/i.test(line) || /^(?:Total cost|Loot|Experience|New debris|Attacker |Defender )/i.test(line)) return;
+      const match = line.match(/^(.+?)\s+([\d,.?]+)\s+([\d,.?]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/);
+      if (!match) return;
+      rows.push({
+        unit: match[1].trim(),
+        start: numberOrNull(match[2]),
+        end: numberOrNull(match[3]),
+        attack: numberOrNull(match[4]),
+        armour: numberOrNull(match[5]),
+        shield: numberOrNull(match[6])
+      });
+    });
+    return rows;
+  }
+
+  function parseBattleTotals(text) {
+    const destroyed = text.match(/Total cost of units destroyed:\s*([\d,]+)\s*\(\s*Attacker:\s*([\d,]+)\s*;\s*Defender:\s*([\d,]+)/i);
+    const loot = text.match(/Loot:\s*\(\s*Attacker:\s*([+\-\d,]+)\s*;\s*Defender:\s*([+\-\d,]+)/i);
+    const experience = text.match(/Experience:\s*\(\s*Attacker:\s*([+\-\d,]+)\s*;\s*Defender:\s*([+\-\d,]+)/i);
+    const debris = text.match(/New debris in space:\s*([\d,]+)/i);
+    const pillage = text.match(/got\s+([\d,]+)\s+credits for pillaging/i);
+    return {
+      destroyed: numberOrNull(destroyed?.[1]),
+      attackerDestroyed: numberOrNull(destroyed?.[2]),
+      defenderDestroyed: numberOrNull(destroyed?.[3]),
+      attackerLoot: numberOrNull(loot?.[1]),
+      defenderLoot: numberOrNull(loot?.[2]),
+      attackerExperience: numberOrNull(experience?.[1]),
+      defenderExperience: numberOrNull(experience?.[2]),
+      debris: numberOrNull(debris?.[1]),
+      pillage: numberOrNull(pillage?.[1])
+    };
+  }
+
+  function battleOutcome(attackerUnits, defenderUnits, occupied, liberated) {
+    if (liberated) return "liberated";
+    if (occupied) return "occupied";
+    const attackerEnd = attackerUnits.reduce((sum, row) => sum + (row.end || 0), 0);
+    const defenderEnd = defenderUnits.reduce((sum, row) => sum + (row.end || 0), 0);
+    if (!attackerEnd && !defenderEnd) return "mutual_destruction";
+    if (attackerEnd && !defenderEnd) return "attacker_win";
+    if (!attackerEnd && defenderEnd) return "defender_win";
+    return "inconclusive";
+  }
+
+  function battleResultText(lines) {
+    return lines.filter((line) => /^(?:Attacker |Defender |Total cost|Loot:|Experience:|New debris)/i.test(line)).join("\n").slice(0, 2000);
+  }
+
+  function numberOrNull(value) {
+    if (value == null || String(value).trim() === "?" || String(value).trim() === "") return null;
+    const number = Number(String(value).replace(/,/g, "").replace(/^\+/, ""));
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function escapeRegExp(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function mergeOperationalIntel(result, text) {
+    const movements = parseFleetMovementText(text);
+    result.fleetMovements.push(...movements);
+    result.incoming.push(...movements.filter((row) => row.classification === "hostile"));
+    result.fleetObservations.push(...parseFleetObservationText(text));
+    result.occupations.push(...parseOccupationText(text));
+    result.gameEvents.push(...parseGameEventsText(text));
+  }
+
+  function parseFleetMovementText(text) {
+    const rows = [];
+    const raw = String(text || "");
+    const observedAt = parseAePageTimestamp(raw) || new Date();
+    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     lines.forEach((line) => {
       if (!line.includes(galaxy)) return;
       const coord = normalizeAstro((line.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`)) || [])[0]);
@@ -1411,19 +1626,158 @@
       const sizeMatch = line.match(/\[(\d[\d,]*)\]\([^)]*fleet=/i) || line.match(/(?:\]|\)|\s)(\d[\d,]*)\s*$/);
       const fleetMatch = line.match(/\bfleet=(\d+)/i);
       const player = cleanMovementPlayer(line, coord, etaMatch[1], sizeMatch?.[1] || "");
+      const guild = extractGuildTag(player || line);
+      const classification = normalizeGuildTag(guild) === normalizeGuildTag("[APP]") ? "friendly" : "unknown";
       rows.push({
         defendedCoord: coord,
         attackerCoord: "",
         etaMinutes: Math.max(1, Math.ceil(duration / 60000)),
-        arrivalAt: new Date(Date.now() + duration).toISOString(),
-        player,
+        arrivalAt: new Date(observedAt.getTime() + duration).toISOString(),
+        observedAt: observedAt.toISOString(),
+        etaSeconds: Math.round(duration / 1000),
+        arrivalPrecision: "exact",
+        player: player.replace(/^\[[^\]]+\]\s*/, "").trim(),
+        playerId: (line.match(/profile\.aspx\?player=(\d+)/i) || [])[1] || "",
+        guild,
+        classification,
         fleetId: fleetMatch?.[1] || "",
+        fleetName: cleanMovementFleetName(line),
         size: sizeMatch?.[1] || "",
         note: [player ? `player ${player}` : "", sizeMatch?.[1] ? `size ${sizeMatch[1]}` : ""].filter(Boolean).join(" | "),
-        rawLine: line
+        rawLine: line,
+        sourceKind: /Fleet movements detected in your base regions/i.test(raw) ? "scanner" : "base_page"
       });
     });
+    return [...new Map(rows.map((row) => [[row.fleetId, row.defendedCoord, row.arrivalAt].join("|"), row])).values()];
+  }
+
+  function parseIncomingMovementText(text) {
+    return parseFleetMovementText(text).filter((row) => row.classification === "hostile");
+  }
+
+  function parseAePageTimestamp(text) {
+    const match = String(text || "").match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4}),\s+(\d{2}):(\d{2}):(\d{2})\b/i);
+    if (!match) return null;
+    const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(match[2].toLowerCase());
+    const date = new Date(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]));
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  function extractGuildTag(value) {
+    const match = String(value || "").replace(/\\([\[\]])/g, "$1").match(/\[([^\]]{1,24})\]/);
+    return match ? `[${match[1]}]` : "";
+  }
+
+  function normalizeGuildTag(value) {
+    return String(value || "").replace(/[\[\]]/g, "").trim().toUpperCase();
+  }
+
+  function cleanMovementFleetName(line) {
+    const match = String(line || "").match(/^\[([^\]]+)\]\([^)]*fleet\.aspx\?fleet=/i);
+    return match?.[1] || "";
+  }
+
+  function battleFleetObservations(report) {
+    return [
+      { side: "attacker", party: report.attacker, units: report.attackerUnits },
+      { side: "defender", party: report.defender, units: report.defenderUnits }
+    ].filter((item) => item.party?.player || item.party?.fleet).map((item) => ({
+      server: report.server,
+      coord: report.coord,
+      observedAt: report.battleTime || new Date().toISOString(),
+      sourceKind: "battle_report",
+      side: item.side,
+      player: item.party.player || "",
+      playerId: item.party.playerId || "",
+      guild: item.party.guild || "",
+      fleetName: item.party.fleet || "",
+      destroyed: Boolean(item.party.destroyed),
+      units: item.units || [],
+      size: "",
+      rawLine: report.resultText || ""
+    }));
+  }
+
+  function battleOccupation(report) {
+    if (!report.occupied && !report.liberated) return null;
+    return {
+      server: report.server,
+      coord: report.coord,
+      ownerGuild: report.defender?.guild || "",
+      ownerPlayer: report.defender?.player || "",
+      occupierGuild: report.occupied ? report.attacker?.guild || "" : "",
+      occupierPlayer: report.occupied ? report.attacker?.player || "" : "",
+      occupyingFleetName: report.occupied ? report.attacker?.fleet || "" : "",
+      state: report.liberated ? "liberated" : "occupied",
+      revoltState: report.liberated ? "successful" : "unknown",
+      observedAt: report.battleTime || new Date().toISOString(),
+      sourceKind: "battle_report"
+    };
+  }
+
+  function parseFleetObservationText(text) {
+    const raw = String(text || "");
+    if (!/Fleet Size:\s*[\d,]+/i.test(raw) || !/\bUnits\b/i.test(raw)) return [];
+    const coord = normalizeAstro((raw.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    const fleetId = (raw.match(/fleet\.aspx\?fleet=(\d+)/i) || [])[1] || "";
+    const fleetName = (raw.match(/\bFleet\s+\d+\s*-\s*([^\r\n]+)/i) || [])[0]?.split(" - ")[0] || "";
+    const size = (raw.match(/Fleet Size:\s*([\d,]+)/i) || [])[1] || "";
+    const detection = (raw.match(/Detection time:\s*(\d+)s/i) || [])[1] || "";
+    const unitBlock = raw.split(/\bUnits\b/i)[1]?.split(/Fleet Size:/i)[0] || "";
+    const units = unitBlock.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const match = line.replace(/\*\*/g, "").match(/^(.+?)\s+([\d,]+)$/);
+      return match ? { unit: match[1].trim(), quantity: numberOrNull(match[2]) } : null;
+    }).filter(Boolean);
+    return [{
+      server: labeledPageServer(raw), coord: coord || "", fleetId, fleetName, size,
+      detectionSeconds: numberOrNull(detection), units, observedAt: (parseAePageTimestamp(raw) || new Date()).toISOString(),
+      sourceKind: "fleet_overview", rawLine: raw.slice(0, 4000)
+    }];
+  }
+
+  function parseOccupationText(text) {
+    const raw = String(text || "");
+    const coord = normalizeAstro((raw.match(new RegExp(`${galaxy}:\\d{2}:\\d{2}:\\d{2}`, "i")) || [])[0]);
+    const rows = [];
+    if (coord && /Revolt\s*\(you must destroy occupier's fleet first\)/i.test(raw)) {
+      const fleetId = (raw.match(/fleet\.aspx\?fleet=(\d+)/i) || [])[1] || "";
+      const playerId = (raw.match(/profile\.aspx\?player=(\d+)/i) || [])[1] || "";
+      const fleetLine = raw.split(/\r?\n/).find((line) => /fleet\.aspx\?fleet=/i.test(line)) || "";
+      const playerLine = raw.split(/\r?\n/).find((line) => /profile\.aspx\?player=/i.test(line)) || "";
+      rows.push({
+        server: labeledPageServer(raw), coord, ownerGuild: "", ownerPlayer: "",
+        occupierGuild: extractGuildTag(playerLine), occupierPlayer: cleanLinkLabel(playerLine),
+        occupierPlayerId: playerId, occupyingFleetId: fleetId, occupyingFleetName: cleanLinkLabel(fleetLine),
+        occupyingFleetSize: numberOrNull((raw.match(/\bSize\s+(\d[\d,]*)/i) || [])[1]),
+        state: "occupied", revoltState: "blocked", observedAt: (parseAePageTimestamp(raw) || new Date()).toISOString(), sourceKind: "occupation_page"
+      });
+    }
+    if (coord && /\bRevolt Successful\b/i.test(raw)) {
+      rows.push({ server: labeledPageServer(raw), coord, state: "liberated", revoltState: "successful", observedAt: (parseAePageTimestamp(raw) || new Date()).toISOString(), sourceKind: "revolt_page" });
+    }
     return rows;
+  }
+
+  function parseGameEventsText(text) {
+    const raw = String(text || "");
+    const events = [];
+    const observedAt = (parseAePageTimestamp(raw) || new Date()).toISOString();
+    for (const match of raw.matchAll(/Revolt Report[\s\S]*?Revolts at\s+([^\r\n]+?)\s+caused this base occupation to end\./gi)) {
+      events.push({ type: "revolt_success", baseLabel: match[1].trim(), observedAt, rawLine: match[0].slice(0, 2000) });
+    }
+    for (const match of raw.matchAll(/Trade Route Attacked[\s\S]*?(?=Trade Route Attacked|Revolt Report|Battle Report\s*\r?\nLocation|$)/gi)) {
+      const block = match[0];
+      events.push({ type: "trade_route_attacked", observedAt, actorGuild: extractGuildTag(block), rawLine: block.slice(0, 2000) });
+    }
+    return events;
+  }
+
+  function cleanLinkLabel(value) {
+    return String(value || "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\\([\[\]])/g, "$1").replace(/\s+/g, " ").trim();
+  }
+
+  function labeledPageServer(text) {
+    return (String(text || "").match(/Server\s+([A-Za-z][A-Za-z0-9 _-]+)/i) || [])[1]?.trim() || "Borealis";
   }
 
   function cleanMovementPlayer(line, coord, eta, size) {
