@@ -88,7 +88,7 @@ button {
 
 .brand-lockup {
   display: block;
-  width: min(48vw, 520px);
+  width: min(100%, 420px);
   min-width: 0;
 }
 
@@ -96,7 +96,7 @@ button {
   display: block;
   width: 100%;
   height: auto;
-  max-height: 104px;
+  max-width: 420px;
   object-fit: contain;
   object-position: left center;
   border: 1px solid rgba(244, 197, 66, 0.55);
