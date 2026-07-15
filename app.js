@@ -17,6 +17,7 @@
   const selectedSystems = document.querySelector("#selectedSystems");
   const selectedBases = document.querySelector("#selectedBases");
   const selectedOperations = document.querySelector("#selectedOperations");
+  const watchActionRow = document.querySelector("#watchActionRow");
   const sectorPanelTitle = document.querySelector("#sectorPanelTitle");
   const sectorPanel = document.querySelector("#sectorPanel");
   const sectorCounts = document.querySelector("#sectorCounts");
@@ -1675,23 +1676,19 @@
     }
 
     const coverage = coverageByRegion.get(id);
-    let watchRow = sectorPanel.querySelector(".watch-action-row");
     if (!coverage) {
-      watchRow?.remove();
+      watchActionRow.hidden = true;
+      watchActionRow.innerHTML = "";
       return;
     }
-    if (!watchRow) {
-      watchRow = document.createElement("div");
-      watchRow.className = "watch-action-row";
-      sectorPanel.querySelector("details").appendChild(watchRow);
-    }
+    watchActionRow.hidden = false;
     if (coverage.app) {
-      watchRow.innerHTML = `<strong>APP base coverage is present in ${escapeHtml(id)}.</strong>`;
+      watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> is covered by an APP base.</span>`;
     } else if (coverage.watchAssigned) {
       const own = String(coverage.watchOwnerId || "") === String(miniAppSession?.userId || "");
-      watchRow.innerHTML = `<span>Watching: <strong>${escapeHtml(coverage.watchOwner || "Guild member")}</strong></span>${own ? `<button class="command-button" type="button" data-watch-action="release" data-watch-region="${escapeHtml(id)}">Release Watch</button>` : ""}`;
+      watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> watched by ${escapeHtml(coverage.watchOwner || "Guild member")}</span>${own ? `<button class="ghost-button" type="button" data-watch-action="release" data-watch-region="${escapeHtml(id)}">Release Watch</button>` : ""}`;
     } else {
-      watchRow.innerHTML = `<span>Scout needed: no APP base or active watch.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
+      watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> needs scout coverage.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
     }
   }
 
