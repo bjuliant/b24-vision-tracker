@@ -53,12 +53,46 @@
   const finalizeStatus = document.querySelector("#finalizeStatus");
   const baseList = document.querySelector("#baseList");
   const systemList = document.querySelector("#systemList");
+  const astroList = document.querySelector("#astroList");
   const template = document.querySelector("#cellTemplate");
   const toolButtons = Array.from(document.querySelectorAll(".tool-button"));
   const importText = document.querySelector("#importText");
   const importButton = document.querySelector("#importButton");
   const bookmarkletButton = document.querySelector("#bookmarkletButton");
   const importResult = document.querySelector("#importResult");
+  const sharedAttacksPanel = document.querySelector("#sharedAttacksPanel");
+  const sharedAttackCounts = document.querySelector("#sharedAttackCounts");
+  const sharedAttackStatus = document.querySelector("#sharedAttackStatus");
+  const sharedAttackList = document.querySelector("#sharedAttackList");
+  const refreshSharedAttacks = document.querySelector("#refreshSharedAttacks");
+  const sharedAttackCreate = document.querySelector("#sharedAttackCreate");
+  const sharedAttackName = document.querySelector("#sharedAttackName");
+  const sharedAttackArrival = document.querySelector("#sharedAttackArrival");
+  const sharedAttackWaves = document.querySelector("#sharedAttackWaves");
+  const sharedAttackTargets = document.querySelector("#sharedAttackTargets");
+  const sharedIncomingPanel = document.querySelector("#sharedIncomingPanel");
+  const sharedIncomingCounts = document.querySelector("#sharedIncomingCounts");
+  const sharedIncomingStatus = document.querySelector("#sharedIncomingStatus");
+  const sharedIncomingList = document.querySelector("#sharedIncomingList");
+  const refreshSharedIncoming = document.querySelector("#refreshSharedIncoming");
+  const sharedIncomingReport = document.querySelector("#sharedIncomingReport");
+  const sharedIncomingAttacker = document.querySelector("#sharedIncomingAttacker");
+  const sharedIncomingDefended = document.querySelector("#sharedIncomingDefended");
+  const sharedIncomingEta = document.querySelector("#sharedIncomingEta");
+  const sharedIncomingSize = document.querySelector("#sharedIncomingSize");
+  const sharedIncomingNote = document.querySelector("#sharedIncomingNote");
+  const sharedIncomingPaste = document.querySelector("#sharedIncomingPaste");
+  const sharedScoutingPanel = document.querySelector("#sharedScoutingPanel");
+  const sharedScoutingCounts = document.querySelector("#sharedScoutingCounts");
+  const sharedScoutingStatus = document.querySelector("#sharedScoutingStatus");
+  const sharedScoutingList = document.querySelector("#sharedScoutingList");
+  const refreshSharedScouting = document.querySelector("#refreshSharedScouting");
+  const sharedScoutCreate = document.querySelector("#sharedScoutCreate");
+  const sharedScoutCreateForm = document.querySelector("#sharedScoutCreateForm");
+  const sharedScoutName = document.querySelector("#sharedScoutName");
+  const sharedScoutKind = document.querySelector("#sharedScoutKind");
+  const sharedScoutTargets = document.querySelector("#sharedScoutTargets");
+  const sharedMyWatches = document.querySelector("#sharedMyWatches");
 
   const urlParams = new URLSearchParams(location.search);
   const miniAppAccess = urlParams.get("access") || "";
@@ -79,6 +113,12 @@
   let intel = loadLocalState();
   let miniAppSession = null;
   let coverageByRegion = new Map();
+  let sharedAttackData = { attacks: [], role: "member", canManage: false, userId: "" };
+  let sharedIncomingData = { incoming: [], role: "member", canManage: false, userId: "" };
+  let sharedScoutingData = { agendas: [], myWatches: [], role: "member", canManage: false, userId: "" };
+  let sharedIntelByRegion = new Map();
+  let intelLoadSequence = 0;
+  let sharedRefreshBusy = false;
 
   init();
 
@@ -101,7 +141,7 @@
       telegramChatId = miniAppSession.chatId || telegramChatId;
     }
 
-    if (hasSupabase && !urlParams.get("gal") && !initialLocation) {
+    if (hasSupabase && !miniAppSession && !urlParams.get("gal") && !initialLocation) {
       client = window.supabase.createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
       const [preferredGalaxy, preferredChatId] = await Promise.all([
         loadPreferredGalaxy(),
@@ -116,7 +156,11 @@
     populateArrivalOptions();
     if (miniAppSession) {
       try {
-        await loadCoverage();
+        document.body.classList.add("signed-session");
+        sharedAttacksPanel.hidden = false;
+        sharedIncomingPanel.hidden = false;
+        sharedScoutingPanel.hidden = false;
+        await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting()]);
       } catch {
         renderAccessRequired("Lysander could not load the live coverage map. Please try /map again.");
         return;
@@ -129,11 +173,14 @@
     renderIncomingBoard();
     renderBulkTargets();
     setInterval(tickClaims, 1000);
+    if (miniAppSession) setInterval(refreshSharedViews, 20000);
 
-    if (hasSupabase) {
+    // Signed sessions use the bot API as their trust boundary. Do not silently
+    // re-enable the legacy browser-to-Supabase path if public keys are present.
+    if (hasSupabase && !miniAppSession) {
       connectSupabase();
     } else {
-      setSync("Local");
+      setSync(miniAppSession ? "Live" : "Local", Boolean(miniAppSession));
     }
   }
 
@@ -176,31 +223,88 @@
 
   async function loadMiniAppSession() {
     try {
-      const response = await fetch(`${botApiUrl}/api/miniapp/session?access=${encodeURIComponent(miniAppAccess)}`);
-      if (!response.ok) return null;
-      return await response.json();
+      return await miniAppApi("/api/miniapp/session");
     } catch {
       return null;
     }
   }
 
+  async function miniAppApi(path, options = {}) {
+    const method = options.method || "GET";
+    const request = { method, headers: { "Content-Type": "application/json" } };
+    let url = `${botApiUrl}${path}`;
+    if (method === "GET") {
+      const separator = url.includes("?") ? "&" : "?";
+      url += `${separator}access=${encodeURIComponent(miniAppAccess)}`;
+    } else {
+      request.body = JSON.stringify({ access: miniAppAccess, ...(options.body || {}) });
+    }
+    let response;
+    try {
+      response = await fetch(url, request);
+    } catch {
+      throw new Error("Lysander is unreachable. Try again in a moment.");
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Lysander could not complete that request.");
+    return payload;
+  }
+
   async function loadCoverage() {
     if (!miniAppAccess) return;
-    const response = await fetch(`${botApiUrl}/api/miniapp/coverage?access=${encodeURIComponent(miniAppAccess)}`);
-    if (!response.ok) throw new Error("Could not load live map coverage.");
-    const payload = await response.json();
+    const payload = await miniAppApi("/api/miniapp/coverage");
     coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
+  }
+
+  async function loadSharedAttacks() {
+    if (!miniAppAccess) return;
+    sharedAttackStatus.textContent = "Loading attack plans...";
+    sharedAttackData = await miniAppApi("/api/miniapp/attacks");
+    renderSharedAttacks();
+  }
+
+  async function loadSharedIncoming() {
+    if (!miniAppAccess) return;
+    sharedIncomingStatus.textContent = "Loading incoming reports...";
+    sharedIncomingData = await miniAppApi("/api/miniapp/incoming");
+    renderSharedIncoming();
+  }
+
+  async function loadSharedScouting() {
+    if (!miniAppAccess) return;
+    sharedScoutingStatus.textContent = "Loading scouting agendas...";
+    sharedScoutingData = await miniAppApi("/api/miniapp/scouting");
+    renderSharedScouting();
+  }
+
+  async function loadSharedIntel(region, force = false) {
+    if (!miniAppAccess || !region) return;
+    if (!force && sharedIntelByRegion.has(region)) return applySharedIntel(sharedIntelByRegion.get(region));
+    const sequence = ++intelLoadSequence;
+    const payload = await miniAppApi(`/api/miniapp/intel?region=${encodeURIComponent(region)}`);
+    sharedIntelByRegion.set(payload.region, payload);
+    applySharedIntel(payload);
+    if (sequence === intelLoadSequence && selected === payload.region) renderSectorPanel(selected);
+  }
+
+  async function refreshSharedViews() {
+    if (!miniAppSession || sharedRefreshBusy || document.hidden) return;
+    sharedRefreshBusy = true;
+    try {
+      await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting(), loadSharedIntel(selected, true)]);
+      paintAll();
+      selectSector(selected);
+      setSync("Live", true);
+    } catch (error) {
+      setSync(error.message || "Refresh failed");
+    } finally {
+      sharedRefreshBusy = false;
+    }
   }
 
   async function updateWatch(region, action) {
     try {
-      const response = await fetch(`${botApiUrl}/api/miniapp/watch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ access: miniAppAccess, region, action })
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Could not update this watch.");
+      const payload = await miniAppApi("/api/miniapp/watch", { method: "POST", body: { region, action } });
       coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
       paintAll();
       selectSector(region);
@@ -209,6 +313,347 @@
       setSync(error.message || "Watch update failed");
       window.alert(error.message || "Could not update this watch.");
     }
+  }
+
+  async function updateSharedAttack(body, successMessage) {
+    sharedAttackStatus.textContent = "Saving...";
+    try {
+      sharedAttackData = await miniAppApi("/api/miniapp/attacks", { method: "POST", body });
+      renderSharedAttacks();
+      sharedAttackStatus.textContent = successMessage || "Attack plans updated.";
+      setSync("Live", true);
+      return true;
+    } catch (error) {
+      sharedAttackStatus.textContent = error.message || "Attack update failed.";
+      window.alert(error.message || "Could not update the attack plan.");
+      return false;
+    }
+  }
+
+  async function updateSharedIncoming(body, successMessage) {
+    sharedIncomingStatus.textContent = "Saving...";
+    try {
+      sharedIncomingData = await miniAppApi("/api/miniapp/incoming", { method: "POST", body });
+      renderSharedIncoming();
+      sharedIncomingStatus.textContent = successMessage || "Incoming reports updated.";
+      setSync("Live", true);
+      return true;
+    } catch (error) {
+      sharedIncomingStatus.textContent = error.message || "Incoming update failed.";
+      window.alert(error.message || "Could not update incoming reports.");
+      return false;
+    }
+  }
+
+  async function updateSharedScouting(body, successMessage) {
+    sharedScoutingStatus.textContent = "Saving...";
+    try {
+      sharedScoutingData = await miniAppApi("/api/miniapp/scouting", { method: "POST", body });
+      renderSharedScouting();
+      await loadCoverage();
+      paintAll();
+      sharedScoutingStatus.textContent = successMessage || "Scouting updated.";
+      setSync("Live", true);
+      return true;
+    } catch (error) {
+      sharedScoutingStatus.textContent = error.message || "Scouting update failed.";
+      window.alert(error.message || "Could not update scouting.");
+      return false;
+    }
+  }
+
+  async function reportSharedIncoming(event) {
+    event.preventDefault();
+    const ok = await updateSharedIncoming({
+      action: "report",
+      attackerCoord: sharedIncomingAttacker.value,
+      defendedCoord: sharedIncomingDefended.value,
+      eta: sharedIncomingEta.value,
+      size: sharedIncomingSize.value,
+      note: sharedIncomingNote.value,
+      reportText: sharedIncomingPaste.value
+    }, "Incoming report saved.");
+    if (ok) {
+      sharedIncomingAttacker.value = "";
+      sharedIncomingDefended.value = "";
+      sharedIncomingEta.value = "";
+      sharedIncomingSize.value = "";
+      sharedIncomingNote.value = "";
+      sharedIncomingPaste.value = "";
+    }
+  }
+
+  async function handleSharedIncomingAction(event) {
+    const button = event.target.closest("[data-incoming-action]");
+    if (!button || button.disabled) return;
+    const action = button.dataset.incomingAction;
+    const incomingId = button.dataset.incomingId;
+    if (action === "clear" && !window.confirm("Clear this as a false incoming report for everyone?")) return;
+    const messages = {
+      cover: "Defense coverage assigned to you.",
+      release: "Defense coverage released.",
+      clear: "False incoming report cleared."
+    };
+    await updateSharedIncoming({ action, incomingId }, messages[action]);
+  }
+
+  async function createSharedScoutAgenda(event) {
+    event.preventDefault();
+    const ok = await updateSharedScouting({
+      action: "create",
+      name: sharedScoutName.value,
+      kind: sharedScoutKind.value,
+      targets: sharedScoutTargets.value
+    }, "Scouting agenda created.");
+    if (ok) {
+      sharedScoutName.value = "";
+      sharedScoutTargets.value = "";
+    }
+  }
+
+  async function handleSharedScoutingAction(event) {
+    const button = event.target.closest("[data-scout-action]");
+    if (!button || button.disabled) return;
+    const action = button.dataset.scoutAction;
+    const operationId = button.dataset.operationId;
+    const agendaKey = button.dataset.agendaKey;
+    if (action === "cancel" && !window.confirm("Cancel this scouting agenda for everyone?")) return;
+    const body = { action, operationId, agendaKey };
+    if (action === "create-attack") body.hours = Number(button.dataset.hours || 4);
+    const messages = {
+      take: "Watch responsibility assigned to you.",
+      release: "Watch responsibility released.",
+      cancel: "Scouting agenda cancelled.",
+      "create-attack": "Attack created from this scouting agenda."
+    };
+    const ok = await updateSharedScouting(body, messages[action]);
+    if (ok && action === "create-attack") await loadSharedAttacks();
+  }
+
+  function renderSharedScouting() {
+    if (!sharedScoutingPanel) return;
+    const agendas = sharedScoutingData.agendas || [];
+    const watches = sharedScoutingData.myWatches || [];
+    const targetCount = agendas.reduce((sum, agenda) => sum + Number(agenda.targetCount || 0), 0);
+    const assignedCount = agendas.reduce((sum, agenda) => sum + Number(agenda.assignedCount || 0), 0);
+    sharedScoutingPanel.hidden = false;
+    sharedScoutCreate.hidden = !sharedScoutingData.canManage;
+    sharedScoutingCounts.textContent = `${agendas.length} agenda${agendas.length === 1 ? "" : "s"} | ${assignedCount}/${targetCount} watched`;
+    sharedMyWatches.innerHTML = watches.length
+      ? `<strong>Your watches:</strong> ${watches.map((watch) => escapeHtml(watch.coord)).join(", ")}`
+      : "You have no active watch responsibilities.";
+    if (!agendas.length) {
+      sharedScoutingStatus.textContent = sharedScoutingData.canManage
+        ? "No active scouting agendas. Create one here or from a Telegram base search."
+        : "No active scouting agendas.";
+      sharedScoutingList.innerHTML = "";
+      return;
+    }
+    sharedScoutingStatus.textContent = `Showing ${agendas.length} live scouting agenda${agendas.length === 1 ? "" : "s"}.`;
+    sharedScoutingList.innerHTML = agendas.map(renderSharedScoutCard).join("");
+  }
+
+  function renderSharedScoutCard(agenda) {
+    const targets = (agenda.targets || []).map((target) => {
+      const state = target.assigned ? `Watched by ${target.assignedTo || "guild member"}` : "Needs watcher";
+      let action = "";
+      if (target.mine) {
+        action = `<button class="ghost-button" type="button" data-scout-action="release" data-operation-id="${escapeHtml(target.operationId)}">Release</button>`;
+      } else if (!target.assigned) {
+        action = `<button class="command-button" type="button" data-scout-action="take" data-operation-id="${escapeHtml(target.operationId)}">Take Watch</button>`;
+      }
+      return `<div class="shared-scout-target${target.mine ? " mine" : ""}"><div><strong>${escapeHtml(target.coord)}</strong><span>${escapeHtml(state)}</span></div>${action}</div>`;
+    }).join("");
+    const officerActions = sharedScoutingData.canManage ? [
+      agenda.kind === "base" ? `<button class="ghost-button" type="button" data-scout-action="create-attack" data-agenda-key="${escapeHtml(agenda.key)}" data-hours="4">Attack in 4h</button>` : "",
+      `<button class="danger-button" type="button" data-scout-action="cancel" data-agenda-key="${escapeHtml(agenda.key)}">Cancel Agenda</button>`
+    ].join("") : "";
+    return [
+      `<article class="shared-scout-card">`,
+      `<header><div><span class="shared-kicker">${escapeHtml(agenda.kind === "region" ? "REGION COVERAGE" : "BASE WATCH")}</span><h3>${escapeHtml(agenda.name)}</h3></div><span>${agenda.assignedCount}/${agenda.targetCount} assigned</span></header>`,
+      `<div class="shared-scout-targets">${targets || `<p class="shared-empty">No active targets.</p>`}</div>`,
+      `<footer><span>${agenda.openCount} still need coverage</span><div class="incoming-actions">${officerActions}</div></footer>`,
+      `</article>`
+    ].join("");
+  }
+
+  function applySharedIntel(payload) {
+    if (!payload?.region) return;
+    const region = payload.region;
+    intel.systems[region] = [];
+    Object.keys(intel.bases || {}).forEach((coord) => {
+      if (intel.bases[coord]?.region === region) delete intel.bases[coord];
+    });
+    Object.keys(intel.astros || {}).forEach((coord) => {
+      if (intel.astros[coord]?.region === region) delete intel.astros[coord];
+    });
+    (payload.systems || []).forEach((row) => mergeSystemRow({ region_id: region, system_id: row.systemId, coord: row.coord, updated_at: row.updatedAt }));
+    (payload.bases || []).forEach((row) => mergeBaseRow({ region_id: region, system_id: row.systemId, coord: row.coord, guild: row.guild, label: row.label, updated_at: row.updatedAt }));
+    (payload.astros || []).forEach((row) => mergeAstroRow({ region_id: region, system_id: row.systemId, coord: row.coord, terrain: row.terrain, astro_type: row.type, attributes: row.attributes, has_base: row.hasBase, updated_at: row.updatedAt }));
+    if (selected === region) {
+      paintSector(region);
+      selectedSystems.textContent = `${getSystemCount(region)} known`;
+      selectedBases.textContent = `${getBaseCount(region)} known`;
+    }
+  }
+
+  async function createSharedAttack(event) {
+    event.preventDefault();
+    const arrival = new Date(sharedAttackArrival.value);
+    if (!Number.isFinite(arrival.getTime())) {
+      sharedAttackStatus.textContent = "Choose a valid landing date and time.";
+      return;
+    }
+    const ok = await updateSharedAttack({
+      action: "create",
+      name: sharedAttackName.value,
+      arrivalAt: arrival.toISOString(),
+      waves: Number(sharedAttackWaves.value),
+      targets: sharedAttackTargets.value
+    }, "Attack plan created.");
+    if (ok) {
+      sharedAttackName.value = "";
+      sharedAttackTargets.value = "";
+    }
+  }
+
+  async function handleSharedAttackAction(event) {
+    const button = event.target.closest("[data-shared-action]");
+    if (!button || button.disabled) return;
+    const action = button.dataset.sharedAction;
+    const operationId = button.dataset.operationId;
+    const coord = button.dataset.coord;
+    const wave = Number(button.dataset.wave || 0);
+    if (action === "stand-down" && !window.confirm("Stand down this attack plan for everyone?")) return;
+    if (action === "add-targets") {
+      const card = button.closest(".shared-attack-card");
+      const targets = card?.querySelector("[data-shared-target-input]")?.value || "";
+      if (!targets.trim()) return;
+      await updateSharedAttack({ action, operationId, targets }, "Targets added.");
+      return;
+    }
+    const messages = {
+      claim: `Claimed ${coord} wave ${wave}.`,
+      release: `Released ${coord} wave ${wave}.`,
+      sent: `Marked ${coord} wave ${wave} sent.`,
+      "stand-down": "Attack plan stood down."
+    };
+    await updateSharedAttack({ action, operationId, coord, wave }, messages[action]);
+  }
+
+  function renderSharedAttacks() {
+    if (!sharedAttacksPanel) return;
+    const attacks = sharedAttackData.attacks || [];
+    sharedAttacksPanel.hidden = false;
+    sharedAttackCreate.hidden = !sharedAttackData.canManage;
+    sharedAttackCounts.textContent = `${attacks.length} active`;
+    if (!sharedAttackArrival.value) {
+      const defaultArrival = new Date(Date.now() + 4 * 60 * 60 * 1000);
+      defaultArrival.setMinutes(Math.ceil(defaultArrival.getMinutes() / 15) * 15, 0, 0);
+      sharedAttackArrival.value = localDateTimeInput(defaultArrival);
+      sharedAttackArrival.min = localDateTimeInput(new Date(Date.now() + 60 * 1000));
+    }
+    if (!attacks.length) {
+      sharedAttackStatus.textContent = sharedAttackData.canManage
+        ? "No active attack plans. Create one here or with Lysander in Telegram."
+        : "No active attack plans.";
+      sharedAttackList.innerHTML = "";
+      return;
+    }
+    sharedAttackStatus.textContent = `Showing ${attacks.length} live plan${attacks.length === 1 ? "" : "s"}.`;
+    sharedAttackList.innerHTML = attacks.map(renderSharedAttackCard).join("");
+  }
+
+  function renderSharedIncoming() {
+    if (!sharedIncomingPanel) return;
+    const rows = sharedIncomingData.incoming || [];
+    const open = rows.filter((row) => !row.coveredByUserId).length;
+    const covered = rows.length - open;
+    sharedIncomingPanel.hidden = false;
+    sharedIncomingCounts.textContent = `${rows.length} active | ${open} open | ${covered} covered`;
+    if (!rows.length) {
+      sharedIncomingStatus.textContent = "No hostile arrivals are currently active.";
+      sharedIncomingList.innerHTML = `<p class="shared-empty">New Telegram reports will appear here automatically.</p>`;
+      return;
+    }
+    sharedIncomingStatus.textContent = `Showing ${rows.length} hostile arrival${rows.length === 1 ? "" : "s"}, soonest first.`;
+    sharedIncomingList.innerHTML = rows.map(renderSharedIncomingCard).join("");
+  }
+
+  function renderSharedIncomingCard(row) {
+    const defended = row.defendedCoord || row.defendedLabel || "Defended base unknown";
+    const attacker = row.attackerCoord || row.attackerGuild || "Origin unknown";
+    const attackerDetails = [row.attackerGuild, row.attackerPlayer].filter(Boolean).join(" ");
+    const coverage = row.coveredByUserId
+      ? `<span class="incoming-state covered">Covered by ${escapeHtml(row.coveredBy || "guild member")}</span>`
+      : `<span class="incoming-state open">Needs coverage</span>`;
+    let actions = "";
+    if (!row.coveredByUserId) {
+      actions += `<button class="command-button" type="button" data-incoming-action="cover" data-incoming-id="${escapeHtml(row.id)}">Cover</button>`;
+    } else if (row.mine) {
+      actions += `<button class="ghost-button" type="button" data-incoming-action="release" data-incoming-id="${escapeHtml(row.id)}">Release</button>`;
+    }
+    if (sharedIncomingData.canManage) {
+      actions += `<button class="danger-button" type="button" data-incoming-action="clear" data-incoming-id="${escapeHtml(row.id)}">Clear False Report</button>`;
+    }
+    return [
+      `<article class="shared-incoming-card${row.coveredByUserId ? " is-covered" : ""}">`,
+      `<header><div><span class="shared-kicker">${escapeHtml(row.operationShortId || "INCOMING")}</span><h3>${escapeHtml(defended)}</h3></div>`,
+      `<div class="shared-attack-time"><strong>${escapeHtml(formatCountdown(row.arrivalAt, "Landing now"))}</strong><span>${escapeHtml(formatLocalDateTime(row.arrivalAt))}</span></div></header>`,
+      `<div class="incoming-route"><span>From</span><strong>${escapeHtml(attacker)}</strong>${attackerDetails ? `<em>${escapeHtml(attackerDetails)}</em>` : ""}</div>`,
+      `<div class="incoming-facts"><span>Size <strong>${escapeHtml(row.size || "Unknown")}</strong></span><span>Reported by <strong>${escapeHtml(row.reporter)}</strong></span>${row.note ? `<span>Note <strong>${escapeHtml(row.note)}</strong></span>` : ""}</div>`,
+      `<footer>${coverage}<div class="incoming-actions">${actions}</div></footer>`,
+      `</article>`
+    ].join("");
+  }
+
+  function renderSharedAttackCard(attack) {
+    const totals = `${attack.targetCount} targets | ${attack.claimedWaves}/${attack.totalWaves} claimed | ${attack.sentWaves} sent`;
+    const targets = attack.targets.length
+      ? attack.targets.map((target, index) => renderSharedAttackTarget(attack, target, index)).join("")
+      : `<p class="shared-empty">No targets have been added yet.</p>`;
+    const officerTools = attack.canManage ? [
+      `<div class="shared-attack-manage">`,
+      `<textarea data-shared-target-input spellcheck="false" placeholder="Paste target coordinates to add"></textarea>`,
+      `<button class="ghost-button" type="button" data-shared-action="add-targets" data-operation-id="${escapeHtml(attack.id)}">Add Targets</button>`,
+      `<button class="danger-button" type="button" data-shared-action="stand-down" data-operation-id="${escapeHtml(attack.id)}">Stand Down</button>`,
+      `</div>`
+    ].join("") : "";
+    return [
+      `<article class="shared-attack-card">`,
+      `<header><div><span class="shared-kicker">${escapeHtml(attack.shortId)}</span><h3>${escapeHtml(attack.name)}</h3></div>`,
+      `<div class="shared-attack-time"><strong>${escapeHtml(formatLocalDateTime(attack.arrivalAt))}</strong><span>${escapeHtml(formatCountdown(attack.arrivalAt, "Landing now"))}</span></div></header>`,
+      `<p class="shared-attack-meta">Commander: ${escapeHtml(attack.commander)} | ${escapeHtml(totals)}</p>`,
+      `<div class="shared-targets">${targets}</div>`,
+      officerTools,
+      `</article>`
+    ].join("");
+  }
+
+  function renderSharedAttackTarget(attack, target, index) {
+    const waves = target.waves.map((wave) => {
+      const base = `data-operation-id="${escapeHtml(attack.id)}" data-coord="${escapeHtml(target.coord)}" data-wave="${wave.index}"`;
+      if (wave.state === "open") {
+        return `<button class="shared-wave open" type="button" data-shared-action="claim" ${base}>W${wave.index}<span>${escapeHtml(wave.label)}</span></button>`;
+      }
+      if (wave.mine && wave.state === "claimed") {
+        return `<div class="shared-wave-owned"><button class="shared-wave mine" type="button" data-shared-action="sent" ${base}>W${wave.index} Mine<span>Mark sent</span></button><button class="shared-release" type="button" data-shared-action="release" ${base}>Release</button></div>`;
+      }
+      const label = wave.mine ? "Sent by you" : wave.claimedBy || wave.state;
+      return `<button class="shared-wave ${wave.state}" type="button" disabled>W${wave.index}<span>${escapeHtml(label)}</span></button>`;
+    }).join("");
+    return [
+      `<details class="shared-target"${index === 0 ? " open" : ""}>`,
+      `<summary><strong>${String(index + 1).padStart(2, "0")} ${escapeHtml(target.coord)}</strong><span>${target.claimedWaves}/${target.totalWaves} claimed</span></summary>`,
+      `<div class="shared-waves">${waves}</div>`,
+      `</details>`
+    ].join("");
+  }
+
+  function localDateTimeInput(value) {
+    const date = new Date(value);
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }
 
   function renderGrid() {
@@ -287,6 +732,15 @@
       const button = event.target.closest("[data-watch-action]");
       if (button) updateWatch(button.dataset.watchRegion, button.dataset.watchAction);
     });
+    refreshSharedAttacks?.addEventListener("click", refreshSharedViews);
+    sharedAttackCreate?.addEventListener("submit", createSharedAttack);
+    sharedAttackList?.addEventListener("click", handleSharedAttackAction);
+    refreshSharedIncoming?.addEventListener("click", refreshSharedViews);
+    sharedIncomingReport?.addEventListener("submit", reportSharedIncoming);
+    sharedIncomingList?.addEventListener("click", handleSharedIncomingAction);
+    refreshSharedScouting?.addEventListener("click", refreshSharedViews);
+    sharedScoutCreateForm?.addEventListener("submit", createSharedScoutAgenda);
+    sharedScoutingList?.addEventListener("click", handleSharedScoutingAction);
   }
 
   async function connectSupabase() {
@@ -645,6 +1099,17 @@
 
     try {
       const parsed = parseIntel(text);
+      if (miniAppSession) {
+        importResult.textContent = "Uploading through Lysander...";
+        const saved = await miniAppApi("/api/miniapp/import", { method: "POST", body: { intel: parsed } });
+        importResult.textContent = `Saved ${saved.systems} systems, ${saved.bases} bases, ${saved.astros} astros, ${saved.incoming} incoming`;
+        importText.value = "";
+        sharedIntelByRegion.clear();
+        await Promise.all([loadCoverage(), loadSharedIntel(selected, true), loadSharedIncoming()]);
+        paintAll();
+        renderSectorPanel(selected);
+        return;
+      }
       mergeImportedIntel(parsed);
       saveLocalState();
       paintAll();
@@ -838,7 +1303,23 @@
     confirmFleetResult.textContent = `Confirmed ${matches[0].target}.`;
   }
 
+  function signedExporterBookmarklet() {
+    const endpoint = `${botApiUrl}/api/miniapp/import`;
+    return `javascript:(async()=>{const G=${JSON.stringify(galaxy)},A=${JSON.stringify(miniAppAccess)},API=${JSON.stringify(endpoint)};const re3=new RegExp(G+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(G+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g'),html=document.documentElement.innerHTML,txt=document.body.innerText||'';const systems=[...new Set(html.match(re3)||[])].map(coord=>({coord}));const bases=[];if(typeof mapToolBox_data!=='undefined'){for(const value of Object.values(mapToolBox_data||{})){const raw=String(value||''),coord=(raw.match(re4)||[])[0];if(!coord)continue;const guild=(raw.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',label=raw.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').replace(coord,' ').trim();bases.push({coord,guild,label})}}const astros=[];for(const line of txt.split(/\\r?\\n/)){const coord=(line.match(re4)||[])[0];if(!coord)continue;const m=line.replace(coord,'').trim().match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(m)astros.push({coord,terrain:m[1],type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),hasBase:m[4]==='Yes'})}const duration=value=>{const p=String(value||'').split(':').map(Number);return p.length===2?((p[0]*60+p[1])*60000):p.length===3?(((p[0]*60+p[1])*60+p[2])*1000):0};const incoming=[];document.querySelectorAll('tr').forEach(tr=>{const cells=[...tr.querySelectorAll('td,th')].map(td=>td.innerText.trim());if(cells.length<4||!/\\d{1,4}:\\d{2}(?::\\d{2})?/.test(cells[2]||''))return;const dest=tr.querySelectorAll('td,th')[1],sizeCell=tr.querySelectorAll('td,th')[3],link=dest&&dest.querySelector('a[href*="loc="]'),fleet=sizeCell&&sizeCell.querySelector('a[href*="fleet="]'),coord=((((link&&link.href)||'').match(/loc=([^&]+)/)||[])[1]||(cells[1].match(re4)||[])[0]||'').toUpperCase(),ms=duration(cells[2]);if(!coord||!coord.startsWith(G+':')||!ms)return;incoming.push({defendedCoord:coord,arrivalAt:new Date(Date.now()+ms).toISOString(),fleetId:(((fleet&&fleet.href)||'').match(/fleet=(\\d+)/)||[])[1]||'',player:cells[0],size:(cells[3].match(/[\\d,]+/)||[])[0]||'',rawLine:tr.innerText.replace(/\\s+/g,' ').trim()})});const unique=rows=>[...new Map(rows.map(row=>[row.coord,row])).values()];try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access:A,intel:{systems:unique(systems),bases:unique(bases),astros:unique(astros),incoming}})}),result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Import failed');alert('VisionBot import complete for '+G+': '+result.systems+' systems, '+result.bases+' bases, '+result.astros+' astros, '+result.incoming+' incoming')}catch(error){console.error(error);alert('VisionBot import failed: '+error.message)}})()`;
+  }
+
   async function copyBookmarklet() {
+    if (miniAppSession) {
+      const code = signedExporterBookmarklet();
+      try {
+        await navigator.clipboard.writeText(code);
+        importResult.textContent = "Secure bookmarklet copied. Recopy it after your /map link expires.";
+      } catch {
+        importText.value = code;
+        importResult.textContent = "Secure bookmarklet placed in the box";
+      }
+      return;
+    }
     if (!config.SUPABASE_URL || !config.SUPABASE_ANON_KEY) {
       importResult.textContent = "Supabase config needed first";
       return;
@@ -1138,11 +1619,20 @@
     selectedBases.textContent = `${getBaseCount(id)} known`;
     selectedOperations.textContent = `${getOperationCount(id)} active`;
     renderSectorPanel(id);
+    if (miniAppSession) {
+      loadSharedIntel(id).catch((error) => {
+        if (selected === id) {
+          astroList.textContent = error.message || "Could not load sector intel.";
+          setSync("Intel unavailable");
+        }
+      });
+    }
   }
 
   function renderSectorPanel(id) {
     const systems = getSystemsForRegion(id);
     const bases = getBasesForRegion(id);
+    const astros = getAstrosForRegion(id);
 
     sectorPanelTitle.textContent = id;
     sectorCounts.textContent = `${systems.length} systems / ${bases.length} bases`;
@@ -1152,10 +1642,12 @@
 
     if (bases.length) {
       baseList.innerHTML = bases.map((base) => {
-        const guild = escapeHtml(base.guild || "");
-        const label = escapeHtml(base.label || "Unknown owner");
+        const stance = stanceForBase(base, id);
+        const stanceLabel = stance === "friend" ? "Friendly" : stance === "enemy" ? "Enemy" : "";
+        const age = formatIntelAge(base.updatedAt);
+        const label = escapeHtml([base.label || "Unknown owner", age].filter(Boolean).join(" - "));
         const coord = escapeHtml(base.coord);
-        return `<div class="base-row"><div><strong>${coord}</strong><span>${label}</span></div><div class="base-guild">${guild}</div></div>`;
+        return `<div class="base-row"><div><strong>${coord}</strong><span>${label}</span></div><div class="base-guild">${escapeHtml(stanceLabel ? `${stanceLabel} ${base.guild || ""}` : base.guild || "")}</div></div>`;
       }).join("");
     } else {
       baseList.textContent = "No bases imported for this sector.";
@@ -1167,6 +1659,19 @@
       }).join("");
     } else {
       systemList.textContent = "No systems imported for this sector.";
+    }
+
+    if (astros.length) {
+      astroList.innerHTML = astros.map((astro) => {
+        const description = [astro.terrain, astro.type].filter(Boolean).join(" ") || "Unknown astro";
+        const attributes = Array.isArray(astro.attributes) && astro.attributes.length ? astro.attributes.join("/") : "";
+        const age = formatIntelAge(astro.updatedAt);
+        return `<div class="astro-row"><strong>${escapeHtml(astro.coord)}</strong><span>${escapeHtml(description)}</span><em>${escapeHtml(attributes)}${astro.hasBase ? " base" : ""}${age ? ` | ${escapeHtml(age)}` : ""}</em></div>`;
+      }).join("");
+    } else {
+      astroList.textContent = miniAppSession && !sharedIntelByRegion.has(id)
+        ? "Loading astro intel..."
+        : "No astros imported for this sector.";
     }
 
     const coverage = coverageByRegion.get(id);
@@ -1423,13 +1928,45 @@
   }
 
   function getSystemsForRegion(region) {
+    const coverage = coverageByRegion.get(region);
+    if (coverage) return [...new Set(coverage.systems || [])].sort();
     return [...(intel.systems[region] || [])].sort();
   }
 
   function getBasesForRegion(region) {
+    const coverage = coverageByRegion.get(region);
+    if (coverage) {
+      return [...(coverage.bases || [])]
+        .map((base) => ({ ...base, region }))
+        .sort((a, b) => String(a.coord).localeCompare(String(b.coord)));
+    }
     return Object.values(intel.bases)
       .filter((base) => base.region === region)
       .sort((a, b) => a.coord.localeCompare(b.coord));
+  }
+
+  function getAstrosForRegion(region) {
+    return Object.values(intel.astros || {})
+      .filter((astro) => astro.region === region)
+      .sort((a, b) => String(a.coord).localeCompare(String(b.coord)));
+  }
+
+  function stanceForBase(base, region) {
+    const stances = sharedIntelByRegion.get(region)?.stances || [];
+    const coord = stances.find((row) => row.type === "coord" && row.value === base.coord);
+    if (coord) return coord.stance;
+    const tag = String(base.guild || "").match(/\[[^\]]+\]/)?.[0]?.toUpperCase();
+    return tag ? stances.find((row) => row.type === "tag" && String(row.value).toUpperCase() === tag)?.stance || "" : "";
+  }
+
+  function formatIntelAge(value) {
+    const time = new Date(value || "").getTime();
+    if (!Number.isFinite(time)) return "";
+    const minutes = Math.max(0, Math.floor((Date.now() - time) / 60000));
+    if (minutes < 60) return `${minutes}m old`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return `${hours}h old`;
+    return `${Math.floor(hours / 24)}d old`;
   }
 
   function getClaimsForRegion(region) {

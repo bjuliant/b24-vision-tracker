@@ -40,6 +40,10 @@ button {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .app-shell {
   width: min(100%, 1040px);
   min-height: 100vh;
@@ -181,6 +185,25 @@ h1 {
   gap: 8px;
 }
 
+.toolbar.legend {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.legend-item {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(18, 43, 61, 0.92), rgba(10, 22, 31, 0.92));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-align: center;
+}
+
 .tool-button {
   min-height: 44px;
   border: 1px solid var(--line);
@@ -219,6 +242,8 @@ h1 {
 .friendly { background-color: var(--friendly); }
 .enemy { background-color: var(--enemy); }
 .reserved { background-color: var(--reserved); color: #1e1806; }
+.app { background-color: var(--friendly); }
+.needed { background-color: var(--watch-needed); color: #251605; }
 
 .board-wrap {
   position: relative;
@@ -560,7 +585,8 @@ h1 {
 }
 
 .base-list,
-.system-list {
+.system-list,
+.astro-list {
   min-height: 44px;
   max-height: 150px;
   overflow: auto;
@@ -1061,6 +1087,471 @@ h1 {
   justify-items: end;
 }
 
+.signed-session .legacy-operational {
+  display: none;
+}
+
+.shared-attacks-panel,
+.shared-incoming-panel,
+.shared-scouting-panel {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: 8px;
+  background: rgba(9, 25, 36, 0.9);
+  padding: 14px;
+}
+
+.shared-attacks-panel h2,
+.shared-incoming-panel h2,
+.shared-scouting-panel h2,
+.shared-attack-card h3,
+.shared-incoming-card h3,
+.shared-scout-card h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.shared-attacks-panel p,
+.shared-incoming-panel p,
+.shared-scouting-panel p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.shared-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.shared-attack-create {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(180px, 1fr) 80px auto;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.shared-attack-create textarea {
+  grid-column: 1 / -1;
+  min-height: 68px;
+  resize: vertical;
+}
+
+.shared-attack-create input,
+.shared-attack-create textarea,
+.shared-attack-manage textarea,
+.shared-incoming-report input,
+.shared-incoming-report textarea {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #071119;
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.shared-view-status {
+  min-height: 24px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.shared-attack-list {
+  display: grid;
+  gap: 12px;
+}
+
+.shared-attack-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(5, 14, 20, 0.76);
+  padding: 12px;
+}
+
+.shared-attack-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shared-kicker {
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.shared-attack-time {
+  text-align: right;
+}
+
+.shared-attack-time strong,
+.shared-attack-time span {
+  display: block;
+}
+
+.shared-attack-time span,
+.shared-attack-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.shared-targets {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.shared-target {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(12, 31, 44, 0.62);
+}
+
+.shared-target summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  padding: 9px 10px;
+}
+
+.shared-target summary span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.shared-waves {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.shared-wave,
+.shared-release,
+.danger-button {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #182b3a;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.shared-wave span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.shared-wave.open:hover,
+.shared-wave.mine {
+  border-color: var(--cyan);
+  background: rgba(31, 116, 168, 0.42);
+}
+
+.shared-wave.claimed,
+.shared-wave.sent {
+  opacity: 0.68;
+}
+
+.shared-wave.sent {
+  border-color: var(--friendly);
+}
+
+.shared-wave-owned {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.shared-release {
+  min-height: 26px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.shared-attack-manage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.shared-attack-manage textarea {
+  min-height: 42px;
+  resize: vertical;
+}
+
+.danger-button {
+  border-color: rgba(214, 64, 69, 0.55);
+  background: var(--danger-soft);
+}
+
+.shared-empty {
+  padding: 8px;
+}
+
+.shared-report-box {
+  margin: 12px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(5, 14, 20, 0.62);
+}
+
+.shared-report-box > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--text);
+  font-weight: 900;
+}
+
+.shared-incoming-report {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.shared-incoming-report #sharedIncomingNote {
+  grid-column: span 2;
+}
+
+.shared-incoming-report textarea {
+  grid-column: 1 / -1;
+  min-height: 72px;
+  resize: vertical;
+}
+
+.shared-incoming-report .command-button {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+.shared-incoming-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shared-incoming-card {
+  border: 1px solid rgba(214, 64, 69, 0.48);
+  border-left: 4px solid var(--enemy);
+  border-radius: 8px;
+  background: rgba(38, 13, 17, 0.48);
+  padding: 11px;
+}
+
+.shared-incoming-card.is-covered {
+  border-color: rgba(34, 197, 94, 0.42);
+  border-left-color: var(--friendly);
+  background: rgba(9, 36, 25, 0.42);
+}
+
+.shared-incoming-card > header,
+.shared-incoming-card > footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.incoming-route {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 9px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+}
+
+.incoming-route span,
+.incoming-route em,
+.incoming-facts {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.incoming-route em {
+  font-style: normal;
+  text-align: right;
+}
+
+.incoming-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 0;
+}
+
+.incoming-facts strong {
+  color: var(--text);
+}
+
+.incoming-state {
+  align-self: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.incoming-state.open {
+  border-color: rgba(214, 64, 69, 0.55);
+  color: #ff9397;
+}
+
+.incoming-state.covered {
+  border-color: rgba(34, 197, 94, 0.48);
+  color: #7ee39c;
+}
+
+.incoming-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.incoming-actions button {
+  min-height: 34px;
+}
+
+.shared-scout-create {
+  margin: 12px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(5, 14, 20, 0.62);
+}
+
+.shared-scout-create > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  font-weight: 900;
+}
+
+.shared-scout-create form {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, 0.7fr) auto;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.shared-scout-create input,
+.shared-scout-create select,
+.shared-scout-create textarea {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #071119;
+  color: var(--text);
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.shared-scout-create textarea {
+  grid-column: 1 / -1;
+  min-height: 72px;
+  resize: vertical;
+}
+
+.shared-watch-summary {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(12, 31, 44, 0.62);
+  padding: 9px 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.shared-watch-summary strong {
+  color: var(--text);
+}
+
+.shared-scouting-list {
+  display: grid;
+  gap: 10px;
+}
+
+.shared-scout-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(5, 14, 20, 0.76);
+  padding: 11px;
+}
+
+.shared-scout-card > header,
+.shared-scout-card > footer,
+.shared-scout-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shared-scout-card > header span,
+.shared-scout-target span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.shared-scout-targets {
+  display: grid;
+  gap: 5px;
+  max-height: 360px;
+  overflow: auto;
+  margin: 9px 0;
+}
+
+.shared-scout-target {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(12, 31, 44, 0.62);
+  padding: 6px 8px;
+}
+
+.shared-scout-target.mine {
+  border-color: var(--friendly);
+  background: rgba(9, 36, 25, 0.42);
+}
+
+.shared-scout-target button {
+  min-height: 32px;
+}
+
+.astro-row {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.astro-row:last-child {
+  border-bottom: 0;
+}
+
+.astro-row strong {
+  color: var(--text);
+}
+
+.astro-row em {
+  color: var(--muted);
+  font-style: normal;
+}
+
 @media (max-width: 560px) {
   .app-shell {
     gap: 12px;
@@ -1124,6 +1615,73 @@ h1 {
   .confirm-form,
   .attack-row {
     grid-template-columns: 1fr;
+  }
+
+  .shared-attack-create,
+  .shared-attack-manage {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-incoming-report {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .shared-incoming-report #sharedIncomingNote {
+    grid-column: 1 / -1;
+  }
+
+  .shared-scout-create form {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-scout-create textarea {
+    grid-column: auto;
+  }
+
+  .shared-scout-card > header,
+  .shared-scout-card > footer,
+  .shared-scout-target {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .shared-incoming-card > header,
+  .shared-incoming-card > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .incoming-route {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .incoming-route em {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .incoming-actions {
+    justify-content: stretch;
+  }
+
+  .incoming-actions button {
+    flex: 1 1 auto;
+  }
+
+  .shared-attack-create textarea {
+    grid-column: auto;
+  }
+
+  .shared-waves {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shared-attack-card > header {
+    flex-direction: column;
+  }
+
+  .shared-attack-time {
+    text-align: left;
   }
 
   .attack-actions {

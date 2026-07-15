@@ -31,27 +31,11 @@
         </div>
       </header>
 
-      <section class="toolbar" aria-label="Map tools">
-        <button class="tool-button" data-flag="unknown" type="button" title="Clear selected sector">
-          <span class="flag-chip unknown">U</span>
-          <span>Clear</span>
-        </button>
-        <button class="tool-button" data-flag="scout" type="button" title="Toggle scout vision">
-          <span class="flag-chip scout">S</span>
-          <span>Scout</span>
-        </button>
-        <button class="tool-button" data-flag="friendly" type="button" title="Toggle friendly presence">
-          <span class="flag-chip friendly">F</span>
-          <span>Friend</span>
-        </button>
-        <button class="tool-button" data-flag="enemy" type="button" title="Toggle enemy presence">
-          <span class="flag-chip enemy">E</span>
-          <span>Enemy</span>
-        </button>
-        <button class="tool-button" data-flag="reserved" type="button" title="Toggle reserved/claim activity">
-          <span class="flag-chip reserved">R</span>
-          <span>Reserved</span>
-        </button>
+      <section class="toolbar legend" aria-label="Map legend">
+        <div class="legend-item"><span class="flag-chip app">A</span><span>APP Base</span></div>
+        <div class="legend-item"><span class="flag-chip scout">F</span><span>Friendly</span></div>
+        <div class="legend-item"><span class="flag-chip enemy">E</span><span>Enemy</span></div>
+        <div class="legend-item"><span class="flag-chip needed">S</span><span>Scout Need / Watch</span></div>
       </section>
 
       <section class="board-wrap" aria-label="Sector map">
@@ -97,11 +81,92 @@
               <p class="label">Systems</p>
               <div class="system-list" id="systemList">No systems imported for this sector.</div>
             </div>
+            <div>
+              <p class="label">Known Astros</p>
+              <div class="astro-list" id="astroList">No astros imported for this sector.</div>
+            </div>
           </div>
         </details>
       </section>
 
-      <section class="attack-setup-panel">
+      <section class="shared-attacks-panel" id="sharedAttacksPanel" hidden>
+        <div class="panel-heading">
+          <div>
+            <h2>Guild Attacks</h2>
+            <p>Live attack plans shared with Lysander in Telegram.</p>
+          </div>
+          <div class="shared-panel-actions">
+            <span id="sharedAttackCounts">0 active</span>
+            <button class="ghost-button" id="refreshSharedAttacks" type="button">Refresh</button>
+          </div>
+        </div>
+        <form class="shared-attack-create" id="sharedAttackCreate" hidden>
+          <input id="sharedAttackName" type="text" maxlength="60" placeholder="Attack name" required />
+          <input id="sharedAttackArrival" type="datetime-local" required />
+          <input id="sharedAttackWaves" type="number" min="1" max="12" value="4" aria-label="Number of waves" required />
+          <textarea id="sharedAttackTargets" spellcheck="false" placeholder="Optional starting target coordinates"></textarea>
+          <button class="command-button" type="submit">Create Attack</button>
+        </form>
+        <div class="shared-view-status" id="sharedAttackStatus">Loading attack plans...</div>
+        <div class="shared-attack-list" id="sharedAttackList"></div>
+      </section>
+
+      <section class="shared-incoming-panel" id="sharedIncomingPanel" hidden>
+        <div class="panel-heading">
+          <div>
+            <h2>Defense &amp; Incoming</h2>
+            <p>Live hostile arrivals shared with Lysander in Telegram.</p>
+          </div>
+          <div class="shared-panel-actions">
+            <span id="sharedIncomingCounts">0 active</span>
+            <button class="ghost-button" id="refreshSharedIncoming" type="button">Refresh</button>
+          </div>
+        </div>
+        <details class="shared-report-box">
+          <summary>Report Incoming</summary>
+          <form class="shared-incoming-report" id="sharedIncomingReport">
+            <input id="sharedIncomingAttacker" type="text" placeholder="Attacker coordinate (optional)" />
+            <input id="sharedIncomingDefended" type="text" placeholder="Defended coordinate" />
+            <input id="sharedIncomingEta" type="text" inputmode="numeric" placeholder="ETA: 45 or 1:12:03" />
+            <input id="sharedIncomingSize" type="text" inputmode="numeric" placeholder="Fleet size (optional)" />
+            <input id="sharedIncomingNote" type="text" maxlength="240" placeholder="Guild or note (optional)" />
+            <textarea id="sharedIncomingPaste" spellcheck="false" placeholder="Or paste one or more AE fleet-movement rows"></textarea>
+            <button class="command-button" type="submit">Report Incoming</button>
+          </form>
+        </details>
+        <div class="shared-view-status" id="sharedIncomingStatus">Loading incoming reports...</div>
+        <div class="shared-incoming-list" id="sharedIncomingList"></div>
+      </section>
+
+      <section class="shared-scouting-panel" id="sharedScoutingPanel" hidden>
+        <div class="panel-heading">
+          <div>
+            <h2>Scouting &amp; Coverage</h2>
+            <p>Exact-base watches and region responsibilities shared with Lysander.</p>
+          </div>
+          <div class="shared-panel-actions">
+            <span id="sharedScoutingCounts">0 agendas</span>
+            <button class="ghost-button" id="refreshSharedScouting" type="button">Refresh</button>
+          </div>
+        </div>
+        <details class="shared-scout-create" id="sharedScoutCreate" hidden>
+          <summary>Create Scouting Agenda</summary>
+          <form id="sharedScoutCreateForm">
+            <input id="sharedScoutName" type="text" maxlength="48" placeholder="Agenda name" required />
+            <select id="sharedScoutKind" aria-label="Scouting target type">
+              <option value="base">Exact base coordinates</option>
+              <option value="region">Region coverage</option>
+            </select>
+            <textarea id="sharedScoutTargets" spellcheck="false" placeholder="Paste full base coordinates. For regions, leave blank to use every uncovered region."></textarea>
+            <button class="command-button" type="submit">Create Agenda</button>
+          </form>
+        </details>
+        <div class="shared-watch-summary" id="sharedMyWatches">You have no active watch responsibilities.</div>
+        <div class="shared-view-status" id="sharedScoutingStatus">Loading scouting agendas...</div>
+        <div class="shared-scouting-list" id="sharedScoutingList"></div>
+      </section>
+
+      <section class="attack-setup-panel legacy-operational">
         <div class="panel-heading">
           <div>
             <h2>Attack Setup</h2>
@@ -117,7 +182,7 @@
         </div>
       </section>
 
-      <section class="claims-panel">
+      <section class="claims-panel legacy-operational">
         <details open>
           <summary>
             <span>Claims</span>
@@ -134,7 +199,7 @@
         </details>
       </section>
 
-      <section class="bulk-panel">
+      <section class="bulk-panel legacy-operational">
         <div class="panel-heading">
           <div>
             <h2>Bulk Target Input</h2>
@@ -148,7 +213,7 @@
         </div>
       </section>
 
-      <section class="parsed-panel">
+      <section class="parsed-panel legacy-operational">
         <div class="panel-heading">
           <div>
             <h2>Parsed Targets</h2>
@@ -165,7 +230,7 @@
         <div class="target-table" id="parsedTargets">Paste target intel above to build a claim list.</div>
       </section>
 
-      <section class="operations-panel">
+      <section class="operations-panel legacy-operational">
         <details>
           <summary>
             <span>Operations</span>
@@ -176,7 +241,7 @@
         </details>
       </section>
 
-      <section class="incoming-panel">
+      <section class="incoming-panel legacy-operational">
         <details>
           <summary>
             <span>Incoming</span>
@@ -187,7 +252,7 @@
         </details>
       </section>
 
-      <section class="attack-panel">
+      <section class="attack-panel legacy-operational">
         <details>
           <summary>
             <span>Attack Board</span>
@@ -214,7 +279,7 @@
               <li>Open <code>B24 Map</code> while logged into AE, then click <code>VisionBot Export</code>.</li>
             </ol>
           </div>
-          <textarea id="importText" spellcheck="false" placeholder="Paste a systems JSON export, base ownership JSON export, or astros report rows."></textarea>
+          <textarea id="importText" spellcheck="false" placeholder="Paste a systems JSON export, base ownership JSON export, astro report rows, or fleet movements."></textarea>
           <div class="import-actions">
             <button class="command-button" id="importButton" type="button">Import</button>
             <button class="command-button" id="bookmarkletButton" type="button">Copy AE Export Bookmarklet</button>
