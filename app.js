@@ -1572,7 +1572,7 @@
     cell.classList.toggle("selected", id === selected);
     cell.classList.toggle("has-friendly", sector.friendly);
     cell.classList.toggle("has-enemy", sector.enemy);
-    cell.classList.toggle("has-scout", sector.scout);
+    cell.classList.toggle("has-scout", !coverage && sector.scout);
     cell.classList.toggle("has-reserved", sector.reserved);
     cell.classList.toggle("highlighted-target", id === highlightedSector);
     cell.classList.toggle("has-app", appBase);
