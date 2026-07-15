@@ -45,7 +45,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-14.5";
+const botBuild = "2026-07-14.11";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -1013,21 +1013,20 @@ async function userCanUseSensitiveCommands(ctx) {
   if (officerUserIds.includes(userId)) return true;
 
   const scopeId = await operationScopeId(ctx);
+  let access = null;
   if (scopeId) {
-    const access = await fetchAccessMember(scopeId, userId);
+    access = await fetchAccessMember(scopeId, userId);
     if (access?.status === "banned") return false;
-    if (access?.status === "active" && ["member", "officer", "owner"].includes(access.role)) return true;
   }
 
   if (accessChatIds.length) {
     const accessGroupMember = await isMemberOfAnyAccessChat(ctx, userId);
-    if (accessGroupMember) return true;
-    if (scopeId) {
-      const access = await fetchAccessMember(scopeId, userId);
-      if (access && access.status !== "active") return false;
-    }
-    return false;
+    // Membership is the revocation switch. An old active database row must not
+    // keep working after someone leaves or is removed from the access group.
+    return accessGroupMember;
   }
+
+  if (access?.status === "active" && ["member", "officer", "owner"].includes(access.role)) return true;
 
   if (isPrivateChat(ctx)) return true;
   return chatApproved(ctx);
@@ -1180,7 +1179,7 @@ function cachedAccessMember(chatId, userId) {
   return entry.allowed;
 }
 
-function cacheAccessMember(chatId, userId, allowed, ttlMs = 5 * 60 * 1000) {
+function cacheAccessMember(chatId, userId, allowed, ttlMs = 60 * 1000) {
   accessMemberCache.set(`${chatId}:${userId}`, {
     allowed,
     expiresAt: Date.now() + ttlMs
@@ -4086,7 +4085,7 @@ async function scoutAgendaAssignments(agenda) {
 
 function formatScoutAgenda(agenda, assignments = new Map()) {
   const coords = agenda.operations.map((operation) => operation.target_coord).filter(Boolean);
-  const covered = agenda.operations.filter((operation) => assignments.has(operation.operation_id)).length;
+  const covered = agenda.operations.filter((operation) => Boolean(assignments.get(operation.operation_id))).length;
   const targetKind = scoutAgendaTargetKind(agenda);
   return [
     `<b>${escapeHtml(agenda.name)} SCOUTING AGENDA</b>`,
@@ -4137,7 +4136,7 @@ function formatScoutWatchList(agenda, assignments, page = 1) {
   const pageSize = 12;
   const from = (page - 1) * pageSize;
   const shown = agenda.operations.slice(from, from + pageSize);
-  const covered = agenda.operations.filter((operation) => assignments.has(operation.operation_id)).length;
+  const covered = agenda.operations.filter((operation) => Boolean(assignments.get(operation.operation_id))).length;
   const targetKind = scoutAgendaTargetKind(agenda);
   return [
     `<b>${escapeHtml(agenda.name)} WATCH ${targetKind.toUpperCase()}S</b>`,
@@ -4312,7 +4311,7 @@ async function fetchStanceMap(galaxy) {
   const rows = await fetchRows("b24_stances", {}, {
     mapId: galaxyToMapId(galaxy),
     order: "scope_type.asc,scope_value.asc"
-  });
+  }).catch(() => []);
   return {
     coord: new Map(rows.filter((row) => row.scope_type === "coord").map((row) => [row.scope_value, row.stance])),
     tag: new Map(rows.filter((row) => row.scope_type === "tag").map((row) => [normalizeStanceTarget(row.scope_value), row.stance]))
@@ -4423,10 +4422,8 @@ async function fetchIntelAnnotation(coord, scopeId) {
 }
 
 async function fetchRows(table, filters, options = {}) {
-  const params = new URLSearchParams({
-    select: options.select || "*",
-    order: options.order || "arrival_at.asc"
-  });
+  const params = new URLSearchParams({ select: options.select || "*" });
+  if (options.order) params.set("order", options.order);
   if (options.includeMap !== false) params.set("map_id", `eq.${options.mapId || galaxyToMapId(defaultGalaxy)}`);
   if (options.limit) params.set("limit", String(options.limit));
   Object.entries(filters).forEach(([key, value]) => params.set(key, value));
@@ -4434,10 +4431,8 @@ async function fetchRows(table, filters, options = {}) {
 }
 
 async function fetchRowsWithCount(table, filters, options = {}) {
-  const params = new URLSearchParams({
-    select: options.select || "*",
-    order: options.order || "arrival_at.asc"
-  });
+  const params = new URLSearchParams({ select: options.select || "*" });
+  if (options.order) params.set("order", options.order);
   if (options.includeMap !== false) params.set("map_id", `eq.${options.mapId || galaxyToMapId(defaultGalaxy)}`);
   Object.entries(filters).forEach(([key, value]) => params.set(key, value));
   const from = Number.isInteger(options.from) ? options.from : 0;
@@ -4603,6 +4598,32 @@ async function upsertRow(table, row, conflictColumns) {
     return false;
   }
   return true;
+}
+
+async function upsertRows(table, rows, conflictColumns, chunkSize = 500) {
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  let saved = 0;
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const params = new URLSearchParams({ on_conflict: conflictColumns });
+    const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${params}`, {
+      method: "POST",
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal"
+      },
+      body: JSON.stringify(chunk)
+    });
+    if (!response.ok) {
+      const details = await response.text();
+      console.error(`${table} batch upsert failed`, details);
+      throw new Error(`Could not save ${table.replace(/^b24_/, "")} import rows.`);
+    }
+    saved += chunk.length;
+  }
+  return saved;
 }
 
 async function updateRows(table, row, filters) {
@@ -6268,11 +6289,13 @@ async function verifiedMiniAppSession(accessToken) {
   if (approvedChatIds.length && !approvedChatIds.includes(session.c)) return null;
   const member = await fetchAccessMember(session.c, session.u);
   if (!member || member.status !== "active" || !["member", "officer", "owner"].includes(member.role)) return null;
+  if (accessChatIds.length && !(await isMemberOfAnyAccessChat({ telegram: bot.telegram }, session.u))) return null;
   return { ...session, member };
 }
 
 function miniAppContext(session) {
   return {
+    telegram: bot.telegram,
     from: {
       id: session.u,
       username: session.member.username || "",
@@ -6285,8 +6308,9 @@ function miniAppContext(session) {
 async function miniAppCoverage(session) {
   const galaxy = session.g;
   const mapId = galaxyToMapId(galaxy);
-  const [bases, stances, scoutOperations] = await Promise.all([
-    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild", order: "coord.asc" }),
+  const [bases, systems, stances, scoutOperations] = await Promise.all([
+    fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild,label,updated_at", order: "coord.asc" }),
+    fetchAllRows("b24_systems", {}, { mapId, select: "region_id,system_id", order: "coord.asc" }),
     fetchStanceMap(galaxy),
     fetchActiveOperations(galaxy, session.c, "scout")
   ]);
@@ -6306,16 +6330,29 @@ async function miniAppCoverage(session) {
     watchNeeded: false,
     watchAssigned: false,
     watchOwner: "",
-    watchOwnerId: ""
+    watchOwnerId: "",
+    bases: [],
+    systems: []
   }]));
   bases.forEach((base) => {
     const region = astroToRegion(base.region_id || base.coord || "");
     const entry = byRegion.get(region);
     if (!entry) return;
     const tag = normalizeStanceTarget(base.guild);
+    entry.bases.push({
+      coord: base.coord,
+      guild: base.guild || "",
+      label: base.label || "Unknown owner",
+      updatedAt: base.updated_at || ""
+    });
     if (tag === primaryGuildTag) entry.app = true;
     else if (stances.tag.get(tag) === "friend") entry.friendly = true;
     else if (tag) entry.enemy = true;
+  });
+  systems.forEach((system) => {
+    const region = astroToRegion(system.region_id || system.system_id || "");
+    const entry = byRegion.get(region);
+    if (entry && system.system_id) entry.systems.push(String(system.system_id));
   });
   watches.forEach((watch, region) => {
     const entry = byRegion.get(region);
@@ -6328,6 +6365,627 @@ async function miniAppCoverage(session) {
     entry.watchNeeded = !entry.app && !entry.watchAssigned;
   });
   return [...byRegion.values()];
+}
+
+async function miniAppAttacks(session) {
+  const operations = await fetchActiveOperations(session.g, session.c, "attack");
+  const claimsByOperation = await fetchClaimsByOperation(operations);
+  const role = String(session.member.role || "member").toLowerCase();
+  return {
+    role,
+    canManage: role === "officer" || role === "owner",
+    userId: session.u,
+    attacks: operations.map((operation, index) => {
+      const claims = claimsByOperation.get(operation.operation_id) || [];
+      const targets = groupAttackTargets(operation, claims);
+      const slots = attackWaveSlots(operation);
+      const claimedWaves = targets.reduce((sum, target) => sum + target.claimedWaves, 0);
+      const sentWaves = targets.reduce((sum, target) => sum + target.sentWaves, 0);
+      return {
+        id: operation.operation_id,
+        shortId: operation.short_id,
+        number: index + 1,
+        name: attackDisplayName(operation),
+        commander: operation.commander_label || "Unknown",
+        commanderUserId: String(operation.commander_user_id || ""),
+        arrivalAt: operation.arrival_at,
+        waveCount: slots.length,
+        targetCount: targets.length,
+        claimedWaves,
+        sentWaves,
+        totalWaves: targets.length * slots.length,
+        canManage: role === "officer" || role === "owner" || String(operation.commander_user_id || "") === session.u,
+        targets: targets.map((target) => ({
+          coord: target.target_coord,
+          state: target.state,
+          claimedWaves: target.claimedWaves,
+          sentWaves: target.sentWaves,
+          totalWaves: target.totalWaves,
+          waves: slots.map((slot) => {
+            const claim = target.byWave.get(String(slot.index));
+            const claimedByUserId = String(claim?.claimed_by_user_id || "");
+            return {
+              index: slot.index,
+              label: slot.label,
+              arrivalAt: slot.arrivalAt.toISOString(),
+              claimId: claim?.claim_id || "",
+              state: claim?.confirmed_sent ? "sent" : claimedByUserId ? "claimed" : "open",
+              claimedBy: claim?.claimed_by || "",
+              claimedByUserId,
+              mine: Boolean(claimedByUserId && claimedByUserId === session.u)
+            };
+          })
+        }))
+      };
+    })
+  };
+}
+
+async function miniAppFindAttack(session, value) {
+  const attacks = await fetchActiveOperations(session.g, session.c, "attack");
+  const wanted = String(value || "").toUpperCase();
+  return attacks.find((operation) => operation.operation_id === value || String(operation.short_id || "").toUpperCase() === wanted) || null;
+}
+
+function miniAppOfficer(session) {
+  return session.member.role === "officer" || session.member.role === "owner";
+}
+
+async function miniAppClaimWave(session, body) {
+  const operation = await miniAppFindAttack(session, body.operationId);
+  if (!operation) throw new Error("Attack plan not found or no longer active.");
+  const coord = normalizeAstro(body.coord);
+  const slot = attackWaveSlots(operation).find((item) => item.index === Number(body.wave));
+  if (!coord || !slot) throw new Error("Choose a valid target and wave.");
+  const result = await handleTargetClaim(miniAppContext(session), {
+    shortId: operation.short_id,
+    coord,
+    arrivalAt: slot.arrivalAt,
+    label: slot.label,
+    note: slot.index === 1 ? "wave 1" : `wave +${slot.offsetMinutes}m`
+  }, "$", { silent: true });
+  if (!result?.ok) throw new Error(result?.message || "Could not claim that wave.");
+}
+
+async function miniAppOwnWave(session, body) {
+  const operation = await miniAppFindAttack(session, body.operationId);
+  if (!operation) throw new Error("Attack plan not found or no longer active.");
+  const coord = normalizeAstro(body.coord);
+  const slot = attackWaveSlots(operation).find((item) => item.index === Number(body.wave));
+  if (!coord || !slot) throw new Error("Choose a valid target and wave.");
+  const claims = await fetchOperationClaims(operation);
+  const claim = claims.find((row) => row.target_coord === coord && claimWaveIndex(operation, row) === slot.index);
+  if (!claim || String(claim.claimed_by_user_id || "") !== session.u) throw new Error("That wave is not claimed by you.");
+  return { operation, claim, slot };
+}
+
+async function miniAppReleaseWave(session, body) {
+  const { operation, claim } = await miniAppOwnWave(session, body);
+  if (claim.confirmed_sent) throw new Error("A sent wave cannot be released. Ask an officer to correct it.");
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_claims", {
+    claimed_by: null,
+    claimed_by_user_id: null,
+    confirmed_sent: false,
+    confirmed_at: null,
+    confirmed_by: "",
+    fleet_label: "",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    claim_id: `eq.${claim.claim_id}`,
+    claimed_by_user_id: `eq.${session.u}`
+  });
+  if (!ok) throw new Error("Could not release that wave.");
+}
+
+async function miniAppMarkWaveSent(session, body) {
+  const { operation, claim } = await miniAppOwnWave(session, body);
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_claims", {
+    confirmed_sent: true,
+    confirmed_at: stamp,
+    confirmed_by: session.member.display_name || "Guild member",
+    fleet_label: String(body.note || "").trim().slice(0, 200),
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    claim_id: `eq.${claim.claim_id}`,
+    claimed_by_user_id: `eq.${session.u}`
+  });
+  if (!ok) throw new Error("Could not mark that wave sent.");
+  await upsertOperationMember(miniAppContext(session), operation, "sent", String(body.note || "").trim().slice(0, 200));
+}
+
+async function miniAppCreateAttack(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to create an attack.");
+  const name = String(body.name || "").trim().slice(0, 60);
+  const waves = Number(body.waves);
+  const arrivalAt = new Date(body.arrivalAt);
+  const now = Date.now();
+  if (!name) throw new Error("Give the attack a name.");
+  if (!Number.isInteger(waves) || waves < 1 || waves > 12) throw new Error("Waves must be between 1 and 12.");
+  if (!Number.isFinite(arrivalAt.getTime()) || arrivalAt.getTime() <= now || arrivalAt.getTime() > now + 7 * 24 * 60 * 60 * 1000) {
+    throw new Error("Landing time must be within the next 7 days.");
+  }
+  const coords = [...new Set((Array.isArray(body.targets) ? body.targets : extractAstroCoords(String(body.targets || ""), session.g))
+    .map(normalizeAstro)
+    .filter((coord) => coord && mapIdForCoord(coord) === galaxyToMapId(session.g)))].slice(0, 40);
+  const context = miniAppContext(session);
+  const operation = operationRow(context, {
+    type: "attack",
+    targetCoord: coords[0] || "",
+    arrivalAt,
+    note: attackNote(name, waves),
+    chatId: session.c
+  });
+  operation.map_id = galaxyToMapId(session.g);
+  if (!(await insertRow("b24_operations", operation))) throw new Error("Could not create the attack plan.");
+  if (coords.length) await addTargetsToAttack(context, operation, coords, `Mini App setup: ${name}`);
+}
+
+async function miniAppAddAttackTargets(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to add attack targets.");
+  const operation = await miniAppFindAttack(session, body.operationId);
+  if (!operation) throw new Error("Attack plan not found or no longer active.");
+  const coords = extractAstroCoords(String(body.targets || ""), session.g).slice(0, 40);
+  if (!coords.length) throw new Error("Paste at least one full astro coordinate.");
+  await addTargetsToAttack(miniAppContext(session), operation, coords, "Mini App target add");
+}
+
+async function miniAppStandDownAttack(session, body) {
+  const operation = await miniAppFindAttack(session, body.operationId);
+  if (!operation) throw new Error("Attack plan not found or no longer active.");
+  if (!miniAppOfficer(session) && String(operation.commander_user_id || "") !== session.u) {
+    throw new Error("Only the commander or an officer can stand down this attack.");
+  }
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_operations", {
+    status: "stood_down",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    operation_id: `eq.${operation.operation_id}`,
+    chat_id: `eq.${session.c}`
+  });
+  if (!ok) throw new Error("Could not stand down that attack.");
+  await closeLinkedOperationRows(operation, "stood_down");
+}
+
+async function updateMiniAppAttack(session, body) {
+  const action = String(body.action || "").toLowerCase();
+  if (action === "claim") await miniAppClaimWave(session, body);
+  else if (action === "release") await miniAppReleaseWave(session, body);
+  else if (action === "sent") await miniAppMarkWaveSent(session, body);
+  else if (action === "create") await miniAppCreateAttack(session, body);
+  else if (action === "add-targets") await miniAppAddAttackTargets(session, body);
+  else if (action === "stand-down") await miniAppStandDownAttack(session, body);
+  else throw new Error("Unknown attack action.");
+  return miniAppAttacks(session);
+}
+
+async function miniAppIncoming(session) {
+  const rows = await enrichIncomingReports(await fetchActiveIncoming(session.g, session.c), session.g);
+  const role = String(session.member.role || "member").toLowerCase();
+  return {
+    role,
+    canManage: role === "officer" || role === "owner",
+    userId: session.u,
+    incoming: rows.map((row) => {
+      const details = incomingNoteParts(row.note);
+      const fleetSize = details.size || (String(row.hostile_fleet || "").match(/\bsize\s+([\d,]+)/i) || [])[1] || "";
+      const coveredByUserId = String(row.covered_by_user_id || "");
+      return {
+        id: row.incoming_id,
+        operationId: row.operation_id || "",
+        operationShortId: row.operation_short_id || "",
+        attackerCoord: row.attacker_coord || "",
+        defendedCoord: row.defended_coord || "",
+        defendedLabel: row.reporter_base_hint || "",
+        arrivalAt: row.arrival_at,
+        size: fleetSize,
+        attackerGuild: details.tag || details.playerTag || "",
+        attackerPlayer: details.player || "",
+        reporter: row.reported_by || "Unknown",
+        reporterUserId: String(row.reported_by_user_id || ""),
+        coveredBy: row.covered_by || "",
+        coveredByUserId,
+        coveredAt: row.covered_at || "",
+        mine: Boolean(coveredByUserId && coveredByUserId === session.u),
+        note: details.extra || ""
+      };
+    })
+  };
+}
+
+async function miniAppFindIncoming(session, incomingId) {
+  const row = await fetchOne("b24_incoming", {
+    incoming_id: String(incomingId || ""),
+    chat_id: session.c,
+    status: "active"
+  }, galaxyToMapId(session.g));
+  if (!row || new Date(row.arrival_at).getTime() <= Date.now()) return null;
+  return row;
+}
+
+async function miniAppReportIncoming(session, body) {
+  const reportText = String(body.reportText || "").trim();
+  let rows = reportText ? parseIncomingExportRows(reportText, session.g) : [];
+  if (!rows.length && reportText) {
+    const generic = parseGenericIncomingReport(reportText, session.g);
+    if (generic) rows = [generic];
+  }
+  if (!rows.length) {
+    const attackerCoord = normalizeAstro(body.attackerCoord);
+    const defendedCoord = normalizeAstro(body.defendedCoord);
+    const duration = parseIncomingDuration(body.eta);
+    if (!defendedCoord || mapIdForCoord(defendedCoord) !== galaxyToMapId(session.g)) {
+      throw new Error(`Enter a defended astro in ${session.g}.`);
+    }
+    if (body.attackerCoord && (!attackerCoord || mapIdForCoord(attackerCoord) !== galaxyToMapId(session.g))) {
+      throw new Error(`Enter an attacker astro in ${session.g}, or leave it blank.`);
+    }
+    if (!duration || duration.ms < 60 * 1000 || duration.ms > 24 * 60 * 60 * 1000) {
+      throw new Error("ETA must be between 1 minute and 24 hours, such as 45 or 1:12:03.");
+    }
+    const size = String(body.size || "").replace(/[^\d]/g, "").slice(0, 12);
+    const note = String(body.note || "").trim().slice(0, 240);
+    rows = [{
+      galaxy: session.g,
+      attackerCoord: attackerCoord || null,
+      defendedCoord,
+      etaMinutes: Math.max(1, Math.ceil(duration.ms / 60000)),
+      arrivalAt: new Date(Date.now() + duration.ms),
+      note: [size ? `size ${Number(size).toLocaleString("en-US")}` : "", note].filter(Boolean).join(" | "),
+      rawLine: [attackerCoord, defendedCoord, body.eta, size, note].filter(Boolean).join(" ")
+    }];
+  }
+  const validRows = rows.filter((row) => {
+    const coord = row.defendedCoord || row.attackerCoord || "";
+    return coord && mapIdForCoord(coord) === galaxyToMapId(session.g);
+  }).slice(0, 100);
+  if (!validRows.length) throw new Error(`No valid ${session.g} incoming rows were found.`);
+  const saved = await insertIncomingRows(miniAppContext(session), validRows, session.c);
+  if (!saved) throw new Error("Could not save the incoming report.");
+}
+
+async function miniAppCoverIncoming(session, body) {
+  const row = await miniAppFindIncoming(session, body.incomingId);
+  if (!row) throw new Error("Incoming report not found or has already landed.");
+  if (row.covered_by_user_id && String(row.covered_by_user_id) !== session.u) {
+    throw new Error(`Already covered by ${row.covered_by || "another member"}.`);
+  }
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_incoming", {
+    covered_by: session.member.display_name || `Telegram ${session.u}`,
+    covered_by_user_id: session.u,
+    covered_at: stamp,
+    updated_at: stamp
+  }, {
+    map_id: `eq.${row.map_id}`,
+    incoming_id: `eq.${row.incoming_id}`,
+    chat_id: `eq.${session.c}`,
+    covered_by_user_id: "is.null"
+  });
+  if (!ok) throw new Error("Could not save defense coverage.");
+  const saved = await miniAppFindIncoming(session, row.incoming_id);
+  if (String(saved?.covered_by_user_id || "") !== session.u) {
+    throw new Error(`Already covered by ${saved?.covered_by || "another member"}.`);
+  }
+}
+
+async function miniAppReleaseIncoming(session, body) {
+  const row = await miniAppFindIncoming(session, body.incomingId);
+  if (!row) throw new Error("Incoming report not found or has already landed.");
+  if (String(row.covered_by_user_id || "") !== session.u) throw new Error("Only the assigned defender can release this coverage.");
+  const ok = await updateRows("b24_incoming", {
+    covered_by: null,
+    covered_by_user_id: null,
+    covered_at: null,
+    updated_at: new Date().toISOString()
+  }, {
+    map_id: `eq.${row.map_id}`,
+    incoming_id: `eq.${row.incoming_id}`,
+    chat_id: `eq.${session.c}`,
+    covered_by_user_id: `eq.${session.u}`
+  });
+  if (!ok) throw new Error("Could not release defense coverage.");
+}
+
+async function miniAppClearIncoming(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to clear an incoming report.");
+  const row = await miniAppFindIncoming(session, body.incomingId);
+  if (!row) throw new Error("Incoming report not found or has already landed.");
+  const stamp = new Date().toISOString();
+  const ok = await updateRows("b24_incoming", {
+    status: "false_report",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${row.map_id}`,
+    incoming_id: `eq.${row.incoming_id}`,
+    chat_id: `eq.${session.c}`
+  });
+  if (!ok) throw new Error("Could not clear the incoming report.");
+  if (row.operation_id) {
+    const operation = await findOperationById(row.operation_id);
+    if (operation) {
+      await updateRows("b24_operations", {
+        status: "stood_down",
+        note: row.note ? `${row.note} | Incoming cleared from Mini App` : "Incoming cleared from Mini App",
+        updated_at: stamp
+      }, {
+        map_id: `eq.${operation.map_id}`,
+        operation_id: `eq.${operation.operation_id}`
+      });
+      await updateRows("b24_scheduled_notifications", {
+        cancelled_at: stamp,
+        updated_at: stamp
+      }, {
+        map_id: `eq.${operation.map_id}`,
+        operation_id: `eq.${operation.operation_id}`,
+        sent_at: "is.null"
+      });
+    }
+  }
+}
+
+async function updateMiniAppIncoming(session, body) {
+  const action = String(body.action || "").toLowerCase();
+  if (action === "report") await miniAppReportIncoming(session, body);
+  else if (action === "cover") await miniAppCoverIncoming(session, body);
+  else if (action === "release") await miniAppReleaseIncoming(session, body);
+  else if (action === "clear") await miniAppClearIncoming(session, body);
+  else throw new Error("Unknown incoming action.");
+  return miniAppIncoming(session);
+}
+
+async function miniAppScouting(session) {
+  const role = String(session.member.role || "member").toLowerCase();
+  const grouped = groupScoutAgendas(await fetchScoutAgendas(session.g, session.c));
+  const agendas = await Promise.all(grouped.map(async (agenda) => {
+    const assignments = await scoutAgendaAssignments(agenda);
+    const targets = agenda.operations.map((operation) => {
+      const assignment = assignments.get(operation.operation_id);
+      const assignedUserId = String(assignment?.user_id || "");
+      return {
+        operationId: operation.operation_id,
+        coord: operation.target_coord || "",
+        assigned: Boolean(assignment),
+        assignedTo: assignment?.display_name || "",
+        assignedUserId,
+        mine: Boolean(assignedUserId && assignedUserId === session.u)
+      };
+    });
+    return {
+      key: agenda.key,
+      name: agenda.name,
+      kind: scoutAgendaTargetKind(agenda),
+      targetCount: targets.length,
+      assignedCount: targets.filter((target) => target.assigned).length,
+      openCount: targets.filter((target) => !target.assigned).length,
+      targets
+    };
+  }));
+  return {
+    role,
+    canManage: role === "officer" || role === "owner",
+    userId: session.u,
+    agendas,
+    myWatches: agendas.flatMap((agenda) => agenda.targets
+      .filter((target) => target.mine)
+      .map((target) => ({ agendaKey: agenda.key, agendaName: agenda.name, kind: agenda.kind, coord: target.coord, operationId: target.operationId })))
+  };
+}
+
+async function miniAppScoutOperation(session, operationId) {
+  const operation = await fetchOne("b24_operations", {
+    operation_id: String(operationId || ""),
+    chat_id: session.c,
+    type: "scout",
+    status: "active"
+  }, galaxyToMapId(session.g));
+  return operation && scoutAgendaInfo(operation) ? operation : null;
+}
+
+async function miniAppTakeScoutWatch(session, body) {
+  const operation = await miniAppScoutOperation(session, body.operationId);
+  if (!operation) throw new Error("Scout target not found or no longer active.");
+  const members = await fetchOperationMembers(operation);
+  const assigned = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+  if (assigned && String(assigned.user_id || "") !== session.u) {
+    throw new Error(`Already watched by ${assigned.display_name || "another member"}.`);
+  }
+  if (!(await upsertOperationMember(miniAppContext(session), operation, "joined", "watch"))) {
+    throw new Error("Could not save that watch assignment.");
+  }
+}
+
+async function miniAppReleaseScoutWatch(session, body) {
+  const operation = await miniAppScoutOperation(session, body.operationId);
+  if (!operation) throw new Error("Scout target not found or no longer active.");
+  const members = await fetchOperationMembers(operation);
+  const assigned = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+  if (!assigned || String(assigned.user_id || "") !== session.u) {
+    throw new Error("Only the assigned watcher can release this target.");
+  }
+  if (!(await upsertOperationMember(miniAppContext(session), operation, "withdrawn", "watch released"))) {
+    throw new Error("Could not release that watch assignment.");
+  }
+}
+
+function miniAppScoutTargets(session, body) {
+  const kind = String(body.kind || "base").toLowerCase() === "region" ? "region" : "base";
+  const raw = Array.isArray(body.targets) ? body.targets.join(" ") : String(body.targets || "");
+  if (kind === "base") {
+    return [...new Set(extractAstroCoords(raw, session.g))]
+      .filter((coord) => mapIdForCoord(coord) === galaxyToMapId(session.g))
+      .slice(0, 250);
+  }
+  const matches = raw.toUpperCase().match(/B\d{2}:\d{1,2}/g) || [];
+  return [...new Set(matches.map((value) => parseRegion(value, session.g)).filter(Boolean))].slice(0, 99);
+}
+
+async function miniAppCreateScoutAgenda(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to create a scouting agenda.");
+  const kind = String(body.kind || "base").toLowerCase() === "region" ? "region" : "base";
+  let targets = miniAppScoutTargets(session, body);
+  if (kind === "region" && !targets.length) {
+    const coverage = await miniAppCoverage(session);
+    targets = coverage.filter((region) => region.watchNeeded).map((region) => region.region);
+  }
+  if (!targets.length) throw new Error(kind === "region" ? "No uncovered regions were found." : "Paste at least one full base coordinate.");
+  const name = String(body.name || (kind === "region" ? `${session.g} Region Coverage` : "Scout Watch")).trim().slice(0, 48);
+  const key = newScoutAgendaKey();
+  const arrivalAt = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+  const context = miniAppContext(session);
+  const rows = targets.map((targetCoord) => {
+    const operation = operationRow(context, {
+      type: "scout",
+      targetCoord,
+      arrivalAt,
+      note: scoutAgendaNote(key, name),
+      chatId: session.c
+    });
+    operation.map_id = galaxyToMapId(session.g);
+    return operation;
+  });
+  const saved = await upsertRows("b24_operations", rows, "map_id,operation_id", 250);
+  if (saved !== rows.length) throw new Error("Some scouting targets could not be saved.");
+}
+
+async function miniAppCancelScoutAgenda(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to cancel a scouting agenda.");
+  const agenda = await findScoutAgenda(session.g, session.c, body.agendaKey);
+  if (!agenda) throw new Error("Scouting agenda not found.");
+  const stamp = new Date().toISOString();
+  const outcomes = await Promise.all(agenda.operations.map((operation) => updateRows("b24_operations", {
+    status: "stood_down",
+    updated_at: stamp
+  }, {
+    map_id: `eq.${operation.map_id}`,
+    operation_id: `eq.${operation.operation_id}`,
+    chat_id: `eq.${session.c}`
+  })));
+  if (outcomes.some((outcome) => !outcome)) throw new Error("Some scouting targets could not be cancelled.");
+}
+
+async function miniAppAttackFromScoutAgenda(session, body) {
+  if (!miniAppOfficer(session)) throw new Error("Officer access is required to create an attack.");
+  const agenda = await findScoutAgenda(session.g, session.c, body.agendaKey);
+  if (!agenda || scoutAgendaTargetKind(agenda) !== "base") throw new Error("Exact-base scouting agenda not found.");
+  const hours = Math.max(1, Math.min(4, Number(body.hours) || 4));
+  const coords = agenda.operations.map((operation) => operation.target_coord).filter(Boolean);
+  const arrivalAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+  const context = miniAppContext(session);
+  const operation = operationRow(context, {
+    type: "attack",
+    targetCoord: coords[0] || "",
+    arrivalAt,
+    note: attackNote(`${agenda.name} Attack`, 4),
+    chatId: session.c
+  });
+  operation.map_id = galaxyToMapId(session.g);
+  if (!(await insertRow("b24_operations", operation))) throw new Error("Could not create the attack plan.");
+  await addTargetsToAttack(context, operation, coords, `from scouting agenda ${agenda.key}`);
+}
+
+async function updateMiniAppScouting(session, body) {
+  const action = String(body.action || "").toLowerCase();
+  if (action === "take") await miniAppTakeScoutWatch(session, body);
+  else if (action === "release") await miniAppReleaseScoutWatch(session, body);
+  else if (action === "create") await miniAppCreateScoutAgenda(session, body);
+  else if (action === "cancel") await miniAppCancelScoutAgenda(session, body);
+  else if (action === "create-attack") await miniAppAttackFromScoutAgenda(session, body);
+  else throw new Error("Unknown scouting action.");
+  return miniAppScouting(session);
+}
+
+async function miniAppIntel(session, regionValue = "") {
+  const region = parseRegion(regionValue || `${session.g}:1`, session.g) || `${session.g}:1`;
+  const mapId = galaxyToMapId(session.g);
+  const [systems, astros, bases, stances] = await Promise.all([
+    fetchAllRows("b24_systems", { region_id: `eq.${region}` }, { mapId, order: "coord.asc" }),
+    fetchAllRows("b24_astros", { region_id: `eq.${region}` }, { mapId, order: "coord.asc" }),
+    fetchAllRows("b24_bases", { region_id: `eq.${region}` }, { mapId, order: "coord.asc" }),
+    fetchRows("b24_stances", {}, { mapId, order: "scope_type.asc,scope_value.asc", limit: 1000 }).catch(() => [])
+  ]);
+  return {
+    region,
+    systems: systems.map((row) => ({ coord: row.coord, systemId: row.system_id, updatedAt: row.updated_at })),
+    astros: astros.map((row) => ({
+      coord: row.coord,
+      systemId: row.system_id,
+      astroNo: row.astro_no,
+      terrain: row.terrain || "",
+      type: row.astro_type || "",
+      attributes: Array.isArray(row.attributes) ? row.attributes : [],
+      hasBase: Boolean(row.has_base),
+      updatedAt: row.updated_at
+    })),
+    bases: bases.map((row) => ({ coord: row.coord, systemId: row.system_id, guild: row.guild || "", label: row.label || "", updatedAt: row.updated_at })),
+    stances: stances.map((row) => ({ type: row.scope_type, value: row.scope_value, stance: row.stance }))
+  };
+}
+
+function stableMiniAppImportId(parts) {
+  return createHmac("sha256", miniAppAccessSecret).update(parts.join("|")).digest("hex").slice(0, 24);
+}
+
+async function miniAppImportIntel(session, body) {
+  const mapId = galaxyToMapId(session.g);
+  const stamp = new Date().toISOString();
+  const payload = body.intel && typeof body.intel === "object" ? body.intel : {};
+  const systems = [...new Map((Array.isArray(payload.systems) ? payload.systems : []).map((row) => {
+    const location = normalizeLocation(row.coord || row);
+    if (!location || location.galaxy !== session.g || location.coord.split(":").length !== 3) return ["", null];
+    return [location.coord, { map_id: mapId, coord: location.coord, region_id: location.region, system_id: location.coord.split(":")[2], updated_at: stamp }];
+  }).filter(([coord]) => coord)).values()].slice(0, 10000);
+  const bases = [...new Map((Array.isArray(payload.bases) ? payload.bases : []).map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (!coord || mapIdForCoord(coord) !== mapId) return ["", null];
+    return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), guild: String(row.guild || "").slice(0, 80), label: String(row.label || "").slice(0, 240), updated_at: stamp }];
+  }).filter(([coord]) => coord)).values()].slice(0, 10000);
+  const astros = [...new Map((Array.isArray(payload.astros) ? payload.astros : []).map((row) => {
+    const coord = normalizeAstro(row.coord);
+    if (!coord || mapIdForCoord(coord) !== mapId) return ["", null];
+    const attributes = (Array.isArray(row.attributes) ? row.attributes : []).slice(0, 6).map(Number);
+    return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), astro_no: coord.split(":")[3], terrain: String(row.terrain || "").slice(0, 40), astro_type: String(row.type || row.astroType || "").slice(0, 40), attributes: attributes.every(Number.isFinite) ? attributes : [], has_base: Boolean(row.hasBase ?? row.has_base), updated_at: stamp }];
+  }).filter(([coord]) => coord)).values()].slice(0, 10000);
+  const incoming = (Array.isArray(payload.incoming) ? payload.incoming : []).map((row) => {
+    const defendedCoord = normalizeAstro(row.defendedCoord || row.defended_coord);
+    const attackerCoord = normalizeAstro(row.attackerCoord || row.attacker_coord);
+    const arrivalAt = new Date(row.arrivalAt || row.arrival_at);
+    if (!defendedCoord || mapIdForCoord(defendedCoord) !== mapId || !Number.isFinite(arrivalAt.getTime()) || arrivalAt.getTime() <= Date.now()) return null;
+    const sourceId = String(row.incomingId || row.incoming_id || row.fleetId || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80);
+    return {
+      map_id: mapId,
+      incoming_id: sourceId ? `scan-${sourceId}` : `scan-${stableMiniAppImportId([defendedCoord, attackerCoord, row.player || "", row.size || "", arrivalAt.toISOString()])}`,
+      defended_coord: defendedCoord,
+      defended_region_id: astroToRegion(defendedCoord),
+      defended_system_id: astroToSystem(defendedCoord),
+      attacker_coord: attackerCoord || null,
+      region_id: attackerCoord ? astroToRegion(attackerCoord) : null,
+      system_id: attackerCoord ? astroToSystem(attackerCoord) : null,
+      eta_minutes: Math.max(1, Math.ceil((arrivalAt.getTime() - Date.now()) / 60000)),
+      arrival_at: arrivalAt.toISOString(),
+      reported_by: session.member.display_name || "VisionBot exporter",
+      reported_by_user_id: session.u,
+      chat_id: session.c,
+      hostile_fleet: String(row.rawLine || "").slice(0, 2000),
+      severity: "",
+      verified: false,
+      note: String(row.note || "").slice(0, 500),
+      status: "active",
+      updated_at: stamp
+    };
+  }).filter(Boolean).slice(0, 2000);
+  const [systemCount, baseCount, astroCount, incomingCount] = await Promise.all([
+    upsertRows("b24_systems", systems, "map_id,coord"),
+    upsertRows("b24_bases", bases, "map_id,coord"),
+    upsertRows("b24_astros", astros, "map_id,coord"),
+    upsertRows("b24_incoming", incoming, "map_id,incoming_id")
+  ]);
+  return { systems: systemCount, bases: baseCount, astros: astroCount, incoming: incomingCount };
 }
 
 async function ensureMiniAppRegionOperation(session, region) {
@@ -6369,16 +7027,23 @@ function writeJson(response, status, payload) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "Access-Control-Allow-Origin": "https://bjuliant.github.io",
+    // Signed access tokens, not the browser origin, authorize these requests.
+    // The exporter runs on Astro Empires while the Mini App runs on GitHub Pages.
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type"
   });
   response.end(JSON.stringify(payload));
 }
 
-async function readJson(request) {
+async function readJson(request, maxBytes = 16 * 1024) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > maxBytes) throw new Error("Request body is too large");
+    chunks.push(chunk);
+  }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
@@ -6398,9 +7063,8 @@ function sanitizeLogText(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   const command = commandName(text);
-  const sensitive = new Set(["report", "incoming", "sos", "attack", "claim", "take", "sent", "mine", "save"]);
-  if (sensitive.has(command)) return `${text.slice(0, 24)}... [redacted]`;
-  return text.slice(0, 120);
+  if (command) return `${text[0]}${command} [arguments redacted]`;
+  return `[non-command message: ${text.length} chars]`;
 }
 
 const webhookHandler = webhookUrl ? bot.webhookCallback(webhookPath) : null;
@@ -6420,6 +7084,7 @@ http.createServer(async (request, response) => {
         chatId: session.c,
         userId: session.u,
         displayName: session.member.display_name || "Guild member",
+        role: session.member.role || "member",
         expiresAt: Number(session.e)
       });
     } catch (error) {
@@ -6449,13 +7114,97 @@ http.createServer(async (request, response) => {
       return writeJson(response, 400, { error: error?.message || "Could not update this watch." });
     }
   }
+  if (path === "/api/miniapp/attacks" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await miniAppAttacks(session));
+    } catch (error) {
+      console.error("Mini app attack lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load attack plans." });
+    }
+  }
+  if (path === "/api/miniapp/attacks" && request.method === "POST") {
+    try {
+      const body = await readJson(request);
+      const session = await verifiedMiniAppSession(body.access);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await updateMiniAppAttack(session, body));
+    } catch (error) {
+      console.error("Mini app attack update failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not update the attack plan." });
+    }
+  }
+  if (path === "/api/miniapp/incoming" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await miniAppIncoming(session));
+    } catch (error) {
+      console.error("Mini app incoming lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load incoming reports." });
+    }
+  }
+  if (path === "/api/miniapp/incoming" && request.method === "POST") {
+    try {
+      const body = await readJson(request, 64 * 1024);
+      const session = await verifiedMiniAppSession(body.access);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await updateMiniAppIncoming(session, body));
+    } catch (error) {
+      console.error("Mini app incoming update failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not update incoming reports." });
+    }
+  }
+  if (path === "/api/miniapp/scouting" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await miniAppScouting(session));
+    } catch (error) {
+      console.error("Mini app scouting lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load scouting agendas." });
+    }
+  }
+  if (path === "/api/miniapp/scouting" && request.method === "POST") {
+    try {
+      const body = await readJson(request, 256 * 1024);
+      const session = await verifiedMiniAppSession(body.access);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await updateMiniAppScouting(session, body));
+    } catch (error) {
+      console.error("Mini app scouting update failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not update scouting." });
+    }
+  }
+  if (path === "/api/miniapp/intel" && request.method === "GET") {
+    try {
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await miniAppIntel(session, url.searchParams.get("region")));
+    } catch (error) {
+      console.error("Mini app intel lookup failed", error?.message || error);
+      return writeJson(response, 500, { error: "Could not load sector intel." });
+    }
+  }
+  if (path === "/api/miniapp/import" && request.method === "POST") {
+    try {
+      const body = await readJson(request, 8 * 1024 * 1024);
+      const session = await verifiedMiniAppSession(body.access);
+      if (!session) return writeJson(response, 401, { error: "Exporter access expired. Recopy the bookmarklet from /map." });
+      return writeJson(response, 200, await miniAppImportIntel(session, body));
+    } catch (error) {
+      console.error("Mini app intel import failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not import intel." });
+    }
+  }
   if (webhookHandler && path === webhookPath) {
     if (telegramWebhookSecret && request.headers["x-telegram-bot-api-secret-token"] !== telegramWebhookSecret) {
       response.writeHead(403, { "Content-Type": "text/plain" });
       response.end("Forbidden\n");
       return;
     }
-    console.log(`Webhook request received: ${request.method} ${path}`);
+    console.log(`Telegram webhook request received: ${request.method}`);
     return webhookHandler(request, response);
   }
 
@@ -6477,7 +7226,7 @@ async function startBot() {
     };
     if (telegramWebhookSecret) webhookOptions.secret_token = telegramWebhookSecret;
     await bot.telegram.setWebhook(webhookUrl, webhookOptions);
-    console.log(`Telegram webhook set to ${webhookUrl}`);
+    console.log(`Telegram webhook configured at ${webhookBaseUrl}`);
   } else {
     await bot.telegram.deleteWebhook();
     await bot.launch();
