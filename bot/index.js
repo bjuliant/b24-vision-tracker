@@ -1,6 +1,14 @@
 import { Telegraf, Markup } from "telegraf";
 import http from "node:http";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  BATTLE_HISTORY_COMMAND_ALIASES,
+  BATTLE_HISTORY_COMMANDS,
+  createBattleHistoryReader,
+  formatHistoryTelegram,
+  formatOccupiedTelegram,
+  validateMiniAppHistoryRequest
+} from "./battle-history.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -45,7 +53,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-15.2";
+const botBuild = "2026-07-15.3";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -62,7 +70,9 @@ const preferredCommandAliases = {
   report: ["rep", "repo", "repor", "report"],
   attacks: ["attacks"],
   friend: ["fr", "fri", "frie", "frien", "friend"],
-  enemy: ["e", "en", "ene", "enem", "enemy"]
+  enemy: ["e", "en", "ene", "enem", "enemy"],
+  history: BATTLE_HISTORY_COMMAND_ALIASES.history,
+  occupied: BATTLE_HISTORY_COMMAND_ALIASES.occupied
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
@@ -70,7 +80,7 @@ const canonicalCommands = [
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
-  "targets", "claimed", "mine", "me", "friend", "enemy"
+  "targets", "claimed", "mine", "me", "friend", "enemy", ...BATTLE_HISTORY_COMMANDS
 ];
 
 const buildPlans = new Map([
@@ -307,6 +317,8 @@ async function handleText(ctx) {
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "report")) return handleIncomingReport(ctx, text, mode);
+  if (isCommand(lower, "history")) return handleHistory(ctx, text, mode);
+  if (isCommand(lower, "occupied")) return handleOccupied(ctx, text, mode);
   if (isCommand(lower, "intel")) return handleIntel(ctx, text, mode);
   if (isAstrosCommand(lower)) return handleAstros(ctx, text, mode);
   if (isCommand(lower, "sectors")) return handleSectors(ctx, text, mode);
@@ -554,7 +566,19 @@ async function helpText(ctx, input = "") {
       "<code>!24027610</code>",
       "<code>!B24:02:76</code> - list all known astros in a system",
       "<code>$sectors [APP]</code> - list scout candidate sectors near APP",
-      "<code>!history [coord]</code> is planned but not implemented yet."
+      "<code>!history [coord]</code> - coordinate battle, revolt, liberation, and fleet-observation timeline",
+      "<code>!occupied [player|guild|region]</code> - current active occupations only"
+    ],
+    history: [
+      "<b>Battle History Help</b>",
+      "",
+      "<code>!history B24:14:64:30</code> - privately show a coordinate timeline",
+      "<code>$history B24:14:64:30</code> - post the same scoped timeline in the approved guild chat",
+      "<code>!occupied</code> - list current active occupations",
+      "<code>!occupied [APP]</code> - filter by owner or occupier guild/player",
+      "<code>!occupied B24:14</code> - filter by region",
+      "",
+      "Owner and occupier are separate. Current state comes from the occupation row; battles and events are historical evidence."
     ],
     stale: [
       "<b>Stale Intel Help</b>",
@@ -728,6 +752,7 @@ async function helpText(ctx, input = "") {
     "<b>INTEL</b>",
     "<code>![coord]</code>  <code>$[coord]</code>",
     "<code>!intel</code>  <code>!sectors [APP]</code>  <code>!stale</code>  <code>!score</code>",
+    "<code>!history [coord]</code>  <code>!occupied [player|guild|region]</code>",
     "<code>!friend [tag|coord]</code>  <code>!enemy [tag|coord]</code>",
     "",
     "<b>PERSONAL</b>",
@@ -737,7 +762,7 @@ async function helpText(ctx, input = "") {
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, incoming, bases, doctrine, guild, alerts, aliases",
+    "Topics: setup, attack, defense, scout, operations, intel, history, incoming, bases, doctrine, guild, alerts, aliases",
     "",
     "Officers: <code>$ohelp</code>"
   ].join("\n");
@@ -780,6 +805,8 @@ function basicHelpText() {
     "$report attacker defended eta size - report incoming",
     "$astros B24 craters a85 m4 c2 - search astros",
     "$bases [TAG] - list known bases",
+    "!history [coord] - battle history",
+    "!occupied [filter] - current occupations",
     "!buildplan [1-16] - base doctrine",
     "!researchplan [1-8] - expansion research doctrine",
     "",
@@ -859,7 +886,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -961,6 +988,7 @@ function isProtectedOperationalCommand(lowerText) {
     "myops",
     "incoming",
     "report",
+    ...BATTLE_HISTORY_COMMANDS,
     "targets",
     "claimed",
     "intel",
@@ -1009,6 +1037,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "myops",
     "incoming",
     "report",
+    ...BATTLE_HISTORY_COMMANDS,
     "targets",
     "claimed",
     "bases",
@@ -1035,7 +1064,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -2904,6 +2933,44 @@ async function handleIntel(ctx, text, mode) {
   });
 }
 
+async function handleHistory(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const parsed = parseLocation(commandBody(text), galaxy);
+  if (!parsed || parsed.kind !== "astro") {
+    return respond(ctx, mode, `Use: <code>${escapeHtml(mode)}history ${escapeHtml(galaxy)}:14:64:30</code>`, { parse_mode: "HTML" });
+  }
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use <code>$guild bind</code> in your approved guild group first.", { parse_mode: "HTML" });
+  const history = await battleHistoryReader.coordinateHistory({
+    authorized: true,
+    mapId: galaxyToMapId(parsed.galaxy),
+    chatId: scopeId,
+    coord: parsed.coord,
+    limit: 8
+  });
+  return respond(ctx, mode, formatHistoryTelegram(history, { escapeHtml }), { parse_mode: "HTML" });
+}
+
+async function handleOccupied(ctx, text, mode) {
+  const galaxy = await galaxyForContext(ctx);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use <code>$guild bind</code> in your approved guild group first.", { parse_mode: "HTML" });
+  const rawQuery = commandBody(text);
+  const query = parseRegion(rawQuery, galaxy) || rawQuery;
+  const rows = await battleHistoryReader.activeOccupations({
+    authorized: true,
+    mapId: galaxyToMapId(galaxy),
+    chatId: scopeId,
+    query,
+    limit: 20
+  });
+  return respond(ctx, mode, formatOccupiedTelegram({ galaxy, query: rawQuery, rows }, { escapeHtml }), { parse_mode: "HTML" });
+}
+
+function formatHistoryNumber(value) {
+  return Number(value).toLocaleString("en-US");
+}
+
 async function handleAstros(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const query = commandBody(text);
@@ -3434,7 +3501,7 @@ async function handleSaveMe(ctx, text, mode) {
 
 async function buildAstroReport(coord, options = {}) {
   const includeSavedBases = Boolean(options.includeSavedBases);
-  const [astro, base, savedBases, stances, annotation, battleReports] = await Promise.all([
+  const [astro, base, savedBases, stances, annotation, history] = await Promise.all([
     fetchOne("b24_astros", { coord }, mapIdForCoord(coord)),
     fetchOne("b24_bases", { coord }, mapIdForCoord(coord)),
     includeSavedBases ? fetchRows("b24_user_bases", {
@@ -3443,15 +3510,17 @@ async function buildAstroReport(coord, options = {}) {
     }, { mapId: mapIdForCoord(coord), order: "owner_label.asc" }) : [],
     fetchStanceMap(galaxyFromCoord(coord)),
     fetchIntelAnnotation(coord, options.scopeId),
-    fetchRows("b24_battle_reports", { coord: `eq.${coord}` }, {
+    options.scopeId ? battleHistoryReader.coordinateHistory({
+      authorized: true,
       mapId: mapIdForCoord(coord),
-      order: "created_at.desc",
-      limit: 1
-    })
+      chatId: options.scopeId,
+      coord,
+      limit: 20
+    }) : { timeline: [], occupation: null }
   ]);
 
-  const latestBattle = battleReports[0] || null;
-  if (!astro && !base && !savedBases.length && !latestBattle) return `No intel found for ${escapeHtml(coord)} yet.`;
+  const latestBattle = history.timeline.find((item) => item.kind === "battle") || null;
+  if (!astro && !base && !savedBases.length && !latestBattle && !history.occupation) return `No intel found for ${escapeHtml(coord)} yet.`;
 
   const icon = base ? stanceIcon(resolveBaseStance(base, stances)) : "";
   const lines = [`<b>${escapeHtml(`${icon ? `${icon} ` : ""}${coord}`)}</b>`];
@@ -3476,15 +3545,16 @@ async function buildAstroReport(coord, options = {}) {
     });
   }
   if (latestBattle) {
-    const attacker = [latestBattle.attacker_guild, latestBattle.attacker_player].filter(Boolean).join(" ") || "Unknown attacker";
-    const defender = [latestBattle.defender_guild, latestBattle.defender_player].filter(Boolean).join(" ") || "Unknown defender";
-    const outcome = String(latestBattle.outcome || "inconclusive").replace(/_/g, " ");
-    lines.push("", `<b>Latest battle</b>: ${escapeHtml(latestBattle.battle_time || "time unknown")} - ${escapeHtml(outcome)}`);
-    lines.push(`${escapeHtml(attacker)} vs ${escapeHtml(defender)}`);
-    if (latestBattle.destroyed_total != null) {
-      lines.push(`Destroyed: ${Number(latestBattle.destroyed_total).toLocaleString("en-US")} | Debris: ${Number(latestBattle.debris || 0).toLocaleString("en-US")}`);
+    lines.push("", `<b>Latest battle</b>: ${escapeHtml(latestBattle.effectiveAt || "time unknown")} - ${escapeHtml(latestBattle.outcome)}`);
+    lines.push(`${escapeHtml(latestBattle.attacker)} vs ${escapeHtml(latestBattle.defender)}`);
+    if (latestBattle.losses.total != null) {
+      lines.push(`Destroyed: ${formatHistoryNumber(latestBattle.losses.total)} | Debris: ${formatHistoryNumber(latestBattle.debris || 0)}`);
     }
-    if (latestBattle.occupied) lines.push(`Occupied by: ${escapeHtml(attacker)} (ownership unchanged)`);
+  }
+  if (history.occupation?.active) {
+    lines.push("", "<b>Current occupation</b>", `Owner: ${escapeHtml(history.occupation.owner)}`, `Occupier: ${escapeHtml(history.occupation.occupier)}`);
+  } else if (history.occupation && history.occupation.state !== "unresolved") {
+    lines.push("", `<b>Current occupation</b>: none active (${escapeHtml(history.occupation.state)})`);
   }
   return lines.join("\n");
 }
@@ -4716,6 +4786,8 @@ async function fetchAllRows(table, filters, options = {}) {
   }
   return all;
 }
+
+const battleHistoryReader = createBattleHistoryReader(fetchAllRows);
 
 function fetchActiveClaims(galaxy, chatId = "") {
   const filters = {
@@ -6841,31 +6913,21 @@ async function miniAppIncoming(session) {
   };
 }
 
-async function miniAppBattles(session) {
-  const mapId = galaxyToMapId(session.g);
-  const [reports, occupations] = await Promise.all([
-    fetchAllRows("b24_battle_reports", { chat_id: `eq.${session.c}` }, { mapId, order: "battle_time.desc", limit: 60 }),
-    fetchAllRows("b24_occupations", { chat_id: `eq.${session.c}`, state: "eq.occupied" }, { mapId, order: "observed_at.desc", limit: 60 })
-  ]);
-  const party = (guild, player) => [guild, player].filter(Boolean).join(" ") || "Unknown";
-  return {
-    reports: reports.map((row) => ({
-      coord: row.coord,
-      battleTime: row.battle_time || row.created_at,
-      attacker: party(row.attacker_guild, row.attacker_player),
-      defender: party(row.defender_guild, row.defender_player),
-      outcome: row.outcome || "inconclusive",
-      destroyed: row.destroyed_total,
-      debris: row.debris,
-      pillage: row.pillage_credits
-    })),
-    occupations: occupations.map((row) => ({
-      coord: row.coord,
-      owner: party(row.owner_guild, row.owner_player),
-      occupier: party(row.occupier_guild, row.occupier_player),
-      observedAt: row.observed_at
-    }))
-  };
+async function miniAppBattles(session, coordValue) {
+  const normalized = normalizeAstro(coordValue);
+  const coord = validateMiniAppHistoryRequest({
+    session,
+    coord: normalized,
+    expectedMapId: session ? galaxyToMapId(session.g) : "",
+    coordinateMapId: normalized ? mapIdForCoord(normalized) : ""
+  });
+  return battleHistoryReader.coordinateHistory({
+    authorized: true,
+    mapId: galaxyToMapId(session.g),
+    chatId: session.c,
+    coord,
+    limit: 30
+  });
 }
 
 async function miniAppFindIncoming(session, incomingId) {
@@ -7840,10 +7902,11 @@ http.createServer(async (request, response) => {
     try {
       const session = await verifiedMiniAppSession(url.searchParams.get("access"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
-      return writeJson(response, 200, await miniAppBattles(session));
+      return writeJson(response, 200, await miniAppBattles(session, url.searchParams.get("coord")));
     } catch (error) {
       console.error("Mini app battle history lookup failed", error?.message || error);
-      return writeJson(response, 500, { error: "Could not load battle history." });
+      const status = error?.status === 400 ? 400 : error?.status === 401 ? 401 : 500;
+      return writeJson(response, status, { error: status === 500 ? "Could not load battle history." : error.message });
     }
   }
   if (path === "/api/miniapp/intel" && request.method === "GET") {
