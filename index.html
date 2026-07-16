@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vision Tracker</title>
-    <link rel="stylesheet" href="./styles.css?v=20260715-2" />
+    <link rel="stylesheet" href="./styles.css?v=20260715-4" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   </head>
@@ -176,6 +176,19 @@
         </div>
       </details>
 
+      <details class="battle-history-panel workspace-section" id="battleHistoryPanel" hidden>
+        <summary class="workspace-summary"><span>Battle History</span><em id="battleHistoryCounts">Choose a coordinate</em></summary>
+        <div class="workspace-section-body">
+          <div class="panel-heading">
+            <div><h2 id="battleHistoryCoord">Coordinate history</h2><p>Completed battles, revolt/liberation evidence, battle-force observations, and current occupation state.</p></div>
+            <div class="shared-panel-actions"><button class="ghost-button" id="refreshBattleHistory" type="button">Refresh</button></div>
+          </div>
+          <div class="battle-history-summary" id="occupationSummary">Select View history from a known base or astro.</div>
+          <div class="shared-view-status" id="battleHistoryStatus">No coordinate selected.</div>
+          <div class="battle-history-list" id="battleHistoryList"></div>
+        </div>
+      </details>
+
       <section class="attack-setup-panel legacy-operational">
         <div class="panel-heading">
           <div>
@@ -313,6 +326,6 @@
     </template>
 
     <script src="./config.js"></script>
-    <script src="./app.js?v=20260715-4"></script>
+    <script src="./app.js?v=20260715-7"></script>
   </body>
 </html>

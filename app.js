@@ -77,6 +77,13 @@
   const sharedIncomingList = document.querySelector("#sharedIncomingList");
   const refreshSharedIncoming = document.querySelector("#refreshSharedIncoming");
   const sharedIncomingReport = document.querySelector("#sharedIncomingReport");
+  const battleHistoryPanel = document.querySelector("#battleHistoryPanel");
+  const battleHistoryCounts = document.querySelector("#battleHistoryCounts");
+  const battleHistoryCoord = document.querySelector("#battleHistoryCoord");
+  const battleHistoryStatus = document.querySelector("#battleHistoryStatus");
+  const battleHistoryList = document.querySelector("#battleHistoryList");
+  const occupationSummary = document.querySelector("#occupationSummary");
+  const refreshBattleHistory = document.querySelector("#refreshBattleHistory");
   const sharedIncomingAttacker = document.querySelector("#sharedIncomingAttacker");
   const sharedIncomingDefended = document.querySelector("#sharedIncomingDefended");
   const sharedIncomingEta = document.querySelector("#sharedIncomingEta");
@@ -117,6 +124,8 @@
   let sharedAttackData = { attacks: [], role: "member", canManage: false, userId: "" };
   let sharedIncomingData = { incoming: [], role: "member", canManage: false, userId: "" };
   let sharedScoutingData = { agendas: [], myWatches: [], role: "member", canManage: false, userId: "" };
+  let sharedBattleHistoryData = { coord: "", occupation: null, timeline: [] };
+  let selectedHistoryCoord = "";
   let sharedIntelByRegion = new Map();
   let intelLoadSequence = 0;
   let sharedRefreshBusy = false;
@@ -161,6 +170,7 @@
         sharedAttacksPanel.hidden = false;
         sharedIncomingPanel.hidden = false;
         sharedScoutingPanel.hidden = false;
+        battleHistoryPanel.hidden = false;
         await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting()]);
       } catch {
         renderAccessRequired("Lysander could not load the live coverage map. Please try /map again.");
@@ -247,7 +257,11 @@
       throw new Error("Lysander is unreachable. Try again in a moment.");
     }
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Lysander could not complete that request.");
+    if (!response.ok) {
+      const error = new Error(payload.error || "Lysander could not complete that request.");
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 
@@ -278,6 +292,28 @@
     renderSharedScouting();
   }
 
+  async function loadBattleHistory(coord = selectedHistoryCoord, focus = false) {
+    if (!miniAppAccess || !coord) return;
+    selectedHistoryCoord = coord;
+    battleHistoryPanel.hidden = false;
+    battleHistoryPanel.open = true;
+    battleHistoryCoord.textContent = coord;
+    battleHistoryCounts.textContent = "Loading...";
+    occupationSummary.textContent = "Loading current occupation state...";
+    battleHistoryStatus.textContent = "Loading coordinate timeline...";
+    battleHistoryList.innerHTML = "";
+    try {
+      sharedBattleHistoryData = await miniAppApi(`/api/miniapp/battles?coord=${encodeURIComponent(coord)}`);
+      renderBattleHistory();
+      if (focus) battleHistoryPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      battleHistoryCounts.textContent = "Unavailable";
+      occupationSummary.textContent = error.status === 401 ? "Session expired. Open a fresh /map link from Lysander." : "Current occupation state could not be loaded.";
+      battleHistoryStatus.textContent = error.status === 401 ? "Your signed session has expired." : (error.message || "Could not load battle history.");
+      throw error;
+    }
+  }
+
   async function loadSharedIntel(region, force = false) {
     if (!miniAppAccess || !region) return;
     if (!force && sharedIntelByRegion.has(region)) return applySharedIntel(sharedIntelByRegion.get(region));
@@ -292,7 +328,7 @@
     if (!miniAppSession || sharedRefreshBusy || document.hidden) return;
     sharedRefreshBusy = true;
     try {
-      await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting(), loadSharedIntel(selected, true)]);
+      await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting(), selectedHistoryCoord ? loadBattleHistory(selectedHistoryCoord) : Promise.resolve(), loadSharedIntel(selected, true)]);
       paintAll();
       selectSector(selected);
       setSync("Live", true);
@@ -452,6 +488,47 @@
     }
     sharedScoutingStatus.textContent = `Showing ${agendas.length} live scouting agenda${agendas.length === 1 ? "" : "s"}.`;
     sharedScoutingList.innerHTML = agendas.map(renderSharedScoutCard).join("");
+  }
+
+  function renderBattleHistory() {
+    if (!battleHistoryPanel) return;
+    const timeline = sharedBattleHistoryData.timeline || [];
+    const occupation = sharedBattleHistoryData.occupation;
+    battleHistoryPanel.hidden = false;
+    battleHistoryCoord.textContent = sharedBattleHistoryData.coord || selectedHistoryCoord;
+    battleHistoryCounts.textContent = `${timeline.length} event${timeline.length === 1 ? "" : "s"}`;
+    if (occupation?.inconsistent) {
+      const contradiction = occupation.contradiction;
+      occupationSummary.innerHTML = `<div class="occupation-row is-inconsistent"><strong>Occupation state inconsistent</strong><span>Stored current-state row: <b>${escapeHtml(occupation.state)}</b> by <b>${escapeHtml(occupation.occupier)}</b></span><span>Owner: <b>${escapeHtml(occupation.owner)}</b></span><span>Newer ${escapeHtml(contradiction?.kind || "liberation evidence")}: <b>${escapeHtml(contradiction?.effectiveAt || "time unknown")}</b></span><span>Treat occupation as unconfirmed until the state row is refreshed.</span></div>`;
+    } else if (occupation?.active) {
+      const force = [occupation.occupyingFleet, occupation.occupyingFleetSize != null ? Number(occupation.occupyingFleetSize).toLocaleString() : ""].filter(Boolean).join(" / ");
+      occupationSummary.innerHTML = `<div class="occupation-row"><strong>Currently occupied</strong><span>Owner: <b>${escapeHtml(occupation.owner)}</b></span><span>Occupier: <b>${escapeHtml(occupation.occupier)}</b></span>${force ? `<span>Occupying force: <b>${escapeHtml(force)}</b></span>` : ""}</div>`;
+    } else if (occupation) {
+      occupationSummary.innerHTML = `<div class="occupation-row is-ended"><strong>No active occupation</strong><span>Current state: <b>${escapeHtml(occupation.state)}</b></span><span>Recorded owner: <b>${escapeHtml(occupation.owner)}</b></span></div>`;
+    } else {
+      occupationSummary.textContent = "No current occupation-state record for this coordinate.";
+    }
+    if (!timeline.length) {
+      battleHistoryStatus.textContent = "No completed battle, revolt/liberation, or battle-fleet evidence is stored for this coordinate.";
+      battleHistoryList.innerHTML = "";
+      return;
+    }
+    battleHistoryStatus.textContent = "Newest effective battle/event time first.";
+    battleHistoryList.innerHTML = timeline.map(renderBattleHistoryItem).join("");
+  }
+
+  function renderBattleHistoryItem(item) {
+    const time = item.usedFallbackTime ? `${item.effectiveAt} (import-time fallback)` : item.effectiveAt;
+    if (item.kind === "battle") {
+      const losses = [item.losses?.total != null ? `${Number(item.losses.total).toLocaleString()} total losses` : "", item.losses?.attacker != null ? `attacker ${Number(item.losses.attacker).toLocaleString()}` : "", item.losses?.defender != null ? `defender ${Number(item.losses.defender).toLocaleString()}` : ""].filter(Boolean).join(" / ");
+      const loot = [item.loot?.attacker != null ? `attacker loot ${Number(item.loot.attacker).toLocaleString()}` : "", item.loot?.defender != null ? `defender loot ${Number(item.loot.defender).toLocaleString()}` : "", item.debris != null ? `${Number(item.debris).toLocaleString()} debris` : "", item.pillage != null ? `${Number(item.pillage).toLocaleString()} pillage` : ""].filter(Boolean).join(" / ");
+      const forces = [item.attackerSurvivors ? `Attacker survivors: ${item.attackerSurvivors}` : "", item.defenderSurvivors ? `Defender survivors: ${item.defenderSurvivors}` : ""].filter(Boolean);
+      return `<article class="battle-history-card"><header><div><span class="shared-kicker">${escapeHtml(item.outcome)}</span><strong>${escapeHtml(item.attacker)} vs ${escapeHtml(item.defender)}</strong></div><time>${escapeHtml(time)}</time></header>${losses ? `<p>${escapeHtml(losses)}</p>` : ""}${loot ? `<small>${escapeHtml(loot)}</small>` : ""}${item.finalDefenses != null ? `<small>Final defenses: ${escapeHtml(item.finalDefenses)}%</small>` : ""}${forces.map((force) => `<small>${escapeHtml(force)}</small>`).join("")}</article>`;
+    }
+    if (item.kind === "event") return `<article class="battle-history-card"><header><div><span class="shared-kicker">EVENT</span><strong>${escapeHtml(item.eventType || "event")}</strong></div><time>${escapeHtml(time)}</time></header><p>${escapeHtml([item.label, item.actor].filter(Boolean).join(" / ") || "Recorded game event")}</p></article>`;
+    if (item.kind === "occupation_state") return `<article class="battle-history-card"><header><div><span class="shared-kicker">CURRENT-STATE EVIDENCE${item.inconsistent ? " / STALE" : ""}</span><strong>Occupation ${escapeHtml(item.state)}${item.inconsistent ? " (inconsistent)" : ""}</strong></div><time>${escapeHtml(time)}</time></header><p>Owner: ${escapeHtml(item.owner)}</p><small>Occupier: ${escapeHtml(item.occupier)}</small>${item.inconsistent ? `<small>Newer ${escapeHtml(item.contradiction?.kind || "liberation evidence")}: ${escapeHtml(item.contradiction?.effectiveAt || "time unknown")}</small>` : ""}</article>`;
+    const force = item.survivors || (item.size != null ? Number(item.size).toLocaleString() : "Unknown force");
+    return `<article class="battle-history-card"><header><div><span class="shared-kicker">BATTLE OBSERVATION</span><strong>${escapeHtml(item.party)}</strong></div><time>${escapeHtml(time)}</time></header><p>${escapeHtml(force)}${item.destroyed ? " / destroyed" : ""}</p></article>`;
   }
 
   function renderSharedScoutCard(agenda) {
@@ -730,6 +807,11 @@
     });
     confirmFleetButton.addEventListener("click", confirmFleetPaste);
     sectorPanel.addEventListener("click", (event) => {
+      const historyButton = event.target.closest("[data-history-coord]");
+      if (historyButton) {
+        loadBattleHistory(historyButton.dataset.historyCoord, true).catch(() => {});
+        return;
+      }
       const button = event.target.closest("[data-watch-action]");
       if (button) updateWatch(button.dataset.watchRegion, button.dataset.watchAction);
     });
@@ -742,6 +824,13 @@
     refreshSharedScouting?.addEventListener("click", refreshSharedViews);
     sharedScoutCreateForm?.addEventListener("submit", createSharedScoutAgenda);
     sharedScoutingList?.addEventListener("click", handleSharedScoutingAction);
+    refreshBattleHistory?.addEventListener("click", async () => {
+      if (!selectedHistoryCoord) {
+        battleHistoryStatus.textContent = "Select View history from a known base or astro first.";
+        return;
+      }
+      try { await loadBattleHistory(); setSync("Live", true); } catch {}
+    });
   }
 
   async function connectSupabase() {
@@ -2002,7 +2091,7 @@
         const age = formatIntelAge(base.updatedAt);
         const label = escapeHtml([base.label || "Unknown owner", age].filter(Boolean).join(" - "));
         const coord = escapeHtml(base.coord);
-        return `<div class="base-row"><div><strong>${coord}</strong><span>${label}</span></div><div class="base-guild">${escapeHtml(stanceLabel ? `${stanceLabel} ${base.guild || ""}` : base.guild || "")}</div></div>`;
+        return `<div class="base-row"><div><strong>${coord}</strong><span>${label}</span></div><div class="coordinate-row-actions"><span class="base-guild">${escapeHtml(stanceLabel ? `${stanceLabel} ${base.guild || ""}` : base.guild || "")}</span><button class="history-link" type="button" data-history-coord="${coord}">View history</button></div></div>`;
       }).join("");
     } else {
       baseList.textContent = "No bases imported for this sector.";
@@ -2021,7 +2110,7 @@
         const description = [astro.terrain, astro.type].filter(Boolean).join(" ") || "Unknown astro";
         const attributes = Array.isArray(astro.attributes) && astro.attributes.length ? astro.attributes.join("/") : "";
         const age = formatIntelAge(astro.updatedAt);
-        return `<div class="astro-row"><strong>${escapeHtml(astro.coord)}</strong><span>${escapeHtml(description)}</span><em>${escapeHtml(attributes)}${astro.hasBase ? " base" : ""}${age ? ` | ${escapeHtml(age)}` : ""}</em></div>`;
+        return `<div class="astro-row"><strong>${escapeHtml(astro.coord)}</strong><span>${escapeHtml(description)}</span><em>${escapeHtml(attributes)}${astro.hasBase ? " base" : ""}${age ? ` | ${escapeHtml(age)}` : ""}</em><button class="history-link" type="button" data-history-coord="${escapeHtml(astro.coord)}">View history</button></div>`;
       }).join("");
     } else {
       astroList.textContent = miniAppSession && !sharedIntelByRegion.has(id)

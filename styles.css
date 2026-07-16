@@ -699,6 +699,24 @@ h1 {
   font-weight: 900;
 }
 
+.coordinate-row-actions {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.history-link {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .system-list {
   display: flex;
   align-content: flex-start;
@@ -1568,6 +1586,75 @@ details.shared-scouting-panel > .workspace-section-body {
   gap: 10px;
 }
 
+.battle-history-summary,
+.battle-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.battle-history-list {
+  max-height: min(62vh, 620px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.battle-history-summary {
+  margin: 10px 0;
+}
+
+.occupation-row,
+.battle-history-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(5, 14, 20, 0.76);
+  padding: 10px 12px;
+}
+
+.occupation-row {
+  border-left: 4px solid var(--reserved);
+  display: grid;
+  gap: 3px;
+}
+
+.occupation-row.is-ended {
+  border-left-color: var(--friendly);
+}
+
+.occupation-row.is-inconsistent {
+  border-color: rgba(214, 64, 69, 0.55);
+  border-left-color: var(--enemy);
+  background: rgba(58, 18, 22, 0.5);
+}
+
+.occupation-row span,
+.battle-history-card p,
+.battle-history-card small,
+.battle-history-card time {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.battle-history-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.battle-history-card header div {
+  display: grid;
+  gap: 2px;
+}
+
+.battle-history-card p {
+  margin: 8px 0 4px;
+  font-weight: 750;
+}
+
+.battle-history-card small {
+  display: block;
+  margin-top: 4px;
+}
+
 .shared-scout-card {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1617,7 +1704,7 @@ details.shared-scouting-panel > .workspace-section-body {
 
 .astro-row {
   display: grid;
-  grid-template-columns: minmax(100px, auto) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr) auto auto;
   gap: 8px;
   padding: 5px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -1826,6 +1913,20 @@ details.shared-scouting-panel > .workspace-section-body {
   }
 
   .shared-attack-card > header {
+    flex-direction: column;
+  }
+
+  .astro-row {
+    grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  }
+
+  .astro-row em,
+  .astro-row .history-link {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .battle-history-card header {
     flex-direction: column;
   }
 
