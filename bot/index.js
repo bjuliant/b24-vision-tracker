@@ -2929,32 +2929,83 @@ async function handleScout(ctx, text, mode) {
 }
 
 async function handleTargets(ctx, mode) {
-  if (!ctx.from?.id) return respond(ctx, mode, "Use !targets in a group or private chat so I know who to look up.");
+  return handleClaimed(ctx, mode);
+}
+
+async function handleClaimed(ctx, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !claimed in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const claims = await fetchRows("b24_claims", {
-    claimed_by_user_id: `eq.${telegramUserId(ctx)}`,
-    status: "eq.active",
-    chat_id: `eq.${scopeId}`,
-    arrival_at: `gt.${new Date().toISOString()}`
-  }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
-  const message = claims.length ? claims.map(formatClaimLine).join("\n") : `You have no active claimed targets in ${galaxy}.`;
-  return respond(ctx, mode, message, {
+  const userId = telegramUserId(ctx);
+  const now = new Date().toISOString();
+  const [claims, memberships, coveredIncoming] = await Promise.all([
+    fetchRows("b24_claims", {
+      claimed_by_user_id: `eq.${userId}`,
+      status: "eq.active",
+      chat_id: `eq.${scopeId}`,
+      arrival_at: `gt.${now}`
+    }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" }),
+    fetchRows("b24_operation_members", {
+      user_id: `eq.${userId}`
+    }, { mapId: galaxyToMapId(galaxy), order: "updated_at.asc" }),
+    fetchRows("b24_incoming", {
+      covered_by_user_id: `eq.${userId}`,
+      status: "eq.active",
+      chat_id: `eq.${scopeId}`,
+      arrival_at: `gt.${now}`
+    }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" })
+  ]);
+
+  const activeMemberships = memberships.filter((member) => member.state !== "withdrawn");
+  const operations = (await fetchOperationsForMemberships(galaxy, activeMemberships))
+    .filter((operation) => operation.chat_id === scopeId);
+  const memberByOperation = new Map(activeMemberships.map((member) => [member.operation_id, member]));
+  const claimedOperationIds = new Set(claims.map((claim) => claim.operation_id).filter(Boolean));
+  const attackMemberships = operations.filter((operation) => operation.type === "attack" && !claimedOperationIds.has(operation.operation_id));
+  const defenseMemberships = operations.filter((operation) => operation.type === "defense");
+  const scoutMemberships = operations.filter((operation) => operation.type === "scout");
+
+  const lines = [`<b>${escapeHtml(galaxy)} Your Commitments</b>`];
+  appendCommitmentSection(lines, "Attacks", [
+    ...claims.map((claim) => `ATTACK ${formatClaimLine(claim)}`),
+    ...attackMemberships.map((operation) => formatPersonalOperationCommitment(operation, memberByOperation.get(operation.operation_id)))
+  ]);
+  appendCommitmentSection(lines, "Defense", [
+    ...coveredIncoming.map(formatPersonalDefenseCommitment),
+    ...defenseMemberships.map((operation) => formatPersonalOperationCommitment(operation, memberByOperation.get(operation.operation_id)))
+  ]);
+  appendCommitmentSection(lines, "Scouting", scoutMemberships.map((operation) => (
+    formatPersonalOperationCommitment(operation, memberByOperation.get(operation.operation_id))
+  )));
+
+  if (!claims.length && !attackMemberships.length && !coveredIncoming.length && !defenseMemberships.length && !scoutMemberships.length) {
+    lines.push("", `You have no active attack, defense, or scouting commitments in ${escapeHtml(galaxy)}.`);
+  }
+  return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
     ...claimListKeyboard(claims)
   });
 }
 
-async function handleClaimed(ctx, mode) {
-  const galaxy = await galaxyForContext(ctx);
-  const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  const claims = await fetchActiveClaims(galaxy, scopeId);
-  return respond(ctx, mode, claims.length ? claims.map(formatClaimLine).join("\n") : `No active attacks claimed in ${galaxy}.`, {
-    parse_mode: "HTML",
-    ...claimListKeyboard(claims)
-  });
+function appendCommitmentSection(lines, title, rows) {
+  lines.push("", `<b>${escapeHtml(title)}</b> (${rows.length})`);
+  lines.push(...(rows.length ? rows : ["None."]));
+}
+
+function formatPersonalOperationCommitment(operation, member) {
+  const target = operation.type === "defense"
+    ? `${operation.defended_coord || operation.target_coord || "?"} &lt;= ${operation.hostile_origin || "?"}`
+    : operation.target_coord || operation.short_id || "?";
+  const state = member?.state || member?.role || "joined";
+  const timing = scoutAgendaInfo(operation) ? "active watch" : formatEta(new Date(operation.arrival_at));
+  return `${escapeHtml(operation.type.toUpperCase())} ${escapeHtml(target)} - ${escapeHtml(state)} - ${timing}`;
+}
+
+function formatPersonalDefenseCommitment(row) {
+  const defended = row.defended_coord || "?";
+  const attacker = row.attacker_coord || "?";
+  return `DEFENSE ${escapeHtml(defended)} &lt;= ${escapeHtml(attacker)} - covered - ${formatEta(new Date(row.arrival_at))}`;
 }
 
 async function handleAttacked(ctx, text, mode) {
