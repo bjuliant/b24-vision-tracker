@@ -53,13 +53,14 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-15.3";
+const botBuild = "2026-07-16.1";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
   onboardme: ["enlist", "on", "onboard", "onboardme"],
   status: ["st", "status"],
   buildplan: ["bp", "buildplan"],
+  research: ["research"],
   researchplan: ["rp", "researchplan"],
   scout: ["sc", "scout"],
   scouts: ["scouting", "scoutings", "scouts"],
@@ -76,7 +77,7 @@ const preferredCommandAliases = {
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
-  "status", "version", "map", "wakeup", "buildplan", "researchplan", "g", "setgalaxy", "guild",
+  "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
@@ -161,6 +162,152 @@ const researchPlans = new Map([
     priorities: ["Choose the next strategic doctrine", "Keep expansion reserves separate from optional research"]
   }]
 ]);
+
+const researchDoctrinePlans = {
+  growth: {
+    label: "Guide-Compatible Growth",
+    goal: "Continue the Version 5 base guide through Base 16.",
+    priorities: [
+      "E10",
+      "C20",
+      "AI1-4",
+      "C21-24",
+      "E11-24",
+      "TC1",
+      "AI5-6",
+      "CY1-2"
+    ],
+    unlocks: [
+      "AI4 before the 11-base build: Android Factories",
+      "C24 + E24 + TC1 before the 13-base build: Capitals",
+      "AI6 + CY2 before the 14-base build: Orbital Shipyards",
+      "Research bases: RL18 for AI, RL22 for CY, RL24 for TC"
+    ],
+    tradeoff: "Avoid unrelated combat research when it delays a structure unlock or expansion reserve."
+  },
+  economy: {
+    label: "Economy",
+    goal: "Increase income, usable area, and empire-wide economic capacity.",
+    priorities: ["E10", "C20", "E20", "C24", "E24", "TC1", "AI4"],
+    unlocks: [
+      "Economic Centers",
+      "Terraform",
+      "Antimatter Plants",
+      "Orbital Bases",
+      "Biosphere Modification",
+      "Capitals"
+    ],
+    tradeoff: "This path develops income and area faster, but delays combat and fleet specialization."
+  },
+  production: {
+    label: "Production",
+    goal: "Maximize structure construction and fleet-production capacity.",
+    priorities: ["Hold C10 + L8 for Nanite Factories", "C20", "AI1-4", "AI5-6", "CY1-2"],
+    unlocks: [
+      "C10 + L8: Nanite Factories",
+      "AI4: Android Factories",
+      "CY2: Orbital Shipyards",
+      "Each Cybernetics level improves construction and production empire-wide"
+    ],
+    tradeoff: "AI and Cybernetics are expensive. Protect expansion and fleet-production reserves first."
+  },
+  science: {
+    label: "Science",
+    goal: "Increase research output and connect dedicated research bases.",
+    priorities: ["C20", "Primary research base RL18", "AI1-4", "AI5-6", "C24", "E24", "Linked bases RL20", "Primary base RL24", "TC1+"],
+    unlocks: [
+      "AI gives an empire-wide research bonus",
+      "TC permits research links between developed research bases",
+      "Supports advanced infrastructure and combat technologies"
+    ],
+    tradeoff: "Research infrastructure consumes credits that could become fleets, economic structures, or new bases."
+  },
+  defense: {
+    label: "Defense",
+    goal: "Unlock progressively stronger shielded base defenses.",
+    priorities: [
+      "Phase 1 Ion: E10 -> S2; L10 -> E12 -> I1; A10",
+      "Phase 2 Photon: P8 -> E16 -> PH1; A14; S6",
+      "Phase 3 Disruptor: L18 -> E20 -> D1; A18; S8",
+      "Phase 4 Shield: I10 / S14",
+      "Phase 4 Ring: PH10 / A22 / S12"
+    ],
+    unlocks: ["Ion Turrets", "Photon Turrets", "Disruptor Turrets", "Planetary Shield or Planetary Ring"],
+    tradeoff: "Advance one meaningful defense phase at a time instead of researching every weapon tree evenly."
+  },
+  mobility: {
+    label: "Mobility",
+    goal: "Reduce response times and improve offensive reach.",
+    priorities: ["E14", "ST1+", "E20", "WD12", "Continue WD for warp fleets", "Continue SD for rapid-response stellar fleets"],
+    unlocks: ["Stealth after E14", "Jump Gates at E20 + WD12", "Faster travel through the drive used by the fleet"],
+    tradeoff: "Speed does not replace economy or fleet strength. Stop near E20 / WD12 / ST1 unless travel remains the real bottleneck."
+  },
+  fleet: {
+    label: "Fleet",
+    goal: "Reach one selected unit unlock without funding unrelated capital-ship technologies.",
+    priorities: ["Choose corvette, carrier, heavycruiser, battleship, dreadnought, titan, or leviathan"],
+    unlocks: [],
+    tradeoff: "A minimum unlock only makes a unit available; it does not make that unit the best economic choice."
+  },
+  balanced: {
+    label: "Balanced",
+    goal: "Continue growth without becoming economically or militarily hollow.",
+    priorities: ["E10", "C20", "AI4", "A10 / S2 / I1", "C24 / E24 / TC1", "AI6 / CY2", "WD12 only when geography justifies it"],
+    unlocks: ["Growth structures first", "One useful defensive tier", "One selected fleet specialization", "Mobility when travel is an actual constraint"],
+    tradeoff: "Avoid researching every weapon tree evenly."
+  }
+};
+
+const growthResearchStages = new Map([
+  [9, "Push Computer 20, then begin AI. Deadline: AI4 before the 11-base build."],
+  [10, "Complete AI4 and prepare one research base for RL24. Android Factories must be available for the 11-base build."],
+  [11, "Push Computer 24 and Energy 24 toward Tachyon Communications 1."],
+  [12, "Complete C24 / E24 / TC1. Capitals must be available for the 13-base build."],
+  [13, "Push AI4 -> AI6, then Cybernetics 1 -> 2. Orbital Shipyards must be available for the 14-base build."],
+  [14, "Core structure unlock path complete. Hold TC1 / CY2 and spend surplus on the secondary doctrine."],
+  [15, "Continue the selected secondary doctrine while protecting Base 16 expansion credits."],
+  [16, "Base-guide horizon reached. Choose economy, production, defense, mobility, science, or a fleet specialization."]
+]);
+
+const fleetResearchPlans = {
+  corvette: {
+    label: "Corvette",
+    minimum: "Use the verified current game-table requirement for your server.",
+    emphasis: ["Stellar Drive", "Armour", "The weapon technology used by the current corvette design"],
+    note: "The reviewed doctrine did not include a verified Corvette minimum, so Lysander will not invent one."
+  },
+  carrier: {
+    label: "Carrier",
+    minimum: "Use the verified current game-table requirement for your server.",
+    emphasis: ["Warp Drive", "Armour", "Fighter technology and the weapon path used by the escort fleet"],
+    note: "The reviewed doctrine did not include a verified Carrier minimum, so Lysander will not invent one."
+  },
+  heavycruiser: {
+    label: "Heavy Cruiser",
+    minimum: "P6 / WD4 / A12 / S4",
+    emphasis: ["Armour", "Plasma", "Shielding", "Warp Drive when mobility is limiting"]
+  },
+  battleship: {
+    label: "Battleship",
+    minimum: "I6 / WD8 / A16 / S8",
+    emphasis: ["Armour", "Ion", "Shielding", "Warp Drive when mobility is limiting"]
+  },
+  dreadnought: {
+    label: "Dreadnought",
+    minimum: "PH6 / WD12 / A20 / S10",
+    emphasis: ["Armour", "Photon", "Shielding", "Warp Drive"]
+  },
+  titan: {
+    label: "Titan",
+    minimum: "D6 / WD14 / A22 / S14",
+    emphasis: ["Armour", "Disruptor", "Shielding", "Warp Drive"]
+  },
+  leviathan: {
+    label: "Leviathan",
+    minimum: "PH12 / WD18 / A24 / S16",
+    emphasis: ["Armour", "Photon", "Shielding", "Warp Drive"]
+  }
+};
 
 bot.use(async (ctx, next) => {
   const text = ctx.message?.text || ctx.channelPost?.text || ctx.callbackQuery?.data || "";
@@ -303,6 +450,7 @@ async function handleText(ctx) {
   if (isExactCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "buildplan")) return handleBuildPlan(ctx, text, mode);
+  if (isCommand(lower, "research")) return handleResearchDoctrine(ctx, text, mode);
   if (isCommand(lower, "researchplan")) return handleResearchPlan(ctx, text, mode);
   if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
@@ -656,8 +804,12 @@ async function helpText(ctx, input = "") {
       "<code>!bp [1-16]</code>",
       "Short alias.",
       "",
-      "<code>!researchplan [1-8]</code>",
-      "Shows the lean expansion-research doctrine and protected reserve.",
+      "<code>!researchplan [1-16]</code>",
+      "Shows lean expansion research through Base 7, then follows your selected branch.",
+      "<code>!researchplan 8</code>",
+      "Shows the post-opening doctrine branches.",
+      "<code>!research doctrine [branch]</code>",
+      "Saves your branch; growth is the default.",
       "<code>!researchplan 5 detail</code>",
       "Shows targets, unlocks, and research priorities.",
       "<code>!rp [1-8]</code>",
@@ -683,19 +835,25 @@ async function helpText(ctx, input = "") {
     researchplan: [
       "<b>Expansion Research Help</b>",
       "",
-      "<code>!researchplan [1-8]</code>",
-      "Shows the lean research target and colonization reserve for that base count.",
-      "<code>!researchplan [1-8] detail</code>",
+      "<code>!researchplan [1-16]</code>",
+      "Shows the expansion target or your saved post-opening branch for that base count.",
+      "<code>!researchplan [1-7] detail</code>",
       "Adds unlocks, priorities, and the abbreviation key.",
       "<code>!researchplan [1-7] credits [amount]</code>",
       "Checks whether the next-base reserve is protected.",
-      "<code>!rp [1-8]</code>",
+      "<code>!researchplan [growth|economy|production|science|defense|mobility|fleet|balanced]</code>",
+      "Shows a full branch without changing your saved choice.",
+      "<code>!research doctrine [branch]</code>",
+      "Saves the branch used by numbered plans from Base 9 onward.",
+      "<code>!rp [1-16]</code>",
       "Short alias.",
       "",
       "Examples:",
       "<code>!researchplan 1</code>",
       "<code>!researchplan 5 detail</code>",
       "<code>!researchplan 5 credits 730</code>",
+      "<code>!researchplan fleet battleship</code>",
+      "<code>!research doctrine balanced</code>",
       "<code>!rp 7</code>"
     ],
     guild: [
@@ -758,7 +916,7 @@ async function helpText(ctx, input = "") {
     "<b>PERSONAL</b>",
     "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
     "<code>!buildplan [1-16]</code> - guild base doctrine",
-    "<code>!researchplan [1-8]</code> - expansion research doctrine",
+    "<code>!researchplan [1-16]</code> - expansion research doctrine",
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
@@ -808,7 +966,7 @@ function basicHelpText() {
     "!history [coord] - battle history",
     "!occupied [filter] - current occupations",
     "!buildplan [1-16] - base doctrine",
-    "!researchplan [1-8] - expansion research doctrine",
+    "!researchplan [1-16] - expansion research doctrine",
     "",
     "Full help had a temporary problem. Check Render logs for the line after: help command failed."
   ].join("\n");
@@ -886,7 +1044,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -968,6 +1126,7 @@ function isProtectedOperationalCommand(lowerText) {
     "attacks",
     "map",
     "buildplan",
+    "research",
     "researchplan",
     "scout",
     "scouts",
@@ -1017,6 +1176,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "attacks",
     "map",
     "buildplan",
+    "research",
     "researchplan",
     "scout",
     "scouts",
@@ -1064,7 +1224,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1412,33 +1572,245 @@ function formatBuildPlan(stage) {
   ].join("\n");
 }
 
+async function handleResearchDoctrine(ctx, text, mode) {
+  if (!ctx.from?.id) return respond(ctx, mode, "I need a Telegram user to save a research doctrine.");
+  const body = commandBody(text).replace(/^doctrine\b/i, "").trim();
+  if (!body) {
+    const selected = await selectedResearchDoctrine(ctx);
+    const fleet = selected.doctrine === "fleet" && selected.fleet ? ` / ${fleetResearchPlans[selected.fleet]?.label || selected.fleet}` : "";
+    return respond(ctx, mode, [
+      "<b>RESEARCH DOCTRINE</b>",
+      "",
+      `Current: <b>${escapeHtml(researchDoctrinePlans[selected.doctrine].label)}${escapeHtml(fleet)}</b>`,
+      "",
+      "Change it with:",
+      "<code>!research doctrine growth</code>",
+      "<code>!research doctrine economy</code>",
+      "<code>!research doctrine production</code>",
+      "<code>!research doctrine science</code>",
+      "<code>!research doctrine defense</code>",
+      "<code>!research doctrine mobility</code>",
+      "<code>!research doctrine fleet battleship</code>",
+      "<code>!research doctrine balanced</code>"
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+
+  const doctrine = findResearchDoctrine(body);
+  if (!doctrine) return respond(ctx, mode, "Unknown doctrine. Use !researchplan 8 to see the available branches.");
+  const fleet = doctrine === "fleet" ? findFleetResearchPlan(body) : "";
+  if (doctrine === "fleet" && !fleet) {
+    return respond(ctx, mode, formatFleetResearchMenu(), { parse_mode: "HTML" });
+  }
+
+  const saved = await upsertRow("b24_user_settings", {
+    user_id: telegramUserId(ctx),
+    research_doctrine: doctrine,
+    research_fleet: fleet || null,
+    research_updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, "user_id");
+  if (!saved) {
+    return respond(ctx, mode, "I could not save that doctrine. Run supabase-research-doctrine.sql, then try again.");
+  }
+  const plan = researchDoctrinePlans[doctrine];
+  const fleetLabel = fleet ? ` / ${fleetResearchPlans[fleet].label}` : "";
+  return respond(ctx, mode, [
+    "<b>RESEARCH DOCTRINE SAVED</b>",
+    "",
+    `Doctrine: <b>${escapeHtml(plan.label)}${escapeHtml(fleetLabel)}</b>`,
+    "",
+    "Next priority:",
+    escapeHtml(fleet ? fleetResearchPlans[fleet].minimum : plan.priorities[0]),
+    "",
+    "Numbered plans from Base 9 onward now use this doctrine.",
+    "Change it anytime with <code>!research doctrine [branch]</code>."
+  ].join("\n"), { parse_mode: "HTML" });
+}
+
 async function handleResearchPlan(ctx, text, mode) {
   const body = commandBody(text);
-  const stage = Number((body.match(/\b(?:[1-8])\b/) || [])[0] || 0);
+  const stage = Number((body.match(/\b(?:[1-9]|1[0-6])\b/) || [])[0] || 0);
   const detailed = /\bdetail(?:ed)?\b/i.test(body);
   const creditsMatch = body.match(/\bcredits?\s+([\d,]+)/i);
   const currentCredits = creditsMatch ? Number(creditsMatch[1].replace(/,/g, "")) : null;
-  if (!researchPlans.has(stage)) {
+  const requestedDoctrine = findResearchDoctrine(body);
+
+  if (!stage && requestedDoctrine) {
+    if (requestedDoctrine === "fleet") {
+      const fleet = findFleetResearchPlan(body);
+      return respond(ctx, mode, fleet ? formatFleetResearchPlan(fleet) : formatFleetResearchMenu(), { parse_mode: "HTML" });
+    }
+    return respond(ctx, mode, formatResearchDoctrine(requestedDoctrine), { parse_mode: "HTML" });
+  }
+
+  if (!stage) {
     return respond(ctx, mode, [
       "<b>Expansion Research Doctrine</b>",
       "",
-      "Use <code>!researchplan 1</code> through <code>!researchplan 8</code>.",
-      "Short form: <code>!rp 5</code>.",
-      "Add <code>detail</code> for targets, unlocks, and priorities.",
-      "Add <code>credits 730</code> to check the protected reserve.",
+      "Bases 1-7: lean expansion targets and protected reserves.",
+      "Base 8: choose a post-opening doctrine.",
+      "Bases 9-16: follow your saved doctrine.",
       "",
       "Examples:",
-      "<code>!researchplan 1</code>",
       "<code>!researchplan 5 detail</code>",
-      "<code>!researchplan 5 credits 730</code>"
+      "<code>!researchplan 5 credits 730</code>",
+      "<code>!researchplan 8</code>",
+      "<code>!researchplan economy</code>",
+      "<code>!researchplan fleet battleship</code>",
+      "<code>!research doctrine balanced</code>"
     ].join("\n"), { parse_mode: "HTML" });
   }
+
+  if (stage === 8) return respond(ctx, mode, formatResearchBranchPoint(), { parse_mode: "HTML" });
+
+  if (stage >= 9) {
+    const selected = requestedDoctrine
+      ? { doctrine: requestedDoctrine, fleet: requestedDoctrine === "fleet" ? findFleetResearchPlan(body) : "" }
+      : await selectedResearchDoctrine(ctx);
+    return respond(ctx, mode, formatDoctrineResearchStage(stage, selected.doctrine, selected.fleet), { parse_mode: "HTML" });
+  }
+
   const output = Number.isFinite(currentCredits)
     ? formatResearchReserveCheck(stage, currentCredits)
     : detailed
       ? formatResearchPlanDetail(stage)
       : formatResearchPlan(stage);
   return respond(ctx, mode, output, { parse_mode: "HTML" });
+}
+
+async function selectedResearchDoctrine(ctx) {
+  const settings = ctx.from?.id
+    ? await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false)
+    : null;
+  const doctrine = researchDoctrinePlans[settings?.research_doctrine] ? settings.research_doctrine : "growth";
+  const fleet = fleetResearchPlans[settings?.research_fleet] ? settings.research_fleet : "";
+  return { doctrine, fleet };
+}
+
+function findResearchDoctrine(value) {
+  const text = String(value || "").toLowerCase();
+  return Object.keys(researchDoctrinePlans).find((name) => new RegExp(`\\b${name}\\b`, "i").test(text)) || "";
+}
+
+function findFleetResearchPlan(value) {
+  const compact = String(value || "").toLowerCase().replace(/[^a-z]/g, "");
+  return Object.keys(fleetResearchPlans).find((name) => compact.includes(name)) || "";
+}
+
+function formatResearchBranchPoint() {
+  return [
+    "<b>8-BASE RESEARCH BRANCH</b>",
+    "",
+    "Rapid-expansion opening complete.",
+    "",
+    "Current minimum baseline:",
+    "<code>C10 / E8 / L8 / SD4 / WD1</code>",
+    "",
+    "Choose what this empire is becoming:",
+    "<code>!researchplan growth</code> - continue the base guide",
+    "<code>!researchplan economy</code> - income and area",
+    "<code>!researchplan production</code> - construction and shipyards",
+    "<code>!researchplan science</code> - research output and links",
+    "<code>!researchplan defense</code> - shielded base defenses",
+    "<code>!researchplan mobility</code> - speed, stealth, and gates",
+    "<code>!researchplan fleet</code> - unit specialization",
+    "<code>!researchplan balanced</code> - growth with practical defenses",
+    "",
+    "Save a choice: <code>!research doctrine growth</code>",
+    "Growth is used by default until you choose."
+  ].join("\n");
+}
+
+function formatResearchDoctrine(doctrine) {
+  const plan = researchDoctrinePlans[doctrine];
+  const lines = [
+    `<b>${escapeHtml(plan.label.toUpperCase())} DOCTRINE</b>`,
+    "",
+    "<b>Goal</b>",
+    escapeHtml(plan.goal),
+    "",
+    "<b>Priority</b>",
+    ...plan.priorities.map((item, index) => `${index + 1}. ${escapeHtml(item)}`)
+  ];
+  if (plan.unlocks.length) lines.push("", "<b>Unlocks and milestones</b>", ...plan.unlocks.map((item) => `- ${escapeHtml(item)}`));
+  lines.push("", "<b>Tradeoff</b>", escapeHtml(plan.tradeoff), "", `Save: <code>!research doctrine ${doctrine}</code>`);
+  return lines.join("\n");
+}
+
+function formatFleetResearchMenu() {
+  return [
+    "<b>FLEET DOCTRINE</b>",
+    "",
+    "Choose one specialization:",
+    "<code>!researchplan fleet corvette</code>",
+    "<code>!researchplan fleet carrier</code>",
+    "<code>!researchplan fleet heavycruiser</code>",
+    "<code>!researchplan fleet battleship</code>",
+    "<code>!researchplan fleet dreadnought</code>",
+    "<code>!researchplan fleet titan</code>",
+    "<code>!researchplan fleet leviathan</code>",
+    "",
+    "Save one with <code>!research doctrine fleet battleship</code>."
+  ].join("\n");
+}
+
+function formatFleetResearchPlan(fleet) {
+  const plan = fleetResearchPlans[fleet];
+  const lines = [
+    `<b>${escapeHtml(plan.label.toUpperCase())} DOCTRINE</b>`,
+    "",
+    "<b>Minimum unlock</b>",
+    `<code>${escapeHtml(plan.minimum)}</code>`,
+    "",
+    "<b>Research emphasis after unlock</b>",
+    ...plan.emphasis.map((item, index) => `${index + 1}. ${escapeHtml(item)}`),
+    "",
+    "Reach the minimum without researching unrelated capital-ship technologies.",
+    "The unlock does not guarantee this unit is currently the best economic choice."
+  ];
+  if (plan.note) lines.push("", `<i>${escapeHtml(plan.note)}</i>`);
+  lines.push("", `Save: <code>!research doctrine fleet ${fleet}</code>`);
+  return lines.join("\n");
+}
+
+function formatDoctrineResearchStage(stage, doctrine, fleet = "") {
+  const validDoctrine = researchDoctrinePlans[doctrine] ? doctrine : "growth";
+  if (validDoctrine === "growth") {
+    return [
+      `<b>${stage} BASES - GROWTH</b>`,
+      "",
+      escapeHtml(growthResearchStages.get(stage)),
+      "",
+      "Full path: <code>!researchplan growth</code>",
+      "Change doctrine: <code>!research doctrine [branch]</code>"
+    ].join("\n");
+  }
+  if (validDoctrine === "fleet") {
+    if (!fleet || !fleetResearchPlans[fleet]) {
+      return [
+        `<b>${stage} BASES - FLEET</b>`,
+        "",
+        "No fleet specialization is saved yet.",
+        "",
+        formatFleetResearchMenu()
+      ].join("\n");
+    }
+    return [`<b>${stage} BASES - ${escapeHtml(fleetResearchPlans[fleet].label.toUpperCase())}</b>`, "", formatFleetResearchPlan(fleet)].join("\n");
+  }
+  const plan = researchDoctrinePlans[validDoctrine];
+  return [
+    `<b>${stage} BASES - ${escapeHtml(plan.label.toUpperCase())}</b>`,
+    "",
+    escapeHtml(plan.goal),
+    "",
+    "Continue the saved branch priorities:",
+    ...plan.priorities.map((item, index) => `${index + 1}. ${escapeHtml(item)}`),
+    "",
+    stage === 16 ? "Base-guide horizon reached. Continue this specialization or deliberately adopt a hybrid." : "Protect the next expansion reserve before optional research.",
+    "",
+    `Full path: <code>!researchplan ${validDoctrine}</code>`,
+    "Change doctrine: <code>!research doctrine [branch]</code>"
+  ].join("\n");
 }
 
 function formatResearchPlan(stage) {
