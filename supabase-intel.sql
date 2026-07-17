@@ -226,13 +226,68 @@ create table if not exists public.b24_user_settings (
 
 alter table public.b24_user_settings
 add column if not exists active_chat_id text,
-add column if not exists active_chat_label text;
+add column if not exists active_chat_label text,
+add column if not exists research_doctrine text not null default 'growth',
+add column if not exists research_fleet text,
+add column if not exists research_updated_at timestamptz;
 
 create table if not exists public.b24_chat_settings (
   chat_id text primary key,
   galaxy text not null default 'B24',
   map_id text not null default 'b24-main',
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.b24_access_members (
+  chat_id text not null,
+  user_id text not null,
+  username text,
+  display_name text,
+  role text not null default 'member',
+  status text not null default 'pending',
+  access_mode text not null default 'group',
+  approved_by text,
+  approved_at timestamptz,
+  first_seen_at timestamptz not null default now(),
+  last_seen_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (chat_id, user_id),
+  check (role in ('member', 'officer', 'owner')),
+  check (status in ('pending', 'active', 'banned')),
+  constraint b24_access_members_access_mode_check check (access_mode in ('group', 'private'))
+);
+
+alter table public.b24_access_members
+add column if not exists access_mode text not null default 'group';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'b24_access_members_access_mode_check'
+      and conrelid = 'public.b24_access_members'::regclass
+  ) then
+    alter table public.b24_access_members
+    add constraint b24_access_members_access_mode_check
+    check (access_mode in ('group', 'private'));
+  end if;
+end $$;
+
+create table if not exists public.b24_approved_chats (
+  guild_id text not null default 'APP',
+  chat_id text not null,
+  scope_chat_id text not null,
+  chat_title text,
+  status text not null default 'active',
+  is_primary boolean not null default false,
+  approved_by text,
+  approved_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (guild_id, chat_id),
+  check (status in ('active', 'revoked'))
 );
 
 alter table public.b24_systems enable row level security;
@@ -247,6 +302,27 @@ alter table public.b24_scheduled_notifications enable row level security;
 alter table public.b24_user_bases enable row level security;
 alter table public.b24_user_settings enable row level security;
 alter table public.b24_chat_settings enable row level security;
+alter table public.b24_access_members enable row level security;
+alter table public.b24_approved_chats enable row level security;
+
+drop policy if exists "Anyone can read B24 access members" on public.b24_access_members;
+drop policy if exists "Anyone can write B24 access members" on public.b24_access_members;
+drop policy if exists "Anyone can update B24 access members" on public.b24_access_members;
+drop policy if exists "Anyone can delete B24 access members" on public.b24_access_members;
+
+drop policy if exists "Anyone can read B24 approved chats" on public.b24_approved_chats;
+drop policy if exists "Anyone can write B24 approved chats" on public.b24_approved_chats;
+drop policy if exists "Anyone can update B24 approved chats" on public.b24_approved_chats;
+drop policy if exists "Anyone can delete B24 approved chats" on public.b24_approved_chats;
+
+create index if not exists b24_approved_chats_scope_idx
+on public.b24_approved_chats (guild_id, scope_chat_id, status);
+
+create index if not exists b24_approved_chats_status_idx
+on public.b24_approved_chats (guild_id, status, updated_at);
+
+create index if not exists b24_access_members_lookup_idx
+on public.b24_access_members (chat_id, status, role, updated_at);
 
 drop policy if exists "Anyone can read B24 systems" on public.b24_systems;
 create policy "Anyone can read B24 systems"
