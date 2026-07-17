@@ -1418,6 +1418,7 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
+      const exporterVersion = "2026-07-17.4";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
@@ -1514,22 +1515,37 @@
       const parseAstroReportDocument = (doc) => {
         const rows = [];
         doc.querySelectorAll("tr").forEach((row) => {
-          const compact = String(row.innerText || row.textContent || "").replace(/\s+/g, " ").trim();
-          const match = compact.match(/^(B\d{1,2}:\d{2}:\d{2}:\d{2})\s+([A-Za-z]+)\s+([A-Za-z]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+(Yes))?$/i);
-          if (!match) return;
+          const cells = [...row.querySelectorAll(":scope > td")];
+          if (cells.length < 5) return;
+          const coordLink = cells[0].querySelector('a[href*="loc="]');
+          const coord = String(coordLink?.textContent || cells[0].textContent || "")
+            .trim()
+            .toUpperCase();
+          if (!/^B\d{1,2}:\d{2}:\d{2}:\d{2}$/.test(coord)) return;
+          const attributes = [...cells[3].querySelectorAll("span")]
+            .map((span) => Number(String(span.textContent || "").trim()))
+            .filter(Number.isFinite);
+          if (attributes.length !== 6) {
+            attributes.splice(
+              0,
+              attributes.length,
+              ...((String(cells[3].textContent || "").match(/\d+/g) || []).map(Number))
+            );
+          }
+          if (attributes.length !== 6) return;
           rows.push({
-            coord: match[1].toUpperCase(),
-            terrain: match[2],
-            type: match[3],
-            attributes: match.slice(4, 10).map(Number),
-            hasBase: Boolean(match[10])
+            coord,
+            terrain: String(cells[1].textContent || "").trim(),
+            type: String(cells[2].textContent || "").trim(),
+            attributes,
+            hasBase: /^yes$/i.test(String(cells[4].textContent || "").trim())
           });
         });
         return rows;
       };
       const reportIsCapped = (doc) => /Only the first 250 astros are displayed/i.test(doc.body?.innerText || "");
       const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-      let reportRequestGapMs = 1800;
+      let reportRequestGapMs = 3500;
       let lastReportRequestAt = 0;
       const paceReportRequest = async () => {
         const remaining = reportRequestGapMs - (Date.now() - lastReportRequestAt);
@@ -1548,7 +1564,7 @@
         for (let attempt = 1; attempt <= 6; attempt += 1) {
           await paceReportRequest();
           reportRequestCount += 1;
-          setProgress(`Collecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
+          setProgress(`VisionBot exporter ${exporterVersion}\nCollecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
           const response = await fetch("/report.aspx?view=astros", {
             method: "POST",
             credentials: "same-origin",
@@ -1562,7 +1578,7 @@
             })
           });
           if (response.status === 429 && attempt < 6) {
-            reportRequestGapMs = Math.max(reportRequestGapMs, 3500);
+            reportRequestGapMs = Math.max(reportRequestGapMs, 7000);
             const waitMs = retryAfterMilliseconds(response, attempt);
             setProgress(`Astro Empires rate limit reached. Retrying in ${Math.ceil(waitMs / 1000)} seconds...`);
             await sleep(waitMs);
@@ -1570,7 +1586,12 @@
           }
           if (!response.ok) throw new Error(`Astro report request failed (${response.status}).`);
           const doc = new DOMParser().parseFromString(await response.text(), "text/html");
-          return { rows: parseAstroReportDocument(doc), capped: reportIsCapped(doc) };
+          const rows = parseAstroReportDocument(doc);
+          const returnedCoords = doc.querySelectorAll('a[href*="map.aspx?loc=B"]').length;
+          if (returnedCoords > 0 && rows.length === 0) {
+            throw new Error(`Astro report parser recognized 0 of ${returnedCoords} returned rows.`);
+          }
+          return { rows, capped: reportIsCapped(doc) };
         }
         throw new Error("Astro report remained rate limited after several retries. Please wait a few minutes and try again.");
       };
@@ -1691,7 +1712,7 @@
           `VisionBot import complete for ${exportGalaxy}: ${result.systems} systems, `
           + `${result.bases} bases, ${result.astros} astros, ${result.fleetMovements || 0} movements, `
           + `${result.incoming} hostile incoming, ${result.battleReports || 0} battles, `
-          + `${result.occupations || 0} occupations${isAstroReport ? ` (${reportRequestCount} report requests)` : ""}`
+          + `${result.occupations || 0} occupations${isAstroReport ? ` (${reportRequestCount} report requests, exporter ${exporterVersion})` : ""}`
         );
       } catch (error) {
         console.error(error);
