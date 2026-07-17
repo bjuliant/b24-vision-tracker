@@ -50,7 +50,7 @@ Prefix a command with `!` to get the reply privately. Prefix the same command wi
 
 - `/map [galaxy] [coord]` opens that galaxy once without changing any saved default, for example `/map B23`.
 - `!galaxy [galaxy]` sets your personal default galaxy; `!g` remains a short alias.
-- `$setgalaxy [galaxy]` sets the current Telegram room's default galaxy.
+- `$setgroup [galaxy]` sets the current Telegram room's default galaxy. `$setgalaxy` remains an alias.
 - `$guild bind` remembers the current group as your active operation group for later DM commands.
 - `!guild status` shows your active operation group.
 - `![coord]` sends planet intel to the user by private message.
@@ -174,7 +174,7 @@ Lysander supports multiple Borealis galaxies without mixing their intel or opera
 
 - Use `/map B23` for a one-time B23 map without changing your defaults.
 - Use `!galaxy B23` in DM or a group to save your personal default.
-- Use `$setgalaxy B23` in an approved Telegram room to make that room operate in B23.
+- Use `$setgroup B23` in an approved Telegram room to make that room operate in B23. `$setgalaxy` remains an alias.
 - Copy the exporter separately from each galaxy map. A B23 exporter imports only B23 data, while a B24 exporter imports only B24 data.
 
 A B23 room and a B24 room can therefore create claims, scouting agendas, and attacks at the same time using the same bot and database.
