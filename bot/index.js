@@ -3728,8 +3728,11 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   const pageInfo = parsePageFromQuery(query);
   query = pageInfo.query;
   const queryCommand = galaxyOverride ? `${galaxy} ${query}` : query;
-  const scopeId = await operationScopeId(ctx);
-  const [savedRows, importedRows, annotations] = await Promise.all([
+  const scopeId = await operationScopeId(ctx).catch((error) => {
+    console.error("Base report scope lookup failed", error);
+    return "";
+  });
+  const baseLookups = await Promise.allSettled([
     fetchRows("b24_user_bases", {
       status: "eq.active"
     }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" }),
@@ -3738,13 +3741,12 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
       chat_id: `eq.${scopeId}`
     }, { mapId: galaxyToMapId(galaxy), order: "coord.asc" }) : []
   ]);
-  const stances = await fetchStanceMap(galaxy);
-  const canManageOperations = Boolean(scopeId && await safeUserCanUseOfficerCommands(ctx));
-  const activeOperations = canManageOperations
-    ? await fetchActiveOperations(galaxy, scopeId)
-    : [];
-  const activeAttackPlans = activeOperations.filter((operation) => operation.type === "attack");
-  const addPlan = newestAttackPlan(activeAttackPlans);
+  const [savedRows, importedRows, annotations] = baseLookups.map((result, index) => {
+    if (result.status === "fulfilled") return Array.isArray(result.value) ? result.value : [];
+    const labels = ["saved bases", "imported bases", "intel annotations"];
+    console.error(`Base report ${labels[index]} lookup failed`, result.reason);
+    return [];
+  });
 
   const needle = searchText(query);
   const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
@@ -3768,6 +3770,17 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   if (!savedMatches.length && !importedMatches.length && !annotationMatches.length) {
     return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
   }
+
+  const stances = await fetchStanceMap(galaxy);
+  const canManageOperations = Boolean(scopeId && await safeUserCanUseOfficerCommands(ctx));
+  const activeOperations = canManageOperations
+    ? await fetchActiveOperations(galaxy, scopeId).catch((error) => {
+      console.error("Base report operation lookup failed", error);
+      return [];
+    })
+    : [];
+  const activeAttackPlans = activeOperations.filter((operation) => operation.type === "attack");
+  const addPlan = newestAttackPlan(activeAttackPlans);
 
   const owners = [...new Set([
     ...savedMatches.map((row) => row.owner_label || query),
