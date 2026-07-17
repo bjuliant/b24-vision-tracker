@@ -63,7 +63,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-17.4";
+const botBuild = "2026-07-17.5";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -393,38 +393,22 @@ async function sendMapButton(ctx) {
 }
 
 async function handleStart(ctx) {
-  const hasAccess = await userCanUseSensitiveCommands(ctx);
   const lines = [
     "<b>Lysander</b>",
     "Guild intel and operations assistant.",
     "",
-    hasAccess ? "Access: active" : "Access: not active yet",
-    "",
     "Start here:",
     "<code>!enlist</code> - request or refresh your access",
-    "<code>!help</code> - show normal commands",
-    "<code>!map</code> - open the map after access is active"
+    "<code>!next</code> - show your current next step",
+    "<code>!help</code> - show normal commands"
   ];
-  const options = { parse_mode: "HTML" };
-  if (hasAccess) {
-    const galaxy = await galaxyForContext(ctx);
-    const scopeId = await operationScopeId(ctx);
-    const accessUrl = mapUrlForContext(ctx, galaxy, "", scopeId);
-    Object.assign(options, Markup.inlineKeyboard([
-      [
-        Markup.button.url("Open Map", accessUrl),
-        Markup.button.callback("Next", "quick:next")
-      ]
-    ]));
-  }
-  return ctx.reply(lines.join("\n"), options);
+  return ctx.reply(lines.join("\n"), {
+    parse_mode: "HTML",
+    ...Markup.inlineKeyboard([[Markup.button.callback("Next", "quick:next")]])
+  });
 }
 
 async function handleQuickNextButton(ctx) {
-  if (!(await userCanUseSensitiveCommands(ctx))) {
-    await ctx.answerCbQuery("You do not have permission for next actions.");
-    return;
-  }
   await ctx.answerCbQuery("Next actions");
   return handleNext(ctx, "!next", "!");
 }
@@ -450,7 +434,10 @@ async function handleText(ctx) {
   if (isProtectedOperationalCommand(lower) && !(await chatApproved(ctx))) {
     return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
   }
-  if (isSensitiveOperationalCommand(lower) && !(await userCanUseSensitiveCommands(ctx))) {
+  // !next is intentionally available to pending recruits so it can explain
+  // their next onboarding step without exposing operational information.
+  const isOnboardingGuidance = isCommand(lower, "next");
+  if (isSensitiveOperationalCommand(lower) && !isOnboardingGuidance && !(await userCanUseSensitiveCommands(ctx))) {
     return respond(ctx, mode, "You do not have permission to use VisionBot operation commands.");
   }
 
@@ -460,7 +447,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "approve") || isCommand(lower, "officer") || isCommand(lower, "demote") || isCommand(lower, "ban") || isCommand(lower, "access")) {
     return handleAccessCommand(ctx, text, mode);
   }
-  if (isExactCommand(lower, "status")) return ctx.reply(await statusReport(ctx));
+  if (isExactCommand(lower, "status")) return ctx.reply(await statusReport(ctx), { parse_mode: "HTML" });
   if (isExactCommand(lower, "version")) return ctx.reply(versionReport());
   if (isCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
@@ -900,48 +887,47 @@ async function helpText(ctx, input = "") {
 
   const status = await safeHelpStatus(ctx);
   return [
-    "<b>VisionBot Commands</b>",
+    "<b>Lysander</b>",
     "",
-    "<code>!</code> replies to you privately. In DMs, it uses APP's shared scope.",
-    "<code>$</code> posts in the current approved APP room.",
-    "Use <code>/start</code> once before private commands.",
+    "<code>!</code> replies to you privately. In an approved APP room, <code>$</code> posts to the room.",
+    "Use <code>!next</code> whenever you are unsure what comes next.",
     "",
     status,
     "",
-    "<b>CREATE</b>",
-    "<code>!attack 02:00 clowntown 4</code>",
-    "<code>!attacks</code> / <code>!attack add 1 [coords]</code>",
-    "<code>$attack [target] [eta-min] [note]</code>",
-    "<code>$sos [defended] [hostile] [eta-min] [note]</code>",
-    "<code>$report [attacker] [defended] [eta] [size]</code>",
-    "<code>$scout [coord] [due-min] [note]</code>",
-    "",
-    "<b>PARTICIPATE</b>",
-    "<code>!take [attack-ID] [coord] [arrival-time]</code>",
-    "<code>!join A-7K4P9 [travel-min] [role]</code>",
-    "<code>!respond D-4M8Q2 [travel-min] [role]</code>",
-    "<code>!ready [ID]</code>  <code>!sent [ID]</code>  <code>!leave [ID]</code>",
-    "",
-    "<b>MANAGE</b>",
-    "<code>$board [attack|defense|scout]</code>  <code>$scouts</code>  <code>/board</code>",
-    "<code>$op [ID]</code>  <code>$standdown [ID] [reason]</code>",
+    "<b>START</b>",
+    "<code>!enlist</code> - request APP access",
+    "<code>!next</code> - your setup, watches, and urgent work",
+    "<code>!g B23</code> - switch your personal galaxy",
+    "<code>/map</code> - open the galaxy map",
     "",
     "<b>INTEL</b>",
-    "<code>![coord]</code>  <code>$[coord]</code>",
-    "<code>!intel</code>  <code>!sectors [APP]</code>  <code>!stale</code>  <code>!score</code>",
-    "<code>!history [coord]</code>  <code>!occupied [player|guild|region]</code>",
-    "<code>!friend [tag|coord]</code>  <code>!enemy [tag|coord]</code>",
+    "<code>![coord]</code> - coordinate or system intel",
+    "<code>!bases [player|tag]</code> - known bases",
+    "<code>!astros [filters]</code> - search astros",
+    "<code>!history [coord]</code> - battle and occupation history",
     "",
-    "<b>PERSONAL</b>",
-    "<code>!next</code>  <code>!me</code>  <code>!mine [coord]</code>  <code>!bases [player]</code>",
-    "<code>!buildplan [1-16]</code> - guild base doctrine",
+    "<b>SCOUT AND WATCH</b>",
+    "<code>!scouts</code> - active scouting agendas",
+    "<code>!watches</code> - your watch commitments",
+    "<code>!scout [coord]</code> - claim or request a scout",
+    "",
+    "<b>OPERATIONS</b>",
+    "<code>!attacks</code> - current attack plans",
+    "<code>!claimed</code> - your commitments",
+    "<code>!incoming</code> - incoming near saved bases",
+    "<code>!next</code> - your immediate actions",
+    "",
+    "<b>EMPIRE</b>",
+    "<code>!me</code> - profile and saved bases",
+    "<code>!mine [coord]</code> - save one of your bases",
+    "<code>!buildplan [1-16]</code> - base doctrine",
     "<code>!researchplan [1-16]</code> - expansion research doctrine",
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, history, incoming, bases, doctrine, guild, alerts, aliases",
+    "Topics: setup, attack, defense, scout, intel, bases, incoming, doctrine, aliases",
     "",
-    "Officers: <code>$ohelp</code>"
+    "Officer reference: <code>$ohelp</code>"
   ].join("\n");
 }
 
@@ -973,22 +959,21 @@ function officerHelpText() {
 
 function basicHelpText() {
   return [
-    "Lysander Commands",
+    "Lysander",
     "",
-    "/status - check bot status",
+    "!enlist - request APP access",
+    "!next - see your next step",
     "/map - open the map",
-    "$help - public help in an approved group",
-    "!help - private help",
-    "$incoming - show incoming",
-    "$report attacker defended eta size - report incoming",
-    "$astros B24 craters a85 m4 c2 - search astros",
-    "$bases [TAG] - list known bases",
-    "!history [coord] - battle history",
-    "!occupied [filter] - current occupations",
-    "!buildplan [1-16] - base doctrine",
-    "!researchplan [1-16] - expansion research doctrine",
+    "![coord] - coordinate intel",
+    "!bases [player|tag] - known bases",
+    "!astros [filters] - search astros",
+    "!attacks - attack plans",
+    "!scouts - scouting agendas",
+    "!watches - your watch commitments",
+    "!me / !mine [coord] - your bases",
+    "!buildplan [1-16] / !researchplan [1-16] - doctrine",
     "",
-    "Full help had a temporary problem. Check Render logs for the line after: help command failed."
+    "Try !help [topic] for more detail."
   ].join("\n");
 }
 
@@ -1087,7 +1072,43 @@ function explicitGalaxyFromText(text) {
 
 async function statusReport(ctx) {
   const galaxy = await galaxyForContext(ctx);
-  return `VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nBuild: ${botBuild}\nServer: Borealis\nGalaxy: ${galaxy}\nChat: ${ctx.chat?.id || "unknown"}`;
+  const scopeId = await operationScopeId(ctx).catch(() => "");
+  const roomApproved = await chatApproved(ctx).catch(() => false);
+  const hasAccess = await safeUserCanUseSensitiveCommands(ctx);
+  const isOfficer = await safeUserCanUseOfficerCommands(ctx);
+  let access = null;
+  try {
+    if (scopeId && ctx.from?.id) access = await fetchAccessMember(scopeId, telegramUserId(ctx));
+  } catch (error) {
+    console.error("status access lookup failed", error?.message || error);
+  }
+  const accessLabel = access?.status === "banned"
+    ? "blocked"
+    : hasAccess
+      ? "active"
+      : access?.status === "pending"
+        ? "pending approval"
+        : "not enlisted";
+  const roomLabel = isPrivateChat(ctx) ? "Private DM" : chatTitle(ctx);
+  const lines = [
+    "<b>Lysander Status</b>",
+    `Online: ${webhookUrl ? "webhook" : "polling"}`,
+    `Build: <code>${escapeHtml(botBuild)}</code>`,
+    "Server: Borealis",
+    `Galaxy: ${escapeHtml(galaxy)}`,
+    `Room: ${escapeHtml(roomLabel)}`,
+    `Room access: ${roomApproved ? "approved" : "not approved"}`,
+    `APP access: ${accessLabel}`,
+    `Operation scope: ${scopeId ? "APP configured" : "not configured"}`
+  ];
+  if (isPrivateChat(ctx)) lines.push(`Private commands: ${hasAccess ? "ready" : "not ready"}`);
+  if (isOfficer) {
+    lines.push("", "<b>Officer Diagnostics</b>");
+    lines.push(`Room ID: <code>${escapeHtml(ctx.chat?.id || "unknown")}</code>`);
+    lines.push(`Scope ID: <code>${escapeHtml(scopeId || "none")}</code>`);
+    lines.push(`Access record: ${access ? "found" : "missing"}`);
+  }
+  return lines.join("\n");
 }
 
 function versionReport() {
@@ -1481,6 +1502,15 @@ async function safeUserCanUseOfficerCommands(ctx) {
     return await userCanUseOfficerCommands(ctx);
   } catch (error) {
     console.error("officer permission lookup failed", error?.message || error);
+    return false;
+  }
+}
+
+async function safeUserCanUseSensitiveCommands(ctx) {
+  try {
+    return await userCanUseSensitiveCommands(ctx);
+  } catch (error) {
+    console.error("member permission lookup failed", error?.message || error);
     return false;
   }
 }
@@ -3903,11 +3933,44 @@ async function handleNext(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !next in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
+  if (!scopeId) {
+    return respond(ctx, mode, [
+      "<b>Next Step</b>",
+      "No APP operation room is configured yet.",
+      "An APP officer must run <code>$approvechat</code> in the operation room first."
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+
+  const userId = telegramUserId(ctx);
+  let access = null;
+  try {
+    access = await fetchAccessMember(scopeId, userId);
+  } catch (error) {
+    console.error("next access lookup failed", error?.message || error);
+  }
+  const hasAccess = await safeUserCanUseSensitiveCommands(ctx);
+  if (!hasAccess) {
+    if (access?.status === "banned") {
+      return respond(ctx, mode, "<b>Access Blocked</b>\nContact an APP officer if you believe this is a mistake.", { parse_mode: "HTML" });
+    }
+    if (access?.status === "pending") {
+      return respond(ctx, mode, [
+        "<b>Enlistment Pending</b>",
+        "Your APP enlistment is waiting for officer approval.",
+        "An officer can approve you with <code>$approve</code> by replying to one of your messages."
+      ].join("\n"), { parse_mode: "HTML" });
+    }
+    return respond(ctx, mode, [
+      "<b>Next Step</b>",
+      "Request APP access with <code>!enlist</code>.",
+      "After approval, run <code>!next</code> again for your personal setup steps."
+    ].join("\n"), { parse_mode: "HTML" });
+  }
+
   const scope = parseNextScope(text);
   const [memberships, bases] = await Promise.all([
     fetchRows("b24_operation_members", {
-      user_id: `eq.${telegramUserId(ctx)}`
+      user_id: `eq.${userId}`
     }, { mapId: galaxyToMapId(galaxy), order: "updated_at.asc" }),
     fetchRows("b24_user_bases", {
       user_id: `eq.${telegramUserId(ctx)}`,
@@ -3925,6 +3988,26 @@ async function handleNext(ctx, text, mode) {
   const filteredIncoming = incoming
     .filter((row) => new Date(row.arrival_at).getTime() <= Date.now() + scope.hours * 60 * 60 * 1000);
 
+  const setupLines = bases.length
+    ? [
+      "<b>Empire</b>",
+      `Saved bases: ${bases.length}`,
+      "Review them with <code>!me bases</code>."
+    ]
+    : [
+      "<b>Setup</b>",
+      `Save one of your bases: <code>!mine ${galaxy}:06:10:20</code>`,
+      `Working galaxy: ${escapeHtml(galaxy)}. Change it with <code>!g B23</code> when needed.`,
+      "Then run <code>!next</code> again."
+    ];
+  const readyLines = scope.kind === "all" && !filteredOps.length && !filteredIncoming.length
+    ? [
+      "",
+      "<b>Ready for Operations</b>",
+      "Check <code>!attacks</code>, <code>!scouts</code>, or <code>!watches</code> for shared work."
+    ]
+    : [];
+
   const lines = [
     `<b>${galaxy} Next Actions</b>`,
     `${scope.label}`,
@@ -3939,9 +4022,8 @@ async function handleNext(ctx, text, mode) {
       ? [`<pre>${filteredIncoming.slice(0, 8).map(formatIncomingLine).join("\n")}</pre>`]
       : ["No active incoming matched your saved bases."]),
     "",
-    `<b>Empire</b>`,
-    `Saved bases: ${bases.length}`,
-    bases.length ? `Use <code>!me bases</code> to list them.` : `Add one with <code>!mine ${galaxy}:06:10:20</code>.`,
+    ...setupLines,
+    ...readyLines,
     "",
     "Views: <code>!next combat</code>, <code>!next empire</code>, <code>!next 24h</code>"
   ];
