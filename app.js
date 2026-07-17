@@ -1410,9 +1410,155 @@
     return `javascript:(async()=>{const G=${JSON.stringify(galaxy)},A=${JSON.stringify(miniAppAccess)},API=${JSON.stringify(endpoint)},txt=document.body.innerText||'',html=document.documentElement.innerHTML,re3=new RegExp(G+':\\\\d{2}:\\\\d{2}(?!:)','g'),re4=new RegExp(G+':\\\\d{2}:\\\\d{2}:\\\\d{2}','g');const systems=[...new Set(html.match(re3)||[])].map(coord=>({coord})),bases=[];if(typeof mapToolBox_data!=='undefined'){for(const value of Object.values(mapToolBox_data||{})){const raw=String(value||''),coord=(raw.match(re4)||[])[0];if(!coord)continue;const guild=(raw.match(/\\[[A-Za-z0-9 _-]{1,12}\\]/)||[])[0]||'',label=raw.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/\\s+/g,' ').replace(coord,' ').trim();bases.push({coord,guild,label})}}if(typeof mapPlayer!=='undefined'&&Array.isArray(mapPlayer)){for(const value of mapPlayer){const parts=String(value||'').split('•');if(parts[0]!=='0'||!/^base\\d+$/i.test(parts[1]||''))continue;const coord=String(parts[3]||'').toUpperCase();if(!coord.startsWith(G+':')||coord.split(':').length!==4)continue;bases.push({coord,guild:'',label:String(parts[2]||'').trim(),sourceKind:'personal_base'})}}const astros=[];for(const line of txt.split(/\\r?\\n/)){const coord=(line.match(re4)||[])[0];if(!coord)continue;const m=line.replace(coord,'').trim().match(/^([A-Za-z]+)\\s+([A-Za-z]+)\\s+((?:\\d+\\s+){5}\\d+)(?:\\s+(Yes))?/);if(m)astros.push({coord,terrain:m[1],type:m[2],attributes:m[3].trim().split(/\\s+/).map(Number),hasBase:m[4]==='Yes'})}const pageCoord=(txt.match(re4)||[])[0]||'',fleetMovements=[];document.querySelectorAll('tr').forEach(tr=>{const cells=[...tr.querySelectorAll('td,th')],v=cells.map(td=>td.innerText.trim());if(v.length<4||!/\\d{1,4}:\\d{2}(?::\\d{2})?/.test(v[2]||''))return;const loc=cells[1]?.querySelector('a[href*="loc="]'),baseFleetTable=!loc&&/base\\.aspx/i.test(location.pathname)&&/Fleet\\s+Player\\s+Arrival\\s+Size/i.test(tr.closest('table')?.innerText||'');if(!loc&&!baseFleetTable)return;const playerCell=loc?cells[0]:cells[1],fleetLink=cells[0]?.querySelector('a[href*="fleet="]')||cells[3]?.querySelector('a[href*="fleet="]'),profile=playerCell?.querySelector('a[href*="player="]'),coord=decodeURIComponent((((loc?.href||'').match(/loc=([^&]+)/)||[])[1]||(v[1].match(re4)||[])[0]||(baseFleetTable?pageCoord:'')||'')).toUpperCase();if(!coord||!coord.startsWith(G+':'))return;fleetMovements.push({defendedCoord:coord,eta:v[2],size:(v[3].match(/[\\d,]+/)||[])[0]||'',player:playerCell?.innerText.trim()||'',playerId:((profile?.href||'').match(/player=(\\d+)/)||[])[1]||'',fleetId:((fleetLink?.href||'').match(/fleet=(\\d+)/)||[])[1]||'',fleetName:loc?'':v[0],rawLine:tr.innerText.replace(/\\s+/g,' ').trim(),sourceKind:loc?'scanner':'base_fleet'})});const unique=rows=>[...new Map(rows.map(row=>[row.coord,row])).values()];try{const response=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access:A,intel:{systems:unique(systems),bases:unique(bases),astros:unique(astros),fleetMovements,sourceText:txt,sourceUrl:location.href}})}),result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Import failed');alert('VisionBot import complete for '+G+': '+result.systems+' systems, '+result.bases+' bases, '+result.astros+' astros, '+(result.fleetMovements||0)+' movements, '+result.incoming+' hostile incoming, '+(result.battleReports||0)+' battles, '+(result.occupations||0)+' occupations')}catch(error){console.error(error);alert('VisionBot import failed: '+error.message)}})()`;
   }
 
+  function signedExporterBookmarkletV4() {
+    const options = {
+      galaxy,
+      access: miniAppAccess,
+      api: `${botApiUrl}/api/miniapp/import`
+    };
+
+    async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
+      const text = document.body.innerText || "";
+      const html = document.documentElement.innerHTML;
+      const systemPattern = new RegExp(`${activeGalaxy}:\\d{2}:\\d{2}(?!:)`, "g");
+      const astroPattern = new RegExp(`${activeGalaxy}:\\d{2}:\\d{2}:\\d{2}`, "g");
+      const systems = [...new Set(html.match(systemPattern) || [])].map((coord) => ({ coord }));
+      const bases = [];
+
+      const addPersonalBase = (coordValue, labelValue) => {
+        const coord = String(coordValue || "").toUpperCase();
+        if (!coord.startsWith(`${activeGalaxy}:`) || coord.split(":").length !== 4) return;
+        bases.push({
+          coord,
+          guild: "",
+          label: String(labelValue || "").trim(),
+          sourceKind: "personal_base"
+        });
+      };
+
+      if (typeof globalThis.mapToolBox_data !== "undefined") {
+        for (const value of Object.values(globalThis.mapToolBox_data || {})) {
+          const raw = String(value || "");
+          const coord = (raw.match(astroPattern) || [])[0];
+          if (!coord) continue;
+          const guild = (raw.match(/\[[A-Za-z0-9 _-]{1,12}\]/) || [])[0] || "";
+          let label = raw
+            .replace(/<[^>]*>/g, " ")
+            .replace(/&nbsp;/g, " ")
+            .replace(coord, " ")
+            .replace(/^\s*\d{1,2}-;-\s*/, " ");
+          if (guild) label = label.split(guild).join(" ");
+          label = label.replace(/\s+/g, " ").trim();
+          bases.push({ coord, guild, label, sourceKind: "map_intel" });
+        }
+      }
+
+      if (Array.isArray(globalThis.mapPlayer)) {
+        for (const value of globalThis.mapPlayer) {
+          const parts = String(value || "").split("•");
+          if (parts[0] !== "0" || !/^base\d+$/i.test(parts[1] || "")) continue;
+          addPersonalBase(parts[3], parts[2]);
+        }
+      }
+
+      const personalCoords = Array.isArray(globalThis.mapPlayerLocFull)
+        ? String(globalThis.mapPlayerLocFull[0] || "").split(";").filter(Boolean)
+        : [];
+      const personalLabels = Array.isArray(globalThis.mapPlayerLocLabel)
+        ? String(globalThis.mapPlayerLocLabel[0] || "").split(";")
+        : [];
+      personalCoords.forEach((coord, index) => addPersonalBase(coord, personalLabels[index]));
+
+      const astros = [];
+      for (const line of text.split(/\r?\n/)) {
+        const coord = (line.match(astroPattern) || [])[0];
+        if (!coord) continue;
+        const match = line
+          .replace(coord, "")
+          .trim()
+          .match(/^([A-Za-z]+)\s+([A-Za-z]+)\s+((?:\d+\s+){5}\d+)(?:\s+(Yes))?/);
+        if (!match) continue;
+        astros.push({
+          coord,
+          terrain: match[1],
+          type: match[2],
+          attributes: match[3].trim().split(/\s+/).map(Number),
+          hasBase: match[4] === "Yes"
+        });
+      }
+
+      const pageCoord = (text.match(astroPattern) || [])[0] || "";
+      const fleetMovements = [];
+      document.querySelectorAll("tr").forEach((row) => {
+        const cells = [...row.querySelectorAll("td,th")];
+        const values = cells.map((cell) => cell.innerText.trim());
+        if (values.length < 4 || !/\d{1,4}:\d{2}(?::\d{2})?/.test(values[2] || "")) return;
+        const locationLink = cells[1]?.querySelector('a[href*="loc="]');
+        const baseFleetTable = !locationLink
+          && /base\.aspx/i.test(location.pathname)
+          && /Fleet\s+Player\s+Arrival\s+Size/i.test(row.closest("table")?.innerText || "");
+        if (!locationLink && !baseFleetTable) return;
+        const playerCell = locationLink ? cells[0] : cells[1];
+        const fleetLink = cells[0]?.querySelector('a[href*="fleet="]')
+          || cells[3]?.querySelector('a[href*="fleet="]');
+        const profileLink = playerCell?.querySelector('a[href*="player="]');
+        const coord = decodeURIComponent(
+          ((locationLink?.href || "").match(/loc=([^&]+)/) || [])[1]
+          || (values[1].match(astroPattern) || [])[0]
+          || (baseFleetTable ? pageCoord : "")
+          || ""
+        ).toUpperCase();
+        if (!coord || !coord.startsWith(`${activeGalaxy}:`)) return;
+        fleetMovements.push({
+          defendedCoord: coord,
+          eta: values[2],
+          size: (values[3].match(/[\d,]+/) || [])[0] || "",
+          player: playerCell?.innerText.trim() || "",
+          playerId: ((profileLink?.href || "").match(/player=(\d+)/) || [])[1] || "",
+          fleetId: ((fleetLink?.href || "").match(/fleet=(\d+)/) || [])[1] || "",
+          fleetName: locationLink ? "" : values[0],
+          rawLine: row.innerText.replace(/\s+/g, " ").trim(),
+          sourceKind: locationLink ? "scanner" : "base_fleet"
+        });
+      });
+
+      const uniqueByCoord = (rows) => [...new Map(rows.map((row) => [row.coord, row])).values()];
+      try {
+        const response = await fetch(api, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            access,
+            intel: {
+              systems: uniqueByCoord(systems),
+              bases: uniqueByCoord(bases),
+              astros: uniqueByCoord(astros),
+              fleetMovements,
+              sourceText: text,
+              sourceUrl: location.href
+            }
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || "Import failed");
+        alert(
+          `VisionBot import complete for ${activeGalaxy}: ${result.systems} systems, `
+          + `${result.bases} bases, ${result.astros} astros, ${result.fleetMovements || 0} movements, `
+          + `${result.incoming} hostile incoming, ${result.battleReports || 0} battles, `
+          + `${result.occupations || 0} occupations`
+        );
+      } catch (error) {
+        console.error(error);
+        alert(`VisionBot import failed: ${error.message}`);
+      }
+    }
+
+    return `javascript:(${visionBotExporter.toString()})(${JSON.stringify(options)})`;
+  }
+
   async function copyBookmarklet() {
     if (miniAppSession) {
-      const code = signedExporterBookmarkletV3();
+      const code = signedExporterBookmarkletV4();
       try {
         await navigator.clipboard.writeText(code);
         importResult.textContent = "Secure bookmarklet copied. Recopy it after your /map link expires.";
