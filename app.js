@@ -1528,24 +1528,51 @@
         return rows;
       };
       const reportIsCapped = (doc) => /Only the first 250 astros are displayed/i.test(doc.body?.innerText || "");
+      const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+      let reportRequestGapMs = 1800;
+      let lastReportRequestAt = 0;
+      const paceReportRequest = async () => {
+        const remaining = reportRequestGapMs - (Date.now() - lastReportRequestAt);
+        if (remaining > 0) await sleep(remaining);
+        lastReportRequestAt = Date.now();
+      };
+      const retryAfterMilliseconds = (response, attempt) => {
+        const header = response.headers.get("Retry-After");
+        const seconds = Number(header);
+        const headerDelay = Number.isFinite(seconds)
+          ? seconds * 1000
+          : Math.max(0, Date.parse(header || "") - Date.now());
+        return Math.min(120000, Math.max(headerDelay || 0, 30000 + ((attempt - 1) * 15000)));
+      };
       const fetchAstroReport = async ({ terrain = "", astroType = "", solarPos = "0" }) => {
-        reportRequestCount += 1;
-        setProgress(`Collecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
-        const response = await fetch("/report.aspx?view=astros", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            form_status: "submitted",
-            galaxy: String(selectedGalaxyOption?.value || exportGalaxy.replace(/^B/, "")),
-            terrain,
-            astro_type: astroType,
-            solar_pos: solarPos
-          })
-        });
-        if (!response.ok) throw new Error(`Astro report request failed (${response.status}).`);
-        const doc = new DOMParser().parseFromString(await response.text(), "text/html");
-        return { rows: parseAstroReportDocument(doc), capped: reportIsCapped(doc) };
+        for (let attempt = 1; attempt <= 6; attempt += 1) {
+          await paceReportRequest();
+          reportRequestCount += 1;
+          setProgress(`Collecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
+          const response = await fetch("/report.aspx?view=astros", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              form_status: "submitted",
+              galaxy: String(selectedGalaxyOption?.value || exportGalaxy.replace(/^B/, "")),
+              terrain,
+              astro_type: astroType,
+              solar_pos: solarPos
+            })
+          });
+          if (response.status === 429 && attempt < 6) {
+            reportRequestGapMs = Math.max(reportRequestGapMs, 3500);
+            const waitMs = retryAfterMilliseconds(response, attempt);
+            setProgress(`Astro Empires rate limit reached. Retrying in ${Math.ceil(waitMs / 1000)} seconds...`);
+            await sleep(waitMs);
+            continue;
+          }
+          if (!response.ok) throw new Error(`Astro report request failed (${response.status}).`);
+          const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+          return { rows: parseAstroReportDocument(doc), capped: reportIsCapped(doc) };
+        }
+        throw new Error("Astro report remained rate limited after several retries. Please wait a few minutes and try again.");
       };
       const collectFullAstroReport = async () => {
         const terrainValues = [...document.querySelectorAll('select[name="terrain"] option')]
