@@ -9,6 +9,7 @@ import {
   formatOccupiedTelegram,
   validateMiniAppHistoryRequest
 } from "./battle-history.js";
+import { resolveCommandMatches } from "./command-routing.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -59,7 +60,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-16.3";
+const botBuild = "2026-07-16.4";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -439,7 +440,7 @@ async function handleText(ctx) {
   text = canonicalizeCommandText(text);
   const lower = text.trim().toLowerCase();
 
-  if (isCommand(lower, "approvechat")) return handleApproveChat(ctx, text, mode);
+  if (isExactCommand(lower, "approvechat")) return handleApproveChat(ctx, text, mode);
 
   if (isProtectedOperationalCommand(lower) && !(await chatApproved(ctx))) {
     return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
@@ -1084,11 +1085,9 @@ function versionReport() {
 }
 
 function isCommand(lowerText, command) {
-  const lower = String(lowerText || "").trim();
-  const parsed = commandToken(lower);
+  const parsed = commandToken(lowerText);
   if (!parsed.name) return false;
-  const aliases = commandAliases(command);
-  return aliases.some((alias) => alias.startsWith(parsed.name));
+  return matchingCommands(parsed.name).includes(command);
 }
 
 function isExactCommand(lowerText, command) {
@@ -1113,17 +1112,7 @@ function commandAliases(command) {
 }
 
 function matchingCommands(name) {
-  const exactMatches = new Set();
-  for (const command of canonicalCommands) {
-    if (commandAliases(command).includes(name)) exactMatches.add(command);
-  }
-  if (exactMatches.size) return [...exactMatches];
-
-  const matches = new Set();
-  for (const command of canonicalCommands) {
-    if (commandAliases(command).some((alias) => alias.startsWith(name))) matches.add(command);
-  }
-  return [...matches];
+  return resolveCommandMatches(name, canonicalCommands, preferredCommandAliases);
 }
 
 function ambiguousCommandMatches(text) {
