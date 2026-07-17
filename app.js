@@ -1418,16 +1418,28 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
+      const normalizeGalaxy = (value) => {
+        const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
+        return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
+      };
+      const isAstroReport = /\/report\.aspx$/i.test(location.pathname)
+        && new URLSearchParams(location.search).get("view") === "astros";
+      const galaxySelect = document.querySelector('select[name="galaxy"]');
+      const selectedGalaxyOption = galaxySelect?.selectedOptions?.[0];
+      const exportGalaxy = isAstroReport
+        ? normalizeGalaxy(selectedGalaxyOption?.textContent || selectedGalaxyOption?.value)
+        : activeGalaxy;
+      if (!exportGalaxy) throw new Error("Could not determine the selected galaxy.");
       const text = document.body.innerText || "";
       const html = document.documentElement.innerHTML;
-      const systemPattern = new RegExp(`${activeGalaxy}:\\d{2}:\\d{2}(?!:)`, "g");
-      const astroPattern = new RegExp(`${activeGalaxy}:\\d{2}:\\d{2}:\\d{2}`, "g");
-      const systems = [...new Set(html.match(systemPattern) || [])].map((coord) => ({ coord }));
+      const systemPattern = new RegExp(`${exportGalaxy}:\\d{2}:\\d{2}(?!:)`, "g");
+      const astroPattern = new RegExp(`${exportGalaxy}:\\d{2}:\\d{2}:\\d{2}`, "g");
+      let systems = [...new Set(html.match(systemPattern) || [])].map((coord) => ({ coord }));
       const bases = [];
 
       const addPersonalBase = (coordValue, labelValue) => {
         const coord = String(coordValue || "").toUpperCase();
-        if (!coord.startsWith(`${activeGalaxy}:`) || coord.split(":").length !== 4) return;
+        if (!coord.startsWith(`${exportGalaxy}:`) || coord.split(":").length !== 4) return;
         bases.push({
           coord,
           guild: "",
@@ -1469,7 +1481,7 @@
         : [];
       personalCoords.forEach((coord, index) => addPersonalBase(coord, personalLabels[index]));
 
-      const astros = [];
+      let astros = [];
       for (const line of text.split(/\r?\n/)) {
         const coord = (line.match(astroPattern) || [])[0];
         if (!coord) continue;
@@ -1485,6 +1497,98 @@
           attributes: match[3].trim().split(/\s+/).map(Number),
           hasBase: match[4] === "Yes"
         });
+      }
+
+      let reportRequestCount = 0;
+      const progress = document.createElement("div");
+      const setProgress = (message) => {
+        progress.textContent = message;
+        Object.assign(progress.style, {
+          position: "fixed", top: "12px", right: "12px", zIndex: "2147483647",
+          maxWidth: "340px", padding: "12px 16px", border: "1px solid #39a9e8",
+          borderRadius: "6px", background: "#071722", color: "#fff",
+          font: "600 14px/1.4 Arial, sans-serif", boxShadow: "0 8px 28px #000a"
+        });
+        if (!progress.isConnected) document.body.appendChild(progress);
+      };
+      const parseAstroReportDocument = (doc) => {
+        const rows = [];
+        doc.querySelectorAll("tr").forEach((row) => {
+          const compact = String(row.innerText || row.textContent || "").replace(/\s+/g, " ").trim();
+          const match = compact.match(/^(B\d{1,2}:\d{2}:\d{2}:\d{2})\s+([A-Za-z]+)\s+([A-Za-z]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)(?:\s+(Yes))?$/i);
+          if (!match) return;
+          rows.push({
+            coord: match[1].toUpperCase(),
+            terrain: match[2],
+            type: match[3],
+            attributes: match.slice(4, 10).map(Number),
+            hasBase: Boolean(match[10])
+          });
+        });
+        return rows;
+      };
+      const reportIsCapped = (doc) => /Only the first 250 astros are displayed/i.test(doc.body?.innerText || "");
+      const fetchAstroReport = async ({ terrain = "", astroType = "", solarPos = "0" }) => {
+        reportRequestCount += 1;
+        setProgress(`Collecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
+        const response = await fetch("/report.aspx?view=astros", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            form_status: "submitted",
+            galaxy: String(selectedGalaxyOption?.value || exportGalaxy.replace(/^B/, "")),
+            terrain,
+            astro_type: astroType,
+            solar_pos: solarPos
+          })
+        });
+        if (!response.ok) throw new Error(`Astro report request failed (${response.status}).`);
+        const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+        return { rows: parseAstroReportDocument(doc), capped: reportIsCapped(doc) };
+      };
+      const collectFullAstroReport = async () => {
+        const terrainValues = [...document.querySelectorAll('select[name="terrain"] option')]
+          .filter((option) => option.value && !/^any$/i.test(option.textContent.trim()))
+          .map((option) => option.value);
+        if (!terrainValues.length) throw new Error("Could not find the astro report terrain filters.");
+        const collected = [];
+        for (const terrain of terrainValues) {
+          const broad = await fetchAstroReport({ terrain });
+          if (!broad.capped) {
+            collected.push(...broad.rows);
+            continue;
+          }
+          for (let solar = 1; solar <= 5; solar += 1) {
+            const solarResult = await fetchAstroReport({ terrain, solarPos: String(solar) });
+            if (!solarResult.capped) {
+              collected.push(...solarResult.rows);
+              continue;
+            }
+            for (const astroType of ["planet", "moon"]) {
+              const splitResult = await fetchAstroReport({ terrain, astroType, solarPos: String(solar) });
+              if (splitResult.capped) {
+                throw new Error(`${terrain} ${astroType} solar position ${solar} still exceeds the report limit.`);
+              }
+              collected.push(...splitResult.rows);
+            }
+          }
+        }
+        return [...new Map(collected.map((row) => [row.coord, row])).values()];
+      };
+
+      if (isAstroReport) {
+        try {
+          astros = await collectFullAstroReport();
+          systems = [...new Set(astros.map((row) => row.coord.split(":").slice(0, 3).join(":")))]
+            .map((coord) => ({ coord }));
+          setProgress(`Collected ${astros.length.toLocaleString()} ${exportGalaxy} astros. Uploading...`);
+        } catch (error) {
+          progress.remove();
+          console.error(error);
+          alert(`VisionBot full report export failed: ${error.message}`);
+          return;
+        }
       }
 
       const pageCoord = (text.match(astroPattern) || [])[0] || "";
@@ -1508,7 +1612,7 @@
           || (baseFleetTable ? pageCoord : "")
           || ""
         ).toUpperCase();
-        if (!coord || !coord.startsWith(`${activeGalaxy}:`)) return;
+        if (!coord || !coord.startsWith(`${exportGalaxy}:`)) return;
         fleetMovements.push({
           defendedCoord: coord,
           eta: values[2],
@@ -1524,32 +1628,49 @@
 
       const uniqueByCoord = (rows) => [...new Map(rows.map((row) => [row.coord, row])).values()];
       try {
-        const response = await fetch(api, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            access,
-            intel: {
-              systems: uniqueByCoord(systems),
-              bases: uniqueByCoord(bases),
-              astros: uniqueByCoord(astros),
-              fleetMovements,
-              sourceText: text,
-              sourceUrl: location.href
-            }
-          })
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(result.error || "Import failed");
+        const astroRows = uniqueByCoord(astros);
+        const chunks = astroRows.length
+          ? Array.from({ length: Math.ceil(astroRows.length / 400) }, (_, index) => astroRows.slice(index * 400, (index + 1) * 400))
+          : [[]];
+        const result = {
+          systems: 0, bases: 0, astros: 0, fleetMovements: 0, incoming: 0,
+          battleReports: 0, fleetObservations: 0, occupations: 0, gameEvents: 0
+        };
+        for (let index = 0; index < chunks.length; index += 1) {
+          setProgress(`Uploading ${exportGalaxy} intel... batch ${index + 1} of ${chunks.length}`);
+          const first = index === 0;
+          const response = await fetch(api, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              access,
+              galaxy: exportGalaxy,
+              intel: {
+                galaxy: exportGalaxy,
+                systems: first ? uniqueByCoord(systems) : [],
+                bases: first ? uniqueByCoord(bases) : [],
+                astros: chunks[index],
+                fleetMovements: first ? fleetMovements : [],
+                sourceText: first ? text : "",
+                sourceUrl: first ? location.href : ""
+              }
+            })
+          });
+          const batchResult = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(batchResult.error || `Import batch ${index + 1} failed`);
+          Object.keys(result).forEach((key) => { result[key] += Number(batchResult[key] || 0); });
+        }
         alert(
-          `VisionBot import complete for ${activeGalaxy}: ${result.systems} systems, `
+          `VisionBot import complete for ${exportGalaxy}: ${result.systems} systems, `
           + `${result.bases} bases, ${result.astros} astros, ${result.fleetMovements || 0} movements, `
           + `${result.incoming} hostile incoming, ${result.battleReports || 0} battles, `
-          + `${result.occupations || 0} occupations`
+          + `${result.occupations || 0} occupations${isAstroReport ? ` (${reportRequestCount} report requests)` : ""}`
         );
       } catch (error) {
         console.error(error);
         alert(`VisionBot import failed: ${error.message}`);
+      } finally {
+        progress.remove();
       }
     }
 
