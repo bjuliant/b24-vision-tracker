@@ -1,6 +1,6 @@
 import { Telegraf, Markup } from "telegraf";
 import http from "node:http";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import {
   BATTLE_HISTORY_COMMAND_ALIASES,
   BATTLE_HISTORY_COMMANDS,
@@ -10,6 +10,8 @@ import {
   validateMiniAppHistoryRequest
 } from "./battle-history.js";
 import { resolveCommandMatches } from "./command-routing.js";
+import { selectGalaxyPreference } from "./galaxy-context.js";
+import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -26,6 +28,7 @@ const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
 const requireAccessControl = /^(1|true|yes)$/i.test(process.env.REQUIRE_ACCESS_CONTROL || "");
 const miniAppAccessSecret = process.env.MINI_APP_ACCESS_SECRET || token;
 const miniAppTokenMinutes = Math.max(5, Math.min(60, Number(process.env.MINI_APP_TOKEN_MINUTES || 20)));
+const miniAppExportTokenDays = Math.max(1, Math.min(90, Number(process.env.MINI_APP_EXPORT_TOKEN_DAYS || 30)));
 const primaryGuildTag = normalizeStanceTarget(process.env.PRIMARY_GUILD_TAG || "APP");
 const primaryGuildId = String(process.env.PRIMARY_GUILD_ID || "APP").trim().toUpperCase() || "APP";
 const configuredGuildScopeChatId = String(
@@ -60,13 +63,14 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-17.2";
+const botBuild = "2026-07-17.3";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
   onboardme: ["enlist", "on", "onboard", "onboardme"],
   approvechat: ["approvechat"],
   status: ["st", "status"],
+  galaxy: ["g", "galaxy"],
   buildplan: ["bp", "buildplan"],
   research: ["research"],
   researchplan: ["rp", "researchplan"],
@@ -85,7 +89,7 @@ const preferredCommandAliases = {
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "approvechat", "officer", "demote", "ban", "access",
-  "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "g", "setgalaxy", "guild",
+  "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "galaxy", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
@@ -339,7 +343,7 @@ bot.start(handleStart);
 bot.command("map", sendMapButton);
 bot.command("help", (ctx) => handleHelp(ctx, ctx.message?.text || "/help", "$"));
 bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }));
-bot.command("status", (ctx) => ctx.reply(statusReport(ctx)));
+bot.command("status", async (ctx) => ctx.reply(await statusReport(ctx)));
 bot.command("version", (ctx) => ctx.reply(versionReport()));
 bot.command("board", async (ctx) => {
   if (!(await chatApproved(ctx))) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
@@ -376,7 +380,8 @@ async function sendMapButton(ctx) {
   if (!(await userCanUseSensitiveCommands(ctx))) {
     return ctx.reply("You do not have permission to open the VisionBot map.");
   }
-  const galaxy = await galaxyForContext(ctx);
+  const requestedGalaxy = explicitGalaxyFromText(ctx.message?.text || ctx.channelPost?.text || "");
+  const galaxy = requestedGalaxy || await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   const accessUrl = mapUrlForContext(ctx, galaxy, "", scopeId);
   return ctx.reply(
@@ -455,14 +460,14 @@ async function handleText(ctx) {
   if (isCommand(lower, "approve") || isCommand(lower, "officer") || isCommand(lower, "demote") || isCommand(lower, "ban") || isCommand(lower, "access")) {
     return handleAccessCommand(ctx, text, mode);
   }
-  if (isExactCommand(lower, "status")) return ctx.reply(statusReport(ctx));
+  if (isExactCommand(lower, "status")) return ctx.reply(await statusReport(ctx));
   if (isExactCommand(lower, "version")) return ctx.reply(versionReport());
-  if (isExactCommand(lower, "map")) return sendMapButton(ctx);
+  if (isCommand(lower, "map")) return sendMapButton(ctx);
   if (isExactCommand(lower, "wakeup")) return handleWakeup(ctx, mode);
   if (isCommand(lower, "buildplan")) return handleBuildPlan(ctx, text, mode);
   if (isCommand(lower, "research")) return handleResearchDoctrine(ctx, text, mode);
   if (isCommand(lower, "researchplan")) return handleResearchPlan(ctx, text, mode);
-  if (isCommand(lower, "g")) return handleUserGalaxy(ctx, text, mode);
+  if (isCommand(lower, "galaxy")) return handleUserGalaxy(ctx, text, mode);
   if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
   if (isCommand(lower, "guild")) return handleGuild(ctx, text, mode);
 
@@ -635,10 +640,10 @@ async function helpText(ctx, input = "") {
       "",
       "<code>!enlist</code> - request APP access",
       "<code>$approvechat</code> - approve this Telegram room (officer)",
-      "<code>/map [coord]</code> - open the map",
+      "<code>/map [B23] [coord]</code> - open one galaxy without changing your defaults",
       "<code>!guild status</code> - show the shared APP operation scope",
-      "<code>!g B24</code> - set your personal galaxy",
-      "<code>$setgalaxy B24</code> - set APP's operation galaxy"
+      "<code>!galaxy B23</code> - set your personal galaxy (<code>!g</code> also works)",
+      "<code>$setgalaxy B23</code> - set this Telegram room's galaxy"
     ],
     attack: [
       "<b>Attack Help</b>",
@@ -955,7 +960,7 @@ function officerHelpText() {
     "<b>Operations</b>",
     "<code>$approvechat</code> - approve this room for APP operations",
     "<code>$approvechat status</code> - show this room's approval state",
-    "<code>$setgalaxy B24</code> - set APP's operation galaxy",
+    "<code>$setgalaxy B23</code> - set this Telegram room's galaxy",
     "<code>$attacks</code> - list active attack plans",
     "<code>$attack add [ID] [coord]</code> - add targets to a plan",
     "<code>$standdown [operation-ID] [reason]</code> - close an operation",
@@ -1073,11 +1078,16 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
-function statusReport(ctx) {
-  return `VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nBuild: ${botBuild}\nChat: ${ctx.chat?.id || "unknown"}`;
+function explicitGalaxyFromText(text) {
+  return normalizeGalaxy((String(text || "").match(galaxyPattern) || [])[0]);
+}
+
+async function statusReport(ctx) {
+  const galaxy = await galaxyForContext(ctx);
+  return `VisionBot is online.\nMode: ${webhookUrl ? "webhook" : "polling"}\nBuild: ${botBuild}\nServer: Borealis\nGalaxy: ${galaxy}\nChat: ${ctx.chat?.id || "unknown"}`;
 }
 
 function versionReport() {
@@ -2052,9 +2062,9 @@ function expandResearchTarget(target) {
 }
 
 async function handleUserGalaxy(ctx, text, mode) {
-  if (!ctx.from?.id) return respond(ctx, mode, "Use !g in a group or private chat so I know who to save.");
-  const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
-  if (!galaxy) return respond(ctx, mode, "Use: !g B24");
+  if (!ctx.from?.id) return respond(ctx, mode, "Use !galaxy in a group or private chat so I know who to save.");
+  const galaxy = explicitGalaxyFromText(text);
+  if (!galaxy) return respond(ctx, mode, "Use: !galaxy B23\nShort form: !g B23");
 
   const saved = await upsertRow("b24_user_settings", {
     user_id: telegramUserId(ctx),
@@ -2069,20 +2079,21 @@ async function handleUserGalaxy(ctx, text, mode) {
 
 async function handleChatGalaxy(ctx, text, mode) {
   if (!ctx.chat?.id) return;
-  const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
-  if (!galaxy) return respond(ctx, mode, "Use: !setgalaxy B24");
+  if (isPrivateChat(ctx)) return respond(ctx, mode, "Use !galaxy B23 in DM to set your personal galaxy.");
+  const galaxy = explicitGalaxyFromText(text);
+  if (!galaxy) return respond(ctx, mode, "Use: $setgalaxy B23");
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
 
   const saved = await upsertRow("b24_chat_settings", {
-    chat_id: String(scopeId),
+    chat_id: String(ctx.chat.id),
     galaxy,
     map_id: galaxyToMapId(galaxy),
     updated_at: new Date().toISOString()
   }, "chat_id");
 
   if (!saved) return respond(ctx, mode, "Could not save this chat's galaxy setting.");
-  return respond(ctx, mode, `APP's default galaxy is now ${galaxy}.`);
+  return respond(ctx, mode, `This Telegram room now uses ${galaxy}. APP operations remain shared, while each galaxy's data stays separate.`);
 }
 
 async function handleApproveChat(ctx, text, mode) {
@@ -5334,16 +5345,26 @@ function intelAgeLabel(value) {
 }
 
 async function galaxyForContext(ctx) {
+  const roomId = !isPrivateChat(ctx) && ctx.chat?.id ? String(ctx.chat.id) : "";
   const scopeId = await operationScopeId(ctx);
-  if (scopeId) {
-    const chat = await fetchOne("b24_chat_settings", { chat_id: scopeId }, null, false);
-    if (chat?.galaxy) return normalizeGalaxy(chat.galaxy);
-  }
-  if (ctx.from?.id) {
-    const user = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
-    if (user?.galaxy) return normalizeGalaxy(user.galaxy);
-  }
-  return defaultGalaxy;
+  const userId = telegramUserId(ctx);
+  const room = roomId
+    ? await fetchOne("b24_chat_settings", { chat_id: roomId }, null, false)
+    : null;
+  const user = userId
+    ? await fetchOne("b24_user_settings", { user_id: userId }, null, false)
+    : null;
+  const shared = scopeId && String(scopeId) !== roomId
+    ? await fetchOne("b24_chat_settings", { chat_id: String(scopeId) }, null, false)
+    : room;
+
+  return normalizeGalaxy(selectGalaxyPreference({
+    isPrivate: isPrivateChat(ctx),
+    roomGalaxy: normalizeGalaxy(room?.galaxy),
+    userGalaxy: normalizeGalaxy(user?.galaxy),
+    sharedGalaxy: normalizeGalaxy(shared?.galaxy),
+    defaultGalaxy
+  })) || defaultGalaxy;
 }
 
 async function fetchOne(table, filters, forcedMapId = null, includeMap = true) {
@@ -7204,39 +7225,42 @@ function mapUrlForContext(ctx, galaxy, loc = "", chatId = "") {
     c: String(chatId || chatScopeId(ctx) || ""),
     g: normalizeGalaxy(galaxy) || defaultGalaxy,
     l: loc || "",
+    p: "map",
     e: Date.now() + miniAppTokenMinutes * 60 * 1000
   };
-  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = createHmac("sha256", miniAppAccessSecret).update(encoded).digest("base64url");
   const separator = webAppUrl.includes("?") ? "&" : "?";
-  return `${webAppUrl}${separator}${new URLSearchParams({ gal: payload.g, v: botBuild, access: `${encoded}.${signature}` })}`;
+  return `${webAppUrl}${separator}${new URLSearchParams({ gal: payload.g, v: botBuild, access: signMiniAppToken(miniAppAccessSecret, payload) })}`;
 }
 
 function verifyMiniAppAccess(value) {
-  const [encoded, signature] = String(value || "").split(".");
-  if (!encoded || !signature || !miniAppAccessSecret) return null;
-  const expected = createHmac("sha256", miniAppAccessSecret).update(encoded).digest("base64url");
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
-    if (!payload.u || !payload.c || !normalizeGalaxy(payload.g) || Number(payload.e) <= Date.now()) return null;
-    return { ...payload, u: String(payload.u), c: String(payload.c), g: normalizeGalaxy(payload.g) };
-  } catch {
-    return null;
-  }
+  return verifyMiniAppToken(miniAppAccessSecret, value);
 }
 
-async function verifiedMiniAppSession(accessToken) {
+async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"]) {
   const session = verifyMiniAppAccess(accessToken);
   if (!session) return null;
+  if (!allowedPurposes.includes(session.p)) return null;
   if (!(await isRecognizedGuildScope(session.c))) return null;
   const member = await fetchAccessMember(session.c, session.u);
   if (!member || member.status !== "active" || !["member", "officer", "owner"].includes(member.role)) return null;
   if (accessChatIds.length && member.access_mode !== "private" &&
       !(await isMemberOfAnyAccessChat({ telegram: bot.telegram }, session.u))) return null;
   return { ...session, member };
+}
+
+function createExporterAccess(session) {
+  const expiresAt = Date.now() + miniAppExportTokenDays * 24 * 60 * 60 * 1000;
+  return {
+    access: signMiniAppToken(miniAppAccessSecret, {
+      u: session.u,
+      c: session.c,
+      g: session.g,
+      l: "",
+      p: "export",
+      e: expiresAt
+    }),
+    expiresAt
+  };
 }
 
 function miniAppContext(session) {
@@ -8455,6 +8479,20 @@ http.createServer(async (request, response) => {
       return writeJson(response, 500, { error: "Could not verify map access." });
     }
   }
+  if (path === "/api/miniapp/export-token" && request.method === "POST") {
+    try {
+      const body = await readJson(request, 16 * 1024);
+      const session = await verifiedMiniAppSession(body.access, ["map"]);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, {
+        galaxy: session.g,
+        ...createExporterAccess(session)
+      });
+    } catch (error) {
+      console.error("Mini app exporter token failed", error?.message || error);
+      return writeJson(response, 400, { error: "Could not create an exporter credential." });
+    }
+  }
   if (path === "/api/miniapp/coverage" && request.method === "GET") {
     try {
       const session = await verifiedMiniAppSession(url.searchParams.get("access"));
@@ -8564,8 +8602,8 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/import" && request.method === "POST") {
     try {
       const body = await readJson(request, 8 * 1024 * 1024);
-      const session = await verifiedMiniAppSession(body.access);
-      if (!session) return writeJson(response, 401, { error: "Exporter access expired. Recopy the bookmarklet from /map." });
+      const session = await verifiedMiniAppSession(body.access, ["map", "export"]);
+      if (!session) return writeJson(response, 401, { error: "Exporter access is invalid, expired, or revoked. Open /map and recopy it." });
       return writeJson(response, 200, await miniAppImportIntel(session, body));
     } catch (error) {
       console.error("Mini app intel import failed", error?.message || error);
