@@ -60,7 +60,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-17.1";
+const botBuild = "2026-07-17.2";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -8082,6 +8082,9 @@ async function miniAppImportIntel(session, body) {
       .replace(coord, " ");
     if (guild) label = label.split(guild).join(" ");
     label = label.replace(/\s+/g, " ").trim();
+    if (sourceKind === "personal_base") {
+      label = String(session.member.display_name || session.member.username || session.u || "Guild member").trim();
+    }
     return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), guild: guild.slice(0, 80), label: label.slice(0, 240), updated_at: stamp }];
   }).filter(([coord]) => coord)).values()].slice(0, 10000);
   const astros = [...new Map((Array.isArray(payload.astros) ? payload.astros : []).map((row) => {
