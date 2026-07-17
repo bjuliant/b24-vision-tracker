@@ -71,6 +71,7 @@ const preferredCommandAliases = {
   approvechat: ["approvechat"],
   status: ["st", "status"],
   galaxy: ["g", "galaxy"],
+  setgroup: ["setgroup"],
   buildplan: ["bp", "buildplan"],
   research: ["research"],
   researchplan: ["rp", "researchplan"],
@@ -89,7 +90,7 @@ const preferredCommandAliases = {
 };
 const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "approvechat", "officer", "demote", "ban", "access",
-  "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "galaxy", "setgalaxy", "guild",
+  "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "galaxy", "setgroup", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
@@ -455,7 +456,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "research")) return handleResearchDoctrine(ctx, text, mode);
   if (isCommand(lower, "researchplan")) return handleResearchPlan(ctx, text, mode);
   if (isCommand(lower, "galaxy")) return handleUserGalaxy(ctx, text, mode);
-  if (isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
+  if (isCommand(lower, "setgroup") || isCommand(lower, "setgalaxy")) return handleChatGalaxy(ctx, text, mode);
   if (isCommand(lower, "guild")) return handleGuild(ctx, text, mode);
 
   if (isProtectedOperationalCommand(lower) && !isPrivateChat(ctx)) await rememberActiveChat(ctx);
@@ -630,7 +631,8 @@ async function helpText(ctx, input = "") {
       "<code>/map [B23] [coord]</code> - open one galaxy without changing your defaults",
       "<code>!guild status</code> - show the shared APP operation scope",
       "<code>!galaxy B23</code> - set your personal galaxy (<code>!g</code> also works)",
-      "<code>$setgalaxy B23</code> - set this Telegram room's galaxy"
+      "<code>$setgroup B23</code> - set this Telegram room's galaxy",
+      "<code>$setgalaxy B23</code> - older alias for <code>$setgroup</code>"
     ],
     attack: [
       "<b>Attack Help</b>",
@@ -946,7 +948,7 @@ function officerHelpText() {
     "<b>Operations</b>",
     "<code>$approvechat</code> - approve this room for APP operations",
     "<code>$approvechat status</code> - show this room's approval state",
-    "<code>$setgalaxy B23</code> - set this Telegram room's galaxy",
+    "<code>$setgroup B23</code> - set this Telegram room's galaxy",
     "<code>$attacks</code> - list active attack plans",
     "<code>$attack add [ID] [coord]</code> - add targets to a plan",
     "<code>$standdown [operation-ID] [reason]</code> - close an operation",
@@ -1063,7 +1065,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function explicitGalaxyFromText(text) {
@@ -1263,6 +1265,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "friend",
     "enemy",
     "save me",
+    "setgroup",
     "setgalaxy",
     "guild",
     "stale",
@@ -1272,7 +1275,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "galaxy", "setgroup", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -2111,7 +2114,7 @@ async function handleChatGalaxy(ctx, text, mode) {
   if (!ctx.chat?.id) return;
   if (isPrivateChat(ctx)) return respond(ctx, mode, "Use !galaxy B23 in DM to set your personal galaxy.");
   const galaxy = explicitGalaxyFromText(text);
-  if (!galaxy) return respond(ctx, mode, "Use: $setgalaxy B23");
+  if (!galaxy) return respond(ctx, mode, "Use: $setgroup B23");
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
 
