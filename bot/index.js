@@ -621,7 +621,32 @@ async function handleOfficerHelp(ctx, mode) {
 }
 
 async function helpText(ctx, input = "") {
-  const topic = commandName(String(input).trim().split(/\s+/)[1] || "");
+  const requestedTopic = commandName(String(input).trim().split(/\s+/)[1] || "");
+  const topicAliases = {
+    astro: "astros",
+    search: "astros",
+    history: "history",
+    hist: "history",
+    occupied: "history",
+    occ: "history",
+    stale: "stale",
+    score: "score",
+    build: "buildplan",
+    bp: "buildplan",
+    research: "researchplan",
+    rp: "researchplan",
+    sos: "defense",
+    report: "incoming",
+    scouts: "scout",
+    scouting: "scout",
+    scoutings: "scout",
+    watches: "scout",
+    watched: "scout",
+    attacks: "attack",
+    board: "operations",
+    op: "operations"
+  };
+  const topic = topicAliases[requestedTopic] || requestedTopic;
   const topics = {
     setup: [
       "<b>Setup Help</b>",
@@ -721,6 +746,34 @@ async function helpText(ctx, input = "") {
       "<code>$sectors [APP]</code> - list scout candidate sectors near APP",
       "<code>!history [coord]</code> - coordinate battle, revolt, liberation, and fleet-observation timeline",
       "<code>!occupied [player|guild|region]</code> - current active occupations only"
+    ],
+    astros: [
+      "<b>Astro Search Help</b>",
+      "",
+      "<code>!astros [filters]</code> - send search results to you privately",
+      "<code>$astros [filters]</code> - post search results in this approved APP room",
+      "",
+      "<b>Scope and terrain</b>",
+      "<code>$astros B24 craters</code> - all Craters astros in B24",
+      "<code>$astros B24:36 craters</code> - Craters astros in B24:36 only",
+      "<code>$astros B24 metallic planet</code> - planets only; excludes moons and asteroids",
+      "",
+      "<b>Attribute minimums</b>",
+      "Use <code>a</code> area, <code>s</code> solar, <code>f</code> fertility, <code>m</code> metal, <code>g</code> gas, and <code>c</code> crystal.",
+      "Both <code>m4</code> and <code>4m</code> work. Multiple filters are combined.",
+      "<code>$astros B24:36 m4 f5 c2</code>",
+      "<code>$astros B24 craters a85 m4 c2 s3 f5</code>",
+      "",
+      "<b>Base and alliance filters</b>",
+      "<code>empty</code> - only astros without a base",
+      "<code>no [APP]</code> - exclude regions containing that alliance",
+      "<code>yes [ROTC]</code> - only that alliance's known bases",
+      "<code>near [APP]</code> - only regions adjacent to APP-held regions",
+      "<code>$astros B24 craters planet empty no [APP] near [ROTC]</code>",
+      "",
+      "<b>Paging</b>",
+      "Add <code>page 2</code> (or <code>p2</code>) to continue a long result set.",
+      "<code>$astros B24 craters m4 page 2</code>"
     ],
     history: [
       "<b>Battle History Help</b>",
@@ -927,7 +980,7 @@ async function helpText(ctx, input = "") {
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, intel, bases, incoming, doctrine, aliases",
+    "Topics: setup, attack, defense, scout, operations, intel, astros, history, stale, score, bases, incoming, doctrine, guild, aliases",
     "",
     "Officer reference: <code>$ohelp</code>"
   ].join("\n");
