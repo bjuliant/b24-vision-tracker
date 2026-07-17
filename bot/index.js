@@ -60,7 +60,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-16.4";
+const botBuild = "2026-07-16.5";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -8074,7 +8074,10 @@ async function miniAppImportIntel(session, body) {
   const bases = [...new Map((Array.isArray(payload.bases) ? payload.bases : []).map((row) => {
     const coord = normalizeAstro(row.coord);
     if (!coord || mapIdForCoord(coord) !== mapId) return ["", null];
-    return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), guild: String(row.guild || "").slice(0, 80), label: String(row.label || "").slice(0, 240), updated_at: stamp }];
+    const sourceKind = String(row.sourceKind || row.source_kind || "").trim().toLowerCase();
+    const importedGuild = String(row.guild || "").trim();
+    const guild = importedGuild || (sourceKind === "personal_base" ? primaryGuildTag : "");
+    return [coord, { map_id: mapId, coord, region_id: astroToRegion(coord), system_id: astroToSystem(coord), guild: guild.slice(0, 80), label: String(row.label || "").slice(0, 240), updated_at: stamp }];
   }).filter(([coord]) => coord)).values()].slice(0, 10000);
   const astros = [...new Map((Array.isArray(payload.astros) ? payload.astros : []).map((row) => {
     const coord = normalizeAstro(row.coord);
