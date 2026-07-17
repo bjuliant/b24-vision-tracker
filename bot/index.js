@@ -8604,7 +8604,11 @@ http.createServer(async (request, response) => {
       const body = await readJson(request, 8 * 1024 * 1024);
       const session = await verifiedMiniAppSession(body.access, ["map", "export"]);
       if (!session) return writeJson(response, 401, { error: "Exporter access is invalid, expired, or revoked. Open /map and recopy it." });
-      return writeJson(response, 200, await miniAppImportIntel(session, body));
+      const requestedGalaxy = normalizeGalaxy(body.galaxy || body.intel?.galaxy || session.g);
+      const importSession = session.p === "export" && requestedGalaxy
+        ? { ...session, g: requestedGalaxy }
+        : session;
+      return writeJson(response, 200, await miniAppImportIntel(importSession, body));
     } catch (error) {
       console.error("Mini app intel import failed", error?.message || error);
       return writeJson(response, 400, { error: error?.message || "Could not import intel." });
