@@ -63,7 +63,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-17.3";
+const botBuild = "2026-07-17.4";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -3786,22 +3786,41 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     ...savedMatches.map((row) => row.owner_label || query),
     ...importedMatches.map((row) => [row.guild, row.label].filter(Boolean).join(" ") || query),
     ...annotationMatches.map((row) => `Lysander ${row.alliance}`)
-  ])].join(", ");
+  ])];
+  const reportEntries = [
+    ...importedMatches.map((row) => ({ section: "Imported Intel", kind: "imported", row })),
+    ...savedMatches.map((row) => ({ section: "Saved By Users", kind: "saved", row })),
+    ...annotationMatches.map((row) => ({ section: "Lysander Assessments", kind: "annotation", row }))
+  ];
+  const reportPageSize = 25;
+  const reportPageCount = Math.max(1, Math.ceil(reportEntries.length / reportPageSize));
+  const reportPage = Math.min(pageInfo.page, reportPageCount);
+  const reportStart = (reportPage - 1) * reportPageSize;
+  const reportEnd = Math.min(reportEntries.length, reportStart + reportPageSize);
+  const pageEntries = reportEntries.slice(reportStart, reportEnd);
+  const compactOwnerTitle = owners.length <= 6
+    ? owners.join(", ")
+    : `${galaxy} bases matching ${query}`;
   const lines = [
-    `<b>${escapeHtml(owners)}</b>`,
+    `<b>${escapeHtml(compactOwnerTitle)}</b>`,
     `${importedMatches.length} imported / ${savedMatches.length} saved / ${annotationMatches.length} Lysander-assessed bases in ${galaxy}`
   ];
-  if (importedMatches.length) {
-    lines.push("", "<b>Imported Intel</b>");
-    importedMatches.forEach((row) => lines.push(formatImportedBaseLine(row, stances)));
+  let currentSection = "";
+  for (const entry of pageEntries) {
+    if (entry.section !== currentSection) {
+      lines.push("", `<b>${entry.section}</b>`);
+      currentSection = entry.section;
+    }
+    if (entry.kind === "imported") lines.push(formatImportedBaseLine(entry.row, stances));
+    if (entry.kind === "saved") lines.push(formatUserBaseLine(entry.row));
+    if (entry.kind === "annotation") {
+      lines.push(`${escapeHtml(entry.row.coord)} - Lysander alliance ${escapeHtml(entry.row.alliance)}`);
+    }
   }
-  if (savedMatches.length) {
-    lines.push("", "<b>Saved By Users</b>");
-    savedMatches.forEach((row) => lines.push(formatUserBaseLine(row)));
-  }
-  if (annotationMatches.length) {
-    lines.push("", "<b>Lysander Assessments</b>");
-    annotationMatches.forEach((row) => lines.push(`${escapeHtml(row.coord)} - Lysander alliance ${escapeHtml(row.alliance)}`));
+  if (reportPageCount > 1) {
+    lines.push("", `Page ${reportPage}/${reportPageCount} (${reportStart + 1}-${reportEnd} of ${reportEntries.length})`);
+    if (reportPage > 1) lines.push(`Previous: <code>$bases ${escapeHtml(queryCommand)} page ${reportPage - 1}</code>`);
+    if (reportPage < reportPageCount) lines.push(`Next: <code>$bases ${escapeHtml(queryCommand)} page ${reportPage + 1}</code>`);
   }
   const rowsForButtons = [...importedMatches, ...annotationMatches];
   const totalActionable = uniqueBaseCoords(rowsForButtons, savedMatches).length;
@@ -3810,12 +3829,12 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     query,
     Boolean(canManageOperations && !activeOperations.length && totalActionable)
   );
-  const shownFrom = Math.min(totalActionable, (pageInfo.page - 1) * 8 + 1);
-  const shownTo = Math.min(totalActionable, pageInfo.page * 8);
-  if (addPlan && totalActionable > 8) {
-    lines.push("", `Buttons: ${shownFrom}-${shownTo} of ${totalActionable}`);
-    if (shownTo < totalActionable) lines.push(`Next buttons: <code>$bases ${escapeHtml(queryCommand)} page ${pageInfo.page + 1}</code>`);
-  }
+  const pageImportedRows = pageEntries
+    .filter((entry) => entry.kind === "imported" || entry.kind === "annotation")
+    .map((entry) => entry.row);
+  const pageSavedRows = pageEntries.filter((entry) => entry.kind === "saved").map((entry) => entry.row);
+  const pageActionCount = uniqueBaseCoords(pageImportedRows, pageSavedRows).length;
+  if (addPlan && pageActionCount > 8) lines.push("", `Action buttons: first 8 bases on page ${reportPage}.`);
   if (addPlan) {
     const addPlanNumber = attackNumberForOperation(activeAttackPlans, addPlan) || "?";
     lines.push("", `Officer shortcut: buttons add rows to attack <code>${escapeHtml(addPlanNumber)}</code> (${escapeHtml(attackDisplayName(addPlan))}).`);
@@ -3826,7 +3845,7 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...baseListKeyboard(rowsForButtons, savedMatches, pageInfo.page, addPlan, activeAttackPlans, quickSetupRows)
+    ...baseListKeyboard(pageImportedRows, pageSavedRows, 1, addPlan, activeAttackPlans, quickSetupRows)
   });
 }
 
