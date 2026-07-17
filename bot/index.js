@@ -26,7 +26,13 @@ const requireAccessControl = /^(1|true|yes)$/i.test(process.env.REQUIRE_ACCESS_C
 const miniAppAccessSecret = process.env.MINI_APP_ACCESS_SECRET || token;
 const miniAppTokenMinutes = Math.max(5, Math.min(60, Number(process.env.MINI_APP_TOKEN_MINUTES || 20)));
 const primaryGuildTag = normalizeStanceTarget(process.env.PRIMARY_GUILD_TAG || "APP");
+const primaryGuildId = String(process.env.PRIMARY_GUILD_ID || "APP").trim().toUpperCase() || "APP";
+const configuredGuildScopeChatId = String(
+  process.env.GUILD_SCOPE_CHAT_ID || approvedChatIds[0] || accessChatIds[0] || ""
+).trim();
 const accessMemberCache = new Map();
+const approvedChatCache = new Map();
+let primaryScopeCache = { value: "", expiresAt: 0 };
 
 if (!token) throw new Error("BOT_TOKEN is required");
 if (!webAppUrl) throw new Error("WEB_APP_URL is required");
@@ -34,7 +40,7 @@ if (!supabaseUrl) throw new Error("SUPABASE_URL is required");
 if (!supabaseKey) throw new Error("SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY is required");
 if (requireAccessControl) {
   const missing = [
-    approvedChatIds.length ? "" : "APPROVED_CHAT_IDS",
+    approvedChatIds.length || process.env.GUILD_SCOPE_CHAT_ID ? "" : "APPROVED_CHAT_IDS or GUILD_SCOPE_CHAT_ID",
     accessChatIds.length ? "" : "ACCESS_CHAT_IDS",
     officerUserIds.length ? "" : "OFFICER_USER_IDS",
     process.env.SUPABASE_SERVICE_ROLE_KEY ? "" : "SUPABASE_SERVICE_ROLE_KEY",
@@ -53,11 +59,12 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-16.1";
+const botBuild = "2026-07-16.3";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
   onboardme: ["enlist", "on", "onboard", "onboardme"],
+  approvechat: ["approvechat"],
   status: ["st", "status"],
   buildplan: ["bp", "buildplan"],
   research: ["research"],
@@ -76,7 +83,7 @@ const preferredCommandAliases = {
   occupied: BATTLE_HISTORY_COMMAND_ALIASES.occupied
 };
 const canonicalCommands = [
-  "help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access",
+  "help", "ohelp", "onboardme", "approve", "approvechat", "officer", "demote", "ban", "access",
   "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "g", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
   "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
@@ -334,7 +341,7 @@ bot.command("id", (ctx) => ctx.reply(chatIdReport(ctx), { parse_mode: "HTML" }))
 bot.command("status", (ctx) => ctx.reply(statusReport(ctx)));
 bot.command("version", (ctx) => ctx.reply(versionReport()));
 bot.command("board", async (ctx) => {
-  if (!chatApproved(ctx)) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
+  if (!(await chatApproved(ctx))) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
   if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
   return handleBoard(ctx, ctx.message?.text || "/board", "$");
 });
@@ -432,7 +439,9 @@ async function handleText(ctx) {
   text = canonicalizeCommandText(text);
   const lower = text.trim().toLowerCase();
 
-  if (isProtectedOperationalCommand(lower) && !chatApproved(ctx)) {
+  if (isCommand(lower, "approvechat")) return handleApproveChat(ctx, text, mode);
+
+  if (isProtectedOperationalCommand(lower) && !(await chatApproved(ctx))) {
     return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
   }
   if (isSensitiveOperationalCommand(lower) && !(await userCanUseSensitiveCommands(ctx))) {
@@ -494,7 +503,7 @@ async function handleText(ctx) {
 
   const astroShortcut = parseAstrosShortcutCommand(text, await galaxyForContext(ctx));
   if (astroShortcut) {
-    if (!chatApproved(ctx) || !(await userCanUseSensitiveCommands(ctx))) {
+    if (!(await chatApproved(ctx)) || !(await userCanUseSensitiveCommands(ctx))) {
       return respond(ctx, mode, "You do not have permission to use VisionBot intel commands.");
     }
     const report = await buildAstrosReport(astroShortcut.query, astroShortcut.galaxy);
@@ -503,7 +512,7 @@ async function handleText(ctx) {
 
   const lookup = parseLookupCommand(text, await galaxyForContext(ctx));
   if (!lookup) return handleUnknownCommand(ctx, text, mode);
-  if (!chatApproved(ctx) || !(await userCanUseSensitiveCommands(ctx))) {
+  if (!(await chatApproved(ctx)) || !(await userCanUseSensitiveCommands(ctx))) {
     return respond(ctx, mode, "You do not have permission to use VisionBot intel commands.");
   }
 
@@ -623,11 +632,12 @@ async function helpText(ctx, input = "") {
     setup: [
       "<b>Setup Help</b>",
       "",
+      "<code>!enlist</code> - request APP access",
+      "<code>$approvechat</code> - approve this Telegram room (officer)",
       "<code>/map [coord]</code> - open the map",
-      "<code>$guild bind</code> - bind this group for operations",
-      "<code>!guild status</code> - show your active operation group",
+      "<code>!guild status</code> - show the shared APP operation scope",
       "<code>!g B24</code> - set your personal galaxy",
-      "<code>$setgalaxy B24</code> - set the guild chat galaxy"
+      "<code>$setgalaxy B24</code> - set APP's operation galaxy"
     ],
     attack: [
       "<b>Attack Help</b>",
@@ -859,10 +869,12 @@ async function helpText(ctx, input = "") {
     guild: [
       "<b>Guild Scope Help</b>",
       "",
-      "<code>$guild bind</code> - remember this group as your active operation group",
-      "<code>!guild status</code> - show your active operation group",
+      "Approved Lysander members are APP members automatically.",
+      "<code>$approvechat</code> - approve this Telegram room (officer)",
+      "<code>$approvechat status</code> - show this room's approval state",
+      "<code>!guild status</code> - show the shared APP operation scope",
       "",
-      "Group operation commands also remember the group automatically."
+      "Every approved APP room reads and writes the same operations."
     ],
     aliases: [
       "<b>Legacy Aliases</b>",
@@ -873,7 +885,8 @@ async function helpText(ctx, input = "") {
       "<code>!claimed</code>/<code>$claimed</code> - alias for attack board",
       "<code>!incoming</code>/<code>$incoming</code> - alias for defense board",
       "<code>!myops</code> - alias for <code>!next</code>",
-      "<code>!save me</code>/<code>$save me</code> - alias for updating one of your bases"
+      "<code>!save me</code>/<code>$save me</code> - alias for updating one of your bases",
+      "<code>$guild bind</code> - legacy alias for <code>$approvechat</code>"
     ]
   };
 
@@ -883,8 +896,8 @@ async function helpText(ctx, input = "") {
   return [
     "<b>VisionBot Commands</b>",
     "",
-    "<code>!</code> replies to you privately. In DMs, it uses your active guild.",
-    "<code>$</code> posts in the current approved guild chat.",
+    "<code>!</code> replies to you privately. In DMs, it uses APP's shared scope.",
+    "<code>$</code> posts in the current approved APP room.",
     "Use <code>/start</code> once before private commands.",
     "",
     status,
@@ -932,15 +945,16 @@ function officerHelpText() {
     "",
     "<b>Access</b>",
     "<code>$enlist</code> - create/update your access request",
-    "<code>$approve [user]</code> - approve a member",
+    "<code>$approve [user] [private]</code> - approve a member",
     "<code>$officer [user]</code> - promote to officer",
     "<code>$demote [user]</code> - demote to member",
     "<code>$ban [user]</code> - block access",
-    "<code>$access [user]</code> - show a user's access state",
+    "<code>$access [user] [private|group]</code> - show/change access mode",
     "",
     "<b>Operations</b>",
-    "<code>$guild bind</code> - bind this group as the active operation group",
-    "<code>$setgalaxy B24</code> - set the guild chat galaxy",
+    "<code>$approvechat</code> - approve this room for APP operations",
+    "<code>$approvechat status</code> - show this room's approval state",
+    "<code>$setgalaxy B24</code> - set APP's operation galaxy",
     "<code>$attacks</code> - list active attack plans",
     "<code>$attack add [ID] [coord]</code> - add targets to a plan",
     "<code>$standdown [operation-ID] [reason]</code> - close an operation",
@@ -975,11 +989,10 @@ function basicHelpText() {
 async function handleOnboardMe(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "I need a Telegram user to onboard.");
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "Use <code>$onboardme</code> in the guild group first, or bind an active guild with <code>$guild bind</code>.", { parse_mode: "HTML" });
-  const accessGroupMember = accessChatIds.length ? await isMemberOfAnyAccessChat(ctx, telegramUserId(ctx)) : false;
+  if (!scopeId) return respond(ctx, mode, "No approved APP room is available yet. Ask an officer to run <code>$approvechat</code> in the APP room.", { parse_mode: "HTML" });
   const existing = await fetchAccessMember(scopeId, telegramUserId(ctx));
   if (existing?.status === "banned") return respond(ctx, mode, "Your Lysander access is blocked for this guild.");
-  const status = accessGroupMember ? "active" : existing?.status || "pending";
+  const status = existing?.status || "pending";
   const role = existing?.role || "member";
   const saved = await upsertAccessMember({
     chatId: scopeId,
@@ -988,13 +1001,14 @@ async function handleOnboardMe(ctx, text, mode) {
     displayName: telegramName(ctx),
     role,
     status,
-    approvedBy: accessGroupMember ? "access-group" : existing?.approved_by || "",
-    approvedAt: accessGroupMember ? new Date().toISOString() : existing?.approved_at || null
+    accessMode: existing?.access_mode || "group",
+    approvedBy: existing?.approved_by || "",
+    approvedAt: existing?.approved_at || null
   });
   if (!saved) return respond(ctx, mode, "I could not save your onboarding record. Has the Supabase access table been created?");
   return respond(ctx, mode, status === "active"
-    ? `Onboarded as ${role}. Lysander access is active for this guild.`
-    : "Onboarding request saved. An officer can approve you with <code>$approve</code>.", { parse_mode: "HTML" });
+    ? `Enlisted as ${role}. Lysander access is active for APP${existing?.access_mode === "private" ? " in private mode" : ""}.`
+    : "APP enlistment saved. An officer can approve you with <code>$approve</code>.", { parse_mode: "HTML" });
 }
 
 async function handleAccessCommand(ctx, text, mode) {
@@ -1003,24 +1017,37 @@ async function handleAccessCommand(ctx, text, mode) {
   }
   const command = commandName(text);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use this in the guild group or run <code>$guild bind</code> first.", { parse_mode: "HTML" });
-  const target = await resolveAccessTarget(ctx, commandBody(text), scopeId);
-  if (!target) return respond(ctx, mode, `Use: <code>$${command} @username</code> or reply to a user's message with <code>$${command}</code>.`, { parse_mode: "HTML" });
+  if (!scopeId) return respond(ctx, mode, "No approved APP scope exists. Approve a room with <code>$approvechat</code> first.", { parse_mode: "HTML" });
+  const body = commandBody(text);
+  const accessModeMatch = body.match(/(?:^|\s)(private|group)\s*$/i);
+  const requestedAccessMode = accessModeMatch ? accessModeMatch[1].toLowerCase() : "";
+  const targetQuery = accessModeMatch ? body.slice(0, accessModeMatch.index).trim() : body;
+  const target = await resolveAccessTarget(ctx, targetQuery, scopeId);
+  if (!target) {
+    const suffix = ["approve", "access"].includes(command) ? " [private|group]" : "";
+    return respond(ctx, mode, `Use: <code>$${command} @username${suffix}</code> or reply to a user's message with <code>$${command}${suffix}</code>.`, { parse_mode: "HTML" });
+  }
   if (target.ambiguous?.length) {
     return respond(ctx, mode, [
-      `Multiple users match <code>${escapeHtml(commandBody(text))}</code>:`,
+      `Multiple users match <code>${escapeHtml(targetQuery)}</code>:`,
       ...target.ambiguous.slice(0, 8).map((row) => `- ${escapeHtml(accessMemberLabel(row))}`)
     ].join("\n"), { parse_mode: "HTML" });
   }
 
-  if (command === "access") {
-    const row = target.row || await fetchAccessMember(scopeId, target.userId);
+  const existing = target.row || await fetchAccessMember(scopeId, target.userId);
+  if (command === "access" && !requestedAccessMode) {
+    const row = existing;
     return respond(ctx, mode, formatAccessStatus(row, target), { parse_mode: "HTML" });
   }
+  if (command === "access" && !existing) {
+    return respond(ctx, mode, `No enlistment record exists for ${escapeHtml(target.displayName || target.userId)}. Ask them to run <code>!enlist</code> first.`, { parse_mode: "HTML" });
+  }
 
-  const next = accessCommandState(command);
+  const next = command === "access"
+    ? { status: existing.status, role: existing.role }
+    : accessCommandState(command);
   if (!next) return respond(ctx, mode, "Unknown access command.");
-  const existing = target.row || await fetchAccessMember(scopeId, target.userId);
+  const accessMode = requestedAccessMode || existing?.access_mode || "group";
   const saved = await upsertAccessMember({
     chatId: scopeId,
     userId: target.userId,
@@ -1028,11 +1055,12 @@ async function handleAccessCommand(ctx, text, mode) {
     displayName: target.displayName || existing?.display_name || target.userId,
     role: next.role || existing?.role || "member",
     status: next.status,
+    accessMode,
     approvedBy: telegramUserId(ctx),
     approvedAt: next.status === "active" ? new Date().toISOString() : existing?.approved_at || null
   });
   if (!saved) return respond(ctx, mode, "Could not update access. Has the Supabase access table been created?");
-  return respond(ctx, mode, `${escapeHtml(target.displayName || existing?.display_name || target.userId)} is now ${next.status}/${next.role || existing?.role || "member"}.`, { parse_mode: "HTML" });
+  return respond(ctx, mode, `${escapeHtml(target.displayName || existing?.display_name || target.userId)} is now ${next.status}/${next.role || existing?.role || "member"} with ${accessMode} access.`, { parse_mode: "HTML" });
 }
 
 function deliveryMode(text) {
@@ -1044,7 +1072,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function statusReport(ctx) {
@@ -1224,7 +1252,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1263,11 +1291,89 @@ function editDistance(a, b) {
   return rows[a.length][b.length];
 }
 
-function chatApproved(ctx) {
-  if (!approvedChatIds.length) return true;
+function cachedApprovedScope(chatId) {
+  const entry = approvedChatCache.get(String(chatId || ""));
+  if (!entry || entry.expiresAt <= Date.now()) return null;
+  return entry.scopeId;
+}
+
+function cacheApprovedScope(chatId, scopeId, ttlMs = 60 * 1000) {
+  approvedChatCache.set(String(chatId || ""), {
+    scopeId: String(scopeId || ""),
+    expiresAt: Date.now() + ttlMs
+  });
+}
+
+async function fetchApprovedChat(chatId) {
+  if (!chatId) return null;
+  return fetchOne("b24_approved_chats", {
+    guild_id: primaryGuildId,
+    chat_id: String(chatId),
+    status: "active"
+  }, null, false);
+}
+
+async function primaryApprovedScope() {
+  if (configuredGuildScopeChatId) return configuredGuildScopeChatId;
+  if (primaryScopeCache.expiresAt > Date.now()) return primaryScopeCache.value;
+
+  const rows = await fetchRows("b24_approved_chats", {
+    guild_id: `eq.${primaryGuildId}`,
+    status: "eq.active"
+  }, {
+    includeMap: false,
+    order: "is_primary.desc,approved_at.asc",
+    limit: 1
+  });
+  const scopeId = String(rows[0]?.scope_chat_id || "");
+  primaryScopeCache = { value: scopeId, expiresAt: Date.now() + 60 * 1000 };
+  return scopeId;
+}
+
+async function resolveGuildScopeForChat(chatId) {
+  const id = String(chatId || "");
+  if (!id) return "";
+  const cached = cachedApprovedScope(id);
+  if (cached !== null) return cached;
+
+  const approved = await fetchApprovedChat(id);
+  if (approved?.scope_chat_id) {
+    cacheApprovedScope(id, approved.scope_chat_id);
+    return String(approved.scope_chat_id);
+  }
+
+  if (approvedChatIds.includes(id)) {
+    const legacyScope = configuredGuildScopeChatId || id;
+    cacheApprovedScope(id, legacyScope);
+    return legacyScope;
+  }
+
+  // Preserve unrestricted local/dev installs until access control is enabled.
+  if (!requireAccessControl && !approvedChatIds.length && !configuredGuildScopeChatId) {
+    cacheApprovedScope(id, id);
+    return id;
+  }
+
+  cacheApprovedScope(id, "", 30 * 1000);
+  return "";
+}
+
+async function isRecognizedGuildScope(scopeId) {
+  const id = String(scopeId || "");
+  if (!id) return false;
+  if (id === configuredGuildScopeChatId || approvedChatIds.includes(id)) return true;
+  const rows = await fetchRows("b24_approved_chats", {
+    guild_id: `eq.${primaryGuildId}`,
+    scope_chat_id: `eq.${id}`,
+    status: "eq.active"
+  }, { includeMap: false, select: "scope_chat_id", limit: 1 });
+  return rows.length > 0;
+}
+
+async function chatApproved(ctx) {
   if (ctx.chat?.type === "private") return true;
   const id = ctx.chat?.id ? String(ctx.chat.id) : "";
-  return id ? approvedChatIds.includes(id) : false;
+  return Boolean(await resolveGuildScopeForChat(id));
 }
 
 function chatIdReport(ctx) {
@@ -1281,10 +1387,9 @@ function chatIdReport(ctx) {
 }
 
 function notApprovedMessage(ctx) {
-  const chatId = ctx.chat?.id ? String(ctx.chat.id) : "";
   return [
-    "This chat is not approved for VisionBot operations.",
-    chatId ? `Add this to <code>APPROVED_CHAT_IDS</code>: <code>${escapeHtml(chatId)}</code>` : ""
+    "This room is not approved for APP operations.",
+    "An APP officer can approve it here with <code>$approvechat</code>."
   ].filter(Boolean).join("\n");
 }
 
@@ -1300,17 +1405,24 @@ async function userCanUseSensitiveCommands(ctx) {
     if (access?.status === "banned") return false;
   }
 
+  const activeAccess = access?.status === "active" &&
+    ["member", "officer", "owner"].includes(access.role);
+
+  // Private access is an explicit officer-granted exception for members who
+  // must use Lysander without remaining visible in an APP Telegram room.
+  if (activeAccess && access.access_mode === "private" && isPrivateChat(ctx)) return true;
+
   if (accessChatIds.length) {
     const accessGroupMember = await isMemberOfAnyAccessChat(ctx, userId);
-    // Membership is the revocation switch. An old active database row must not
-    // keep working after someone leaves or is removed from the access group.
-    return accessGroupMember;
+    // Both checks matter: access-group membership is the revocation switch,
+    // while the database row proves the user enlisted and was approved.
+    return accessGroupMember && activeAccess;
   }
 
-  if (access?.status === "active" && ["member", "officer", "owner"].includes(access.role)) return true;
+  if (activeAccess) return true;
 
-  if (isPrivateChat(ctx)) return true;
-  return chatApproved(ctx);
+  if (!requireAccessControl && !approvedChatIds.length && !configuredGuildScopeChatId) return true;
+  return false;
 }
 
 async function userCanUseOfficerCommands(ctx) {
@@ -1321,9 +1433,42 @@ async function userCanUseOfficerCommands(ctx) {
   if (scopeId) {
     const access = await fetchAccessMember(scopeId, userId);
     if (access?.status === "banned") return false;
-    if (access?.status === "active" && ["officer", "owner"].includes(access.role)) return true;
+    const activeOfficer = access?.status === "active" && ["officer", "owner"].includes(access.role);
+    if (activeOfficer && access.access_mode === "private" && isPrivateChat(ctx)) return true;
+    if (activeOfficer && accessChatIds.length) return isMemberOfAnyAccessChat(ctx, userId);
+    if (activeOfficer) return true;
   }
-  if (!ctx.chat?.id || isPrivateChat(ctx)) return false;
+  // Telegram room administration does not grant Lysander officer access.
+  // It is only accepted by userCanApproveChats() for the initial trusted-room
+  // bootstrap; normal officer actions require an active database role.
+  return false;
+}
+
+async function userCanApproveChats(ctx) {
+  if (!ctx.from?.id || isPrivateChat(ctx)) return false;
+  const userId = telegramUserId(ctx);
+  if (officerUserIds.includes(userId)) return true;
+
+  const currentChatId = String(ctx.chat?.id || "");
+  const isConfiguredBootstrapRoom = currentChatId === configuredGuildScopeChatId ||
+    approvedChatIds.includes(currentChatId);
+
+  // A Telegram admin may bootstrap a room already trusted in Render. This
+  // avoids locking the owner out before the first database officer exists.
+  if (isConfiguredBootstrapRoom) {
+    try {
+      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+      if (member?.status === "creator" || member?.status === "administrator") return true;
+    } catch {}
+  }
+
+  const scopeId = await primaryApprovedScope();
+  if (scopeId) {
+    const access = await fetchAccessMember(scopeId, userId);
+    return access?.status === "active" && ["officer", "owner"].includes(access.role);
+  }
+
+  // Bootstrap only: the first approved room may be created by its Telegram admin.
   try {
     const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
     return member?.status === "creator" || member?.status === "administrator";
@@ -1346,7 +1491,7 @@ async function fetchAccessMember(chatId, userId) {
   return fetchOne("b24_access_members", { chat_id: chatId, user_id: userId }, null, false);
 }
 
-async function upsertAccessMember({ chatId, userId, username, displayName, role, status, approvedBy = "", approvedAt = null }) {
+async function upsertAccessMember({ chatId, userId, username, displayName, role, status, accessMode = "group", approvedBy = "", approvedAt = null }) {
   const now = new Date().toISOString();
   return upsertRow("b24_access_members", {
     chat_id: String(chatId),
@@ -1355,6 +1500,7 @@ async function upsertAccessMember({ chatId, userId, username, displayName, role,
     display_name: String(displayName || userId),
     role,
     status,
+    access_mode: accessMode === "private" ? "private" : "group",
     approved_by: approvedBy || null,
     approved_at: approvedAt,
     last_seen_at: now,
@@ -1428,6 +1574,7 @@ function formatAccessStatus(row, target) {
     row.username ? `Username: @${escapeHtml(row.username)}` : "",
     `Status: ${escapeHtml(row.status || "pending")}`,
     `Role: ${escapeHtml(row.role || "member")}`,
+    `Access mode: ${escapeHtml(row.access_mode || "group")}`,
     row.approved_by ? `Approved by: <code>${escapeHtml(row.approved_by)}</code>` : "",
     row.updated_at ? `Updated: ${escapeHtml(formatLocalSummary(new Date(row.updated_at)))}` : ""
   ].filter(Boolean).join("\n");
@@ -1472,12 +1619,12 @@ async function validateOperationCallback(ctx, operation) {
     await ctx.answerCbQuery("That operation is no longer active.");
     return false;
   }
-  if (!chatApproved(ctx)) {
+  if (!(await chatApproved(ctx))) {
     await ctx.answerCbQuery("This chat is not approved.");
     return false;
   }
-  const currentChatId = ctx.chat?.id ? String(ctx.chat.id) : "";
-  if (currentChatId && !isPrivateChat(ctx) && String(operation.chat_id || "") !== currentChatId) {
+  const currentScopeId = await operationScopeId(ctx);
+  if (currentScopeId && String(operation.chat_id || "") !== String(currentScopeId)) {
     await ctx.answerCbQuery("That operation belongs to another guild group.");
     return false;
   }
@@ -1935,30 +2082,96 @@ async function handleChatGalaxy(ctx, text, mode) {
   if (!ctx.chat?.id) return;
   const galaxy = normalizeGalaxy((text.match(galaxyPattern) || [])[0]);
   if (!galaxy) return respond(ctx, mode, "Use: !setgalaxy B24");
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, notApprovedMessage(ctx), { parse_mode: "HTML" });
 
   const saved = await upsertRow("b24_chat_settings", {
-    chat_id: String(ctx.chat.id),
+    chat_id: String(scopeId),
     galaxy,
     map_id: galaxyToMapId(galaxy),
     updated_at: new Date().toISOString()
   }, "chat_id");
 
   if (!saved) return respond(ctx, mode, "Could not save this chat's galaxy setting.");
-  return respond(ctx, mode, `This chat's default galaxy is now ${galaxy}.`);
+  return respond(ctx, mode, `APP's default galaxy is now ${galaxy}.`);
+}
+
+async function handleApproveChat(ctx, text, mode) {
+  if (isPrivateChat(ctx) || !ctx.chat?.id) {
+    return respond(ctx, mode, "Use <code>$approvechat</code> inside the Telegram room you want Lysander to approve.", { parse_mode: "HTML" });
+  }
+  if (!(await userCanApproveChats(ctx))) {
+    return respond(ctx, mode, "Only an active APP officer/owner can approve Telegram rooms.");
+  }
+
+  const action = commandBody(text).toLowerCase() || "approve";
+  const chatId = String(ctx.chat.id);
+  if (action === "status") {
+    const approved = await fetchApprovedChat(chatId);
+    const scopeId = await resolveGuildScopeForChat(chatId);
+    return respond(ctx, mode, [
+      "<b>APP Room Access</b>",
+      `Room: ${escapeHtml(chatTitle(ctx))}`,
+      `Status: ${scopeId ? "approved" : "not approved"}`,
+      scopeId ? `Shared APP scope: <code>${escapeHtml(scopeId)}</code>` : "",
+      approved?.approved_by ? `Approved by: <code>${escapeHtml(approved.approved_by)}</code>` : ""
+    ].filter(Boolean).join("\n"), { parse_mode: "HTML" });
+  }
+  if (action !== "approve") {
+    return respond(ctx, mode, "Use <code>$approvechat</code> or <code>$approvechat status</code>.", { parse_mode: "HTML" });
+  }
+
+  const existing = await fetchApprovedChat(chatId);
+  const scopeId = String(existing?.scope_chat_id || await primaryApprovedScope() || configuredGuildScopeChatId || chatId);
+  const saved = await upsertRow("b24_approved_chats", {
+    guild_id: primaryGuildId,
+    chat_id: chatId,
+    scope_chat_id: scopeId,
+    chat_title: chatTitle(ctx),
+    status: "active",
+    is_primary: chatId === scopeId,
+    approved_by: telegramUserId(ctx),
+    approved_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, "guild_id,chat_id");
+  if (!saved) {
+    return respond(ctx, mode, "Could not approve this room. Run the latest Supabase review-fixes SQL first.");
+  }
+
+  approvedChatCache.delete(chatId);
+  primaryScopeCache = { value: scopeId, expiresAt: Date.now() + 60 * 1000 };
+  await rememberActiveChat(ctx);
+  return respond(ctx, mode, [
+    `<b>${escapeHtml(chatTitle(ctx))} approved</b>`,
+    `Guild: ${escapeHtml(primaryGuildId)}`,
+    `Shared operation scope: <code>${escapeHtml(scopeId)}</code>`,
+    "Members with active APP access can now use Lysander here."
+  ].join("\n"), { parse_mode: "HTML" });
 }
 
 async function handleGuild(ctx, text, mode) {
   const action = String(text || "").trim().split(/\s+/)[1]?.toLowerCase() || "status";
   if (action === "bind") {
-    if (isPrivateChat(ctx)) return respond(ctx, mode, "Use $guild bind in the guild group you want this bot to coordinate.");
-    if (!(await rememberActiveChat(ctx))) return respond(ctx, mode, "Could not bind this group.");
-    return respond(ctx, mode, `Active operation group set to ${escapeHtml(chatTitle(ctx))}.`, { parse_mode: "HTML" });
+    return handleApproveChat(ctx, "$approvechat", mode);
+  }
+  if (action !== "status") {
+    return respond(ctx, mode, [
+      "<b>APP Membership</b>",
+      "Everyone approved by Lysander is an APP member.",
+      "<code>!guild status</code> - show the shared APP operation scope",
+      "<code>$approvechat</code> - approve the current room (officer)",
+      "",
+      `<code>${escapeHtml(action)}</code> was not applied. You do not need to select APP manually.`
+    ].join("\n"), { parse_mode: "HTML" });
   }
 
-  if (!ctx.from?.id) return respond(ctx, mode, "Use this from a user account so I know whose active group to check.");
-  const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
-  if (!settings?.active_chat_id) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
-  return respond(ctx, mode, `Active operation group: ${escapeHtml(settings.active_chat_label || settings.active_chat_id)}`, { parse_mode: "HTML" });
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. An officer can run <code>$approvechat</code> in the room.", { parse_mode: "HTML" });
+  return respond(ctx, mode, [
+    `<b>Guild: ${escapeHtml(primaryGuildId)}</b>`,
+    `Shared operation scope: <code>${escapeHtml(scopeId)}</code>`,
+    `Current room: ${escapeHtml(isPrivateChat(ctx) ? await operationScopeLabel(ctx, scopeId) : chatTitle(ctx))}`
+  ].join("\n"), { parse_mode: "HTML" });
 }
 
 async function helpStatus(ctx) {
@@ -1966,19 +2179,20 @@ async function helpStatus(ctx) {
   const chatLabel = !isPrivateChat(ctx) ? chatTitle(ctx) : "";
   const settings = ctx.from?.id ? await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false) : null;
   const activeLabel = chatLabel || settings?.active_chat_label || "";
-  if (!activeLabel) {
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) {
     return [
-      "<b>No active guild selected.</b>",
-      "Use <code>$guild bind</code> in the guild group, then <code>!guild status</code>.",
+      "<b>No approved APP room selected.</b>",
+      "Ask an officer to use <code>$approvechat</code> in the APP room, then use <code>!enlist</code>.",
       `Galaxy: ${escapeHtml(galaxy)}`,
       "Your role: Member"
     ].join("\n");
   }
   return [
-    `Active guild: ${escapeHtml(activeLabel)}`,
-    `Operation group: ${escapeHtml(activeLabel)}`,
+    `Active guild: ${escapeHtml(primaryGuildId)}`,
+    `Operation room: ${escapeHtml(activeLabel || scopeId)}`,
     `Galaxy: ${escapeHtml(galaxy)}`,
-    `Your role: ${await userRoleLabel(ctx)}`
+    "Your role: Member"
   ].join("\n");
 }
 
@@ -2032,7 +2246,7 @@ async function handleClaim(ctx, text, mode) {
   const now = new Date();
   const arrivalAt = new Date(now.getTime() + minutes * 60 * 1000);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const duplicate = await findActiveOperationByTarget(mapIdForCoord(target), scopeId, "attack", "target_coord", target);
   if (duplicate) {
     return respond(ctx, mode, `Existing attack ${escapeHtml(duplicate.short_id)} already targets ${escapeHtml(target)}. Use !join ${escapeHtml(duplicate.short_id)} instead.`, { parse_mode: "HTML" });
@@ -2080,7 +2294,7 @@ async function handleClaim(ctx, text, mode) {
 async function handleAttacks(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const pageInfo = parsePageFromQuery(commandBody(text));
   const body = pageInfo.query.trim();
   const shortId = normalizeShortId(body.match(/^([A-Z]-?[A-Z0-9]{3,8})$/i)?.[1] || "");
@@ -2127,7 +2341,7 @@ async function handleAttacks(ctx, text, mode) {
 
 async function handleNamedAttackPlan(ctx, plan, mode) {
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const galaxy = await galaxyForContext(ctx);
 
   const operation = operationRow(ctx, {
@@ -2165,7 +2379,7 @@ async function handleAttackPlan(ctx, plan, mode) {
   if (plan.coords.length > 40) return respond(ctx, mode, "Keep one attack plan to 40 targets or fewer.");
 
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
 
   const now = new Date();
   const operation = operationRow(ctx, {
@@ -2303,7 +2517,7 @@ async function handleQuickAttackButton(ctx) {
   const query = decodeButtonValue(encodedQuery || "");
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) {
-    await ctx.answerCbQuery("No active operation group.");
+    await ctx.answerCbQuery("No approved APP room is active.");
     return;
   }
 
@@ -2354,7 +2568,7 @@ async function handleQuickScoutButton(ctx) {
   const query = decodeButtonValue(encodedQuery || "");
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) {
-    await ctx.answerCbQuery("No active operation group.");
+    await ctx.answerCbQuery("No approved APP room is active.");
     return;
   }
   const targets = await matchingBaseCoords(galaxy, scopeId, query);
@@ -2397,7 +2611,7 @@ async function handleRegionAgendaButton(ctx) {
   const galaxy = normalizeGalaxy(galaxyText) || await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) {
-    await ctx.answerCbQuery("No active operation group.");
+    await ctx.answerCbQuery("No approved APP room is active.");
     return;
   }
   const coverage = await regionCoverage(galaxy, scopeId);
@@ -2432,7 +2646,7 @@ async function handleRegionAgendaButton(ctx) {
 async function handleScoutings(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
   if (!agendas.length) {
     return respond(ctx, mode, [
@@ -2454,7 +2668,7 @@ async function handleWatches(ctx, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !watches from your Telegram account so I know whose assignments to find.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
   const userId = telegramUserId(ctx);
   const watches = [];
@@ -2910,7 +3124,7 @@ async function handleScout(ctx, text, mode) {
 
   const now = new Date();
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const operation = operationRow(ctx, {
     type: "scout",
     targetCoord: parsed.coord,
@@ -2936,7 +3150,7 @@ async function handleClaimed(ctx, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !claimed in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const userId = telegramUserId(ctx);
   const now = new Date().toISOString();
   const [claims, memberships, coveredIncoming] = await Promise.all([
@@ -2995,7 +3209,7 @@ function appendCommitmentSection(lines, title, rows) {
 
 function formatPersonalOperationCommitment(operation, member) {
   const target = operation.type === "defense"
-    ? `${operation.defended_coord || operation.target_coord || "?"} &lt;= ${operation.hostile_origin || "?"}`
+    ? `${operation.defended_coord || operation.target_coord || "?"} <= ${operation.hostile_origin || "?"}`
     : operation.target_coord || operation.short_id || "?";
   const state = member?.state || member?.role || "joined";
   const timing = scoutAgendaInfo(operation) ? "active watch" : formatEta(new Date(operation.arrival_at));
@@ -3014,7 +3228,7 @@ async function handleAttacked(ctx, text, mode) {
 
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
 
   const imported = parseIncomingExportRows(match[2], galaxy);
   if (imported.length > 1) {
@@ -3096,7 +3310,7 @@ async function handleAttacked(ctx, text, mode) {
 async function handleIncoming(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const query = commandBody(text);
   if (/^(help|usage|\?)$/i.test(query)) return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
   if (/^clear\b/i.test(query)) return clearIncomingReports(ctx, mode, galaxy, scopeId, query.replace(/^clear\b/i, "").trim());
@@ -3125,7 +3339,7 @@ async function handleIncoming(ctx, text, mode) {
 async function handleDefensePool(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const pageInfo = parseIncomingPage(commandBody(text));
   const incoming = await fetchActiveIncoming(galaxy, scopeId);
   const filtered = filterIncomingReports(incoming, pageInfo.query, galaxy);
@@ -3146,7 +3360,7 @@ async function handleDefensePoolButton(ctx) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) {
-    await ctx.answerCbQuery("No active guild scope.");
+    await ctx.answerCbQuery("No approved APP room is active.");
     return;
   }
   const incoming = await enrichIncomingReports(await fetchActiveIncoming(galaxy, scopeId), galaxy);
@@ -3214,7 +3428,7 @@ async function handleDefenseCoverButton(ctx) {
 async function handleIncomingReport(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const query = commandBody(text).replace(/^[!$\/]report\s+/i, "").trim();
   if (!query || /^(help|usage|\?)$/i.test(query)) {
     return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
@@ -3324,7 +3538,9 @@ async function handleIntel(ctx, text, mode) {
     if (!(await safeUserCanUseOfficerCommands(ctx))) {
       return respond(ctx, mode, "Only Lysander officers can set a manual alliance assessment.");
     }
-    if (!scopeId) return respond(ctx, mode, "No active operation group set. Open the approved guild group first.");
+    if (!scopeId) {
+      return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
+    }
 
     const stamp = new Date().toISOString();
     const saved = await upsertRow("b24_intel_annotations", {
@@ -3363,7 +3579,7 @@ async function handleHistory(ctx, text, mode) {
     return respond(ctx, mode, `Use: <code>${escapeHtml(mode)}history ${escapeHtml(galaxy)}:14:64:30</code>`, { parse_mode: "HTML" });
   }
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use <code>$guild bind</code> in your approved guild group first.", { parse_mode: "HTML" });
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run <code>$approvechat</code> in the room.", { parse_mode: "HTML" });
   const history = await battleHistoryReader.coordinateHistory({
     authorized: true,
     mapId: galaxyToMapId(parsed.galaxy),
@@ -3377,7 +3593,7 @@ async function handleHistory(ctx, text, mode) {
 async function handleOccupied(ctx, text, mode) {
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active guild scope. Use <code>$guild bind</code> in your approved guild group first.", { parse_mode: "HTML" });
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run <code>$approvechat</code> in the room.", { parse_mode: "HTML" });
   const rawQuery = commandBody(text);
   const query = parseRegion(rawQuery, galaxy) || rawQuery;
   const rows = await battleHistoryReader.activeOccupations({
@@ -3412,7 +3628,7 @@ async function handleRegions(ctx, text, mode) {
   const fallbackGalaxy = await galaxyForContext(ctx);
   const parsed = parseRegionCoverageQuery(commandBody(text), fallbackGalaxy);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const coverage = await regionCoverage(parsed.galaxy, scopeId);
   const regions = regionsWithoutCoverage(parsed.galaxy, coverage);
   const agenda = await ensureRegionCoverageAgenda(ctx, parsed.galaxy, scopeId, regions);
@@ -3605,7 +3821,7 @@ async function handleBoard(ctx, text, mode) {
   const kind = boardKind(text);
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const [operations, appClaims, incomingRows] = await Promise.all([
     fetchActiveOperations(galaxy, scopeId, kind),
     kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId),
@@ -3655,7 +3871,7 @@ async function handleNext(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !next in a group or private chat so I know who to look up.");
   const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
-  if (!scopeId) return respond(ctx, mode, "No active operation group set. Use $guild bind in your guild group first.");
+  if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const scope = parseNextScope(text);
   const [memberships, bases] = await Promise.all([
     fetchRows("b24_operation_members", {
@@ -5129,9 +5345,9 @@ function intelAgeLabel(value) {
 }
 
 async function galaxyForContext(ctx) {
-  const chatId = ctx.chat?.id ? String(ctx.chat.id) : "";
-  if (chatId) {
-    const chat = await fetchOne("b24_chat_settings", { chat_id: chatId }, null, false);
+  const scopeId = await operationScopeId(ctx);
+  if (scopeId) {
+    const chat = await fetchOne("b24_chat_settings", { chat_id: scopeId }, null, false);
     if (chat?.galaxy) return normalizeGalaxy(chat.galaxy);
   }
   if (ctx.from?.id) {
@@ -6516,34 +6732,36 @@ function chatTitle(ctx) {
 
 async function rememberActiveChat(ctx) {
   if (!ctx.from?.id || isPrivateChat(ctx) || !ctx.chat?.id) return false;
+  const scopeId = await resolveGuildScopeForChat(ctx.chat.id);
+  if (!scopeId) return false;
   const galaxy = await galaxyForContext(ctx);
   return upsertRow("b24_user_settings", {
     user_id: telegramUserId(ctx),
     galaxy,
     map_id: galaxyToMapId(galaxy),
-    active_chat_id: String(ctx.chat.id),
-    active_chat_label: chatTitle(ctx),
+    active_chat_id: scopeId,
+    active_chat_label: `${primaryGuildId} via ${chatTitle(ctx)}`,
     updated_at: new Date().toISOString()
   }, "user_id");
 }
 
 async function operationScopeId(ctx) {
-  if (!isPrivateChat(ctx)) return chatScopeId(ctx);
+  if (!isPrivateChat(ctx)) return resolveGuildScopeForChat(ctx.chat?.id);
   if (!ctx.from?.id) return "";
   const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
   const activeChatId = settings?.active_chat_id || "";
-  if (approvedChatIds.length && !approvedChatIds.includes(activeChatId)) return "";
-  return activeChatId;
+  if (activeChatId && await isRecognizedGuildScope(activeChatId)) return activeChatId;
+  return primaryApprovedScope();
 }
 
 async function operationScopeLabel(ctx, scopeId = "") {
-  if (!isPrivateChat(ctx)) return chatTitle(ctx);
+  if (!isPrivateChat(ctx)) return `${primaryGuildId} via ${chatTitle(ctx)}`;
   if (!ctx.from?.id) return scopeId || "unknown";
   const settings = await fetchOne("b24_user_settings", { user_id: telegramUserId(ctx) }, null, false);
   if (scopeId && String(settings?.active_chat_id || "") === String(scopeId) && settings?.active_chat_label) {
     return settings.active_chat_label;
   }
-  return scopeId || settings?.active_chat_label || "unknown";
+  return settings?.active_chat_label || (scopeId ? `${primaryGuildId} operations` : "unknown");
 }
 
 function parseLookupCommand(text, fallbackGalaxy = defaultGalaxy) {
@@ -7024,10 +7242,11 @@ function verifyMiniAppAccess(value) {
 async function verifiedMiniAppSession(accessToken) {
   const session = verifyMiniAppAccess(accessToken);
   if (!session) return null;
-  if (approvedChatIds.length && !approvedChatIds.includes(session.c)) return null;
+  if (!(await isRecognizedGuildScope(session.c))) return null;
   const member = await fetchAccessMember(session.c, session.u);
   if (!member || member.status !== "active" || !["member", "officer", "owner"].includes(member.role)) return null;
-  if (accessChatIds.length && !(await isMemberOfAnyAccessChat({ telegram: bot.telegram }, session.u))) return null;
+  if (accessChatIds.length && member.access_mode !== "private" &&
+      !(await isMemberOfAnyAccessChat({ telegram: bot.telegram }, session.u))) return null;
   return { ...session, member };
 }
 
