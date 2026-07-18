@@ -72,7 +72,7 @@ export function compactSurvivors(units, limit = 4) {
 }
 
 function sameScope(row, scope, coord = "") {
-  return String(row?.map_id || "") === String(scope.mapId)
+  return (!scope.mapId || String(row?.map_id || "") === String(scope.mapId))
     && String(row?.chat_id || "") === String(scope.chatId)
     && (!coord || text(row?.coord).toUpperCase() === coord.toUpperCase());
 }
@@ -230,8 +230,14 @@ export function buildActiveOccupations({ scope, occupations = [], battles = [], 
 }
 
 function requireScope(request) {
-  if (!request?.authorized || !text(request.mapId) || !text(request.chatId)) throw new Error("Battle intelligence access is not authorized.");
+  if (!request?.authorized || !text(request.chatId)) throw new Error("Battle intelligence access is not authorized.");
   return { mapId: text(request.mapId), chatId: text(request.chatId) };
+}
+
+function tableOptions(scope) {
+  return scope.mapId
+    ? { mapId: scope.mapId, pageSize: 250 }
+    : { includeMap: false, pageSize: 250 };
 }
 
 export function createBattleHistoryReader(fetchTableRows) {
@@ -240,7 +246,7 @@ export function createBattleHistoryReader(fetchTableRows) {
       const scope = requireScope(request);
       const coord = text(request.coord).toUpperCase();
       const filters = { coord: `eq.${coord}`, chat_id: `eq.${scope.chatId}` };
-      const options = { mapId: scope.mapId, pageSize: 250 };
+      const options = tableOptions(scope);
       const [battles, occupations, observations, events] = await Promise.all([
         fetchTableRows("b24_battle_reports", filters, options),
         fetchTableRows("b24_occupations", filters, options),
@@ -252,7 +258,7 @@ export function createBattleHistoryReader(fetchTableRows) {
     async activeOccupations(request) {
       const scope = requireScope(request);
       const filters = { chat_id: `eq.${scope.chatId}` };
-      const options = { mapId: scope.mapId, pageSize: 250 };
+      const options = tableOptions(scope);
       const [occupations, battles, events] = await Promise.all([
         fetchTableRows("b24_occupations", filters, options),
         fetchTableRows("b24_battle_reports", filters, options),

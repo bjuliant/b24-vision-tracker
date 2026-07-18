@@ -464,7 +464,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "claim") || isCommand(lower, "take") || isCommand(lower, "attack")) return handleClaim(ctx, text, mode);
   if (isCommand(lower, "attacks")) return handleAttacks(ctx, text, mode);
   if (isCommand(lower, "scouts")) return handleScoutings(ctx, text, mode);
-  if (isCommand(lower, "watches")) return handleWatches(ctx, mode);
+  if (isCommand(lower, "watches")) return handleWatches(ctx, text, mode);
   if (isCommand(lower, "scout")) return handleScout(ctx, text, mode);
   if (isCommand(lower, "attacked") || isCommand(lower, "sos")) return handleAttacked(ctx, text, mode);
   if (isCommand(lower, "report")) return handleIncomingReport(ctx, text, mode);
@@ -489,8 +489,8 @@ async function handleText(ctx) {
   if (isCommand(lower, "board")) return handleBoard(ctx, text, mode);
   if (isCommand(lower, "next") || isExactCommand(lower, "myops")) return handleNext(ctx, text, mode);
   if (isCommand(lower, "incoming")) return handleIncoming(ctx, text, mode);
-  if (isExactCommand(lower, "targets")) return handleTargets(ctx, mode);
-  if (isExactCommand(lower, "claimed")) return handleClaimed(ctx, mode);
+  if (isExactCommand(lower, "targets")) return handleTargets(ctx, text, mode);
+  if (isExactCommand(lower, "claimed")) return handleClaimed(ctx, text, mode);
   if (isCommand(lower, "mine")) return handleMine(ctx, text, mode);
   if (isCommand(lower, "me")) return handleMe(ctx, text, mode);
   if (isCommand(lower, "save me")) return handleSaveMe(ctx, text, mode);
@@ -946,6 +946,7 @@ async function helpText(ctx, input = "") {
     "",
     "<code>!</code> replies to you privately. In an approved APP room, <code>$</code> posts to the room.",
     "Use <code>!next</code> whenever you are unsure what comes next.",
+    "Lists and searches span imported galaxies unless you begin with <code>Bxx</code>.",
     "",
     status,
     "",
@@ -1123,6 +1124,31 @@ function normalizeIncomingText(text) {
 
 function explicitGalaxyFromText(text) {
   return normalizeGalaxy((String(text || "").match(galaxyPattern) || [])[0]);
+}
+
+// Read-only views can span every imported galaxy. Commands that write data
+// always resolve a concrete galaxy before reaching this helper.
+function queryOptionsForGalaxy(galaxy, options = {}) {
+  const normalized = normalizeGalaxy(galaxy);
+  return normalized
+    ? { ...options, mapId: galaxyToMapId(normalized) }
+    : { ...options, includeMap: false };
+}
+
+function displayGalaxyScope(galaxy) {
+  return normalizeGalaxy(galaxy) || "All Imported Galaxies";
+}
+
+function galaxyFromMapId(mapId) {
+  return normalizeGalaxy(String(mapId || "").replace(/-main$/i, ""));
+}
+
+function stripLeadingGalaxyScope(query, galaxy) {
+  const normalized = normalizeGalaxy(galaxy);
+  if (!normalized) return String(query || "").trim();
+  return String(query || "")
+    .replace(new RegExp(`^\\s*${normalized}(?=\\s|$)\\s*`, "i"), "")
+    .trim();
 }
 
 async function statusReport(ctx) {
@@ -2378,16 +2404,18 @@ async function handleClaim(ctx, text, mode) {
 }
 
 async function handleAttacks(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
+  const workingGalaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
-  const pageInfo = parsePageFromQuery(commandBody(text));
+  const rawQuery = commandBody(text);
+  const queryGalaxy = explicitGalaxyFromText(rawQuery);
+  const pageInfo = parsePageFromQuery(stripLeadingGalaxyScope(rawQuery, queryGalaxy));
   const body = pageInfo.query.trim();
   const shortId = normalizeShortId(body.match(/^([A-Z]-?[A-Z0-9]{3,8})$/i)?.[1] || "");
   if (shortId) return handleAttackPool(ctx, shortId, mode, pageInfo.page);
   const attackNumber = parseAttackNumber(body);
   if (attackNumber) {
-    const operation = await findAttackByNumber(galaxy, scopeId, attackNumber);
+    const operation = await findAttackByNumber(queryGalaxy || workingGalaxy, scopeId, attackNumber);
     if (!operation) return respond(ctx, mode, `No active attack #${attackNumber} found.`);
     return handleAttackPool(ctx, operation.short_id, mode, pageInfo.page);
   }
@@ -2395,17 +2423,17 @@ async function handleAttacks(ctx, text, mode) {
     return respond(ctx, mode, "Use <code>$standdown A-12345 reason</code> to close one attack plan. <code>$attacks</code> only lists plans.", { parse_mode: "HTML" });
   }
 
-  const attacks = await fetchActiveOperations(galaxy, scopeId, "attack");
+  const attacks = await fetchActiveOperations(queryGalaxy, scopeId, "attack");
   const claimsByOperation = await fetchClaimsByOperation(attacks);
-  const lines = [`<b>${galaxy} Attack Plans</b>`];
+  const lines = [`<b>${displayGalaxyScope(queryGalaxy)} Attack Plans</b>`];
   if (!attacks.length) {
     lines.push("No active attack plans.");
     lines.push("", "Create one: <code>!attack 02:00 clowntown 4</code>");
-    const operations = await fetchActiveOperations(galaxy, scopeId);
+    const operations = await fetchActiveOperations(queryGalaxy, scopeId);
     const canQuickCreate = !operations.length && await safeUserCanUseOfficerCommands(ctx);
     return respond(ctx, mode, lines.join("\n"), {
       parse_mode: "HTML",
-      ...quickSetupKeyboard(galaxy, "", canQuickCreate)
+      ...(queryGalaxy ? quickSetupKeyboard(queryGalaxy, "", canQuickCreate) : {})
     });
   }
 
@@ -2414,10 +2442,11 @@ async function handleAttacks(ctx, text, mode) {
     const targets = groupAttackTargets(operation, claims);
     const claimedWaves = targets.reduce((sum, target) => sum + target.claimedWaves, 0);
     const totalWaves = targets.reduce((sum, target) => sum + target.totalWaves, 0);
-    return `${index + 1} - ${escapeHtml(formatAttackListDate(operation.arrival_at))} ${escapeHtml(attackDisplayName(operation))} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} - ${claimedWaves}/${totalWaves || 0}`;
+    const prefix = queryGalaxy ? "" : `${galaxyFromMapId(operation.map_id)} `;
+    return `${index + 1} - ${prefix}${escapeHtml(formatAttackListDate(operation.arrival_at))} ${escapeHtml(attackDisplayName(operation))} ${escapeHtml(formatClockLabel(new Date(operation.arrival_at)))} - ${claimedWaves}/${totalWaves || 0}`;
   }));
-  lines.push("", "Add targets: <code>!attack add 1 24324510, 24351330, paste, paste</code>");
-  lines.push("Open a pool: <code>!attacks 1</code>");
+  if (queryGalaxy) lines.push("", "Add targets: <code>!attack add 1 24324510, 24351330, paste, paste</code>");
+  lines.push(queryGalaxy ? "Open a pool: <code>!attacks 1</code>" : "Use an Open button, or <code>!attacks B24</code> to work with numbered plans.");
   lines.push("Show board: <code>$board attack</code>");
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
@@ -2730,32 +2759,38 @@ async function handleRegionAgendaButton(ctx) {
 }
 
 async function handleScoutings(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
-  const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
+  const queryGalaxy = explicitGalaxyFromText(commandBody(text));
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId));
   if (!agendas.length) {
     return respond(ctx, mode, [
-      `<b>${galaxy} Scouting Agendas</b>`,
+      `<b>${scopeLabel} Scouting Agendas</b>`,
       "No persistent scouting agendas.",
       "Start from a base list: <code>$bases [tag or player]</code>"
     ].join("\n"), { parse_mode: "HTML" });
   }
 
-  const lines = [`<b>${galaxy} Scouting Agendas</b>`];
-  agendas.forEach((agenda, index) => lines.push(`${index + 1}. ${escapeHtml(agenda.name)} - ${agenda.operations.length} ${scoutAgendaTargetKind(agenda)} watches - active until cancelled`));
+  const lines = [`<b>${scopeLabel} Scouting Agendas</b>`];
+  agendas.forEach((agenda, index) => {
+    const prefix = queryGalaxy ? "" : `${galaxyFromMapId(agenda.operations[0]?.map_id)} `;
+    lines.push(`${index + 1}. ${prefix}${escapeHtml(agenda.name)} - ${agenda.operations.length} ${scoutAgendaTargetKind(agenda)} watches - active until cancelled`);
+  });
+  if (!queryGalaxy) lines.push("", "Use <code>$scouts B24</code> to open a map-specific agenda.");
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
-    ...scoutAgendaListKeyboard(galaxy, agendas)
+    ...(queryGalaxy ? scoutAgendaListKeyboard(queryGalaxy, agendas) : {})
   });
 }
 
-async function handleWatches(ctx, mode) {
+async function handleWatches(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !watches from your Telegram account so I know whose assignments to find.");
-  const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
-  const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
+  const queryGalaxy = explicitGalaxyFromText(commandBody(text));
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId));
   const userId = telegramUserId(ctx);
   const watches = [];
   for (const agenda of agendas) {
@@ -2766,13 +2801,13 @@ async function handleWatches(ctx, mode) {
     });
   }
   if (!watches.length) {
-    return respond(ctx, mode, `<b>${escapeHtml(galaxy)} My Watches</b>\nNo active watch assignments. Open <code>$scouts</code> to take one.`, { parse_mode: "HTML" });
+    return respond(ctx, mode, `<b>${escapeHtml(scopeLabel)} My Watches</b>\nNo active watch assignments. Open <code>$scouts</code> to take one.`, { parse_mode: "HTML" });
   }
   const regionWatches = watches.filter((watch) => /^B\d{2}:\d{1,2}$/.test(String(watch.coord || "")));
   const baseWatches = watches.filter((watch) => !regionWatches.includes(watch));
   const formatWatch = (watch, index) => `${String(index + 1).padStart(2, "0")} ${escapeHtml(watch.coord)} - ${escapeHtml(watch.agenda.name)}`;
   const lines = [
-    `<b>${escapeHtml(galaxy)} My Watches</b>`,
+    `<b>${escapeHtml(scopeLabel)} My Watches</b>`,
     `${watches.length} active watch assignment${watches.length === 1 ? "" : "s"}.`,
   ];
   if (regionWatches.length) {
@@ -3228,13 +3263,14 @@ async function handleScout(ctx, text, mode) {
   return message;
 }
 
-async function handleTargets(ctx, mode) {
-  return handleClaimed(ctx, mode);
+async function handleTargets(ctx, text, mode) {
+  return handleClaimed(ctx, text, mode);
 }
 
-async function handleClaimed(ctx, mode) {
+async function handleClaimed(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !claimed in a group or private chat so I know who to look up.");
-  const galaxy = await galaxyForContext(ctx);
+  const queryGalaxy = explicitGalaxyFromText(commandBody(text));
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const userId = telegramUserId(ctx);
@@ -3245,20 +3281,20 @@ async function handleClaimed(ctx, mode) {
       status: "eq.active",
       chat_id: `eq.${scopeId}`,
       arrival_at: `gt.${now}`
-    }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" }),
+    }, queryOptionsForGalaxy(queryGalaxy, { order: "arrival_at.asc" })),
     fetchRows("b24_operation_members", {
       user_id: `eq.${userId}`
-    }, { mapId: galaxyToMapId(galaxy), order: "updated_at.asc" }),
+    }, queryOptionsForGalaxy(queryGalaxy, { order: "updated_at.asc" })),
     fetchRows("b24_incoming", {
       covered_by_user_id: `eq.${userId}`,
       status: "eq.active",
       chat_id: `eq.${scopeId}`,
       arrival_at: `gt.${now}`
-    }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" })
+    }, queryOptionsForGalaxy(queryGalaxy, { order: "arrival_at.asc" }))
   ]);
 
   const activeMemberships = memberships.filter((member) => member.state !== "withdrawn");
-  const operations = (await fetchOperationsForMemberships(galaxy, activeMemberships))
+  const operations = (await fetchOperationsForMemberships(queryGalaxy, activeMemberships))
     .filter((operation) => operation.chat_id === scopeId);
   const memberByOperation = new Map(activeMemberships.map((member) => [member.operation_id, member]));
   const claimedOperationIds = new Set(claims.map((claim) => claim.operation_id).filter(Boolean));
@@ -3266,7 +3302,7 @@ async function handleClaimed(ctx, mode) {
   const defenseMemberships = operations.filter((operation) => operation.type === "defense");
   const scoutMemberships = operations.filter((operation) => operation.type === "scout");
 
-  const lines = [`<b>${escapeHtml(galaxy)} Your Commitments</b>`];
+  const lines = [`<b>${escapeHtml(scopeLabel)} Your Commitments</b>`];
   appendCommitmentSection(lines, "Attacks", [
     ...claims.map((claim) => `ATTACK ${formatClaimLine(claim)}`),
     ...attackMemberships.map((operation) => formatPersonalOperationCommitment(operation, memberByOperation.get(operation.operation_id)))
@@ -3280,7 +3316,7 @@ async function handleClaimed(ctx, mode) {
   )));
 
   if (!claims.length && !attackMemberships.length && !coveredIncoming.length && !defenseMemberships.length && !scoutMemberships.length) {
-    lines.push("", `You have no active attack, defense, or scouting commitments in ${escapeHtml(galaxy)}.`);
+    lines.push("", `You have no active attack, defense, or scouting commitments in ${escapeHtml(scopeLabel)}.`);
   }
   return respond(ctx, mode, lines.join("\n"), {
     parse_mode: "HTML",
@@ -3394,30 +3430,33 @@ async function handleAttacked(ctx, text, mode) {
 }
 
 async function handleIncoming(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
+  const workingGalaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
-  const query = commandBody(text);
-  if (/^(help|usage|\?)$/i.test(query)) return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
-  if (/^clear\b/i.test(query)) return clearIncomingReports(ctx, mode, galaxy, scopeId, query.replace(/^clear\b/i, "").trim());
-  const imported = parseIncomingExportRows(query, galaxy);
+  const rawQuery = commandBody(text);
+  if (/^(help|usage|\?)$/i.test(rawQuery)) return respond(ctx, mode, await helpText(ctx, "!help incoming"), { parse_mode: "HTML" });
+  if (/^clear\b/i.test(rawQuery)) return clearIncomingReports(ctx, mode, workingGalaxy, scopeId, rawQuery.replace(/^clear\b/i, "").trim());
+  const imported = parseIncomingExportRows(rawQuery, workingGalaxy);
   if (imported.length) {
     const saved = await insertIncomingRows(ctx, imported, scopeId);
     return respond(ctx, mode, `Imported ${saved}/${imported.length} incoming reports. Use <code>$incoming</code>, <code>$incoming B24:36</code>, or <code>$incoming [APP]</code>.`, { parse_mode: "HTML" });
   }
 
-  const incoming = await fetchActiveIncoming(galaxy, scopeId);
+  const queryGalaxy = explicitGalaxyFromText(rawQuery);
+  const query = stripLeadingGalaxyScope(rawQuery, queryGalaxy);
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
+  const incoming = await fetchActiveIncoming(queryGalaxy, scopeId);
   const pageInfo = parseIncomingPage(query);
-  const filtered = filterIncomingReports(incoming, pageInfo.query, galaxy);
-  const enriched = await enrichIncomingReports(filtered, galaxy);
+  const filtered = filterIncomingReports(incoming, pageInfo.query, queryGalaxy);
+  const enriched = await enrichIncomingReports(filtered, queryGalaxy);
   const pageSize = 15;
   const from = (pageInfo.page - 1) * pageSize;
   const pageRows = enriched.slice(from, from + pageSize);
   const label = pageInfo.query ? ` matching ${escapeHtml(pageInfo.query)}` : "";
-  if (!pageRows.length) return respond(ctx, mode, `No active hostile incoming reports${label} in ${galaxy}.`, { parse_mode: "HTML" });
+  if (!pageRows.length) return respond(ctx, mode, `No active hostile incoming reports${label} in ${escapeHtml(scopeLabel)}.`, { parse_mode: "HTML" });
   const lines = [`<pre>${pageRows.map(formatIncomingLine).join("\n")}</pre>`, "", `${from + 1}-${from + pageRows.length} of ${enriched.length} incoming`];
   if (from + pageRows.length < enriched.length) {
-    lines.push(`Next: <code>$incoming ${escapeHtml([pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
+    lines.push(`Next: <code>$incoming ${escapeHtml([queryGalaxy, pageInfo.query, `page ${pageInfo.page + 1}`].filter(Boolean).join(" "))}</code>`);
   }
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
 }
@@ -3677,19 +3716,19 @@ async function handleHistory(ctx, text, mode) {
 }
 
 async function handleOccupied(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run <code>$approvechat</code> in the room.", { parse_mode: "HTML" });
   const rawQuery = commandBody(text);
-  const query = parseRegion(rawQuery, galaxy) || rawQuery;
+  const galaxy = explicitGalaxyFromText(rawQuery);
+  const query = (galaxy ? parseRegion(rawQuery, galaxy) : "") || rawQuery;
   const rows = await battleHistoryReader.activeOccupations({
     authorized: true,
-    mapId: galaxyToMapId(galaxy),
+    mapId: galaxy ? galaxyToMapId(galaxy) : "",
     chatId: scopeId,
     query,
     limit: 20
   });
-  return respond(ctx, mode, formatOccupiedTelegram({ galaxy, query: rawQuery, rows }, { escapeHtml }), { parse_mode: "HTML" });
+  return respond(ctx, mode, formatOccupiedTelegram({ galaxy: displayGalaxyScope(galaxy), query: rawQuery, rows }, { escapeHtml }), { parse_mode: "HTML" });
 }
 
 function formatHistoryNumber(value) {
@@ -3697,9 +3736,8 @@ function formatHistoryNumber(value) {
 }
 
 async function handleAstros(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
   const query = commandBody(text);
-  const report = await buildAstrosReport(query, galaxy);
+  const report = await buildAstrosReport(query, explicitGalaxyFromText(query));
   return respond(ctx, mode, report, { parse_mode: "HTML" });
 }
 
@@ -3726,16 +3764,14 @@ async function handleRegions(ctx, text, mode) {
 }
 
 async function handleStale(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
   const query = text.replace(/^[!$]stale\b/i, "").trim();
-  const report = await buildStaleReport(query, galaxy);
+  const report = await buildStaleReport(query, explicitGalaxyFromText(query));
   return respond(ctx, mode, report, { parse_mode: "HTML" });
 }
 
 async function handleScore(ctx, text, mode) {
-  const galaxy = await galaxyForContext(ctx);
   const query = text.replace(/^[!$]score\b/i, "").trim();
-  const report = await buildScoreReport(query, galaxy);
+  const report = await buildScoreReport(query, explicitGalaxyFromText(query));
   return respond(ctx, mode, report, { parse_mode: "HTML" });
 }
 
@@ -3765,10 +3801,12 @@ async function handleUnknownCommand(ctx, text, mode) {
 }
 
 async function handleBases(ctx, text, mode) {
-  const parsed = parseBasesQuery(commandBody(text).replace(/^@/, ""), await galaxyForContext(ctx));
+  const rawQuery = commandBody(text).replace(/^@/, "");
+  const parsed = parseBasesQuery(rawQuery, explicitGalaxyFromText(rawQuery));
   if (!parsed.query) return respond(ctx, mode, "Use: !bases playername or !bases B24 [ROTC]");
   if (looksLikeAstroSearch(parsed.query)) {
-    return respond(ctx, mode, `That is an astro search. Use <code>${escapeHtml(mode)}astros ${escapeHtml(parsed.galaxy)} ${escapeHtml(parsed.query)}</code> for terrain, attributes, empty/occupied, or alliance filters.`, { parse_mode: "HTML" });
+    const astroScope = parsed.galaxy ? `${parsed.galaxy} ` : "";
+    return respond(ctx, mode, `That is an astro search. Use <code>${escapeHtml(mode)}astros ${escapeHtml(astroScope)}${escapeHtml(parsed.query)}</code> for terrain, attributes, empty/occupied, or alliance filters.`, { parse_mode: "HTML" });
   }
   return sendBasesReport(ctx, mode, parsed.query, parsed.galaxy);
 }
@@ -3810,10 +3848,14 @@ async function handleStance(ctx, text, mode, stance) {
 }
 
 async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
-  const galaxy = normalizeGalaxy(galaxyOverride) || await galaxyForContext(ctx);
+  // Browsing without a Bxx prefix is intentionally cross-galaxy. Creating
+  // an agenda or attack stays scoped and is therefore only offered below
+  // when the caller explicitly chose a galaxy.
+  const galaxy = normalizeGalaxy(galaxyOverride);
+  const scopeLabel = displayGalaxyScope(galaxy);
   const pageInfo = parsePageFromQuery(query);
   query = pageInfo.query;
-  const queryCommand = galaxyOverride ? `${galaxy} ${query}` : query;
+  const queryCommand = [galaxy, query].filter(Boolean).join(" ");
   const scopeId = await operationScopeId(ctx).catch((error) => {
     console.error("Base report scope lookup failed", error);
     return "";
@@ -3821,11 +3863,11 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   const baseLookups = await Promise.allSettled([
     fetchRows("b24_user_bases", {
       status: "eq.active"
-    }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" }),
-    fetchRows("b24_bases", {}, { mapId: galaxyToMapId(galaxy), order: "coord.asc" }),
+    }, queryOptionsForGalaxy(galaxy, { order: "base_coord.asc" })),
+    fetchRows("b24_bases", {}, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })),
     scopeId ? fetchRows("b24_intel_annotations", {
       chat_id: `eq.${scopeId}`
-    }, { mapId: galaxyToMapId(galaxy), order: "coord.asc" }) : []
+    }, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })) : []
   ]);
   const [savedRows, importedRows, annotations] = baseLookups.map((result, index) => {
     if (result.status === "fulfilled") return Array.isArray(result.value) ? result.value : [];
@@ -3854,11 +3896,11 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   const annotationMatches = annotations.filter((row) => searchText(row.alliance).includes(needle));
 
   if (!savedMatches.length && !importedMatches.length && !annotationMatches.length) {
-    return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${galaxy}.`, { parse_mode: "HTML" });
+    return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${escapeHtml(scopeLabel)}.`, { parse_mode: "HTML" });
   }
 
-  const stances = await fetchStanceMap(galaxy);
-  const canManageOperations = Boolean(scopeId && await safeUserCanUseOfficerCommands(ctx));
+  const stances = galaxy ? await fetchStanceMap(galaxy) : new Map();
+  const canManageOperations = Boolean(galaxy && scopeId && await safeUserCanUseOfficerCommands(ctx));
   const activeOperations = canManageOperations
     ? await fetchActiveOperations(galaxy, scopeId).catch((error) => {
       console.error("Base report operation lookup failed", error);
@@ -3886,10 +3928,10 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   const pageEntries = reportEntries.slice(reportStart, reportEnd);
   const compactOwnerTitle = owners.length <= 6
     ? owners.join(", ")
-    : `${galaxy} bases matching ${query}`;
+    : `${scopeLabel} bases matching ${query}`;
   const lines = [
     `<b>${escapeHtml(compactOwnerTitle)}</b>`,
-    `${importedMatches.length} imported / ${savedMatches.length} saved / ${annotationMatches.length} Lysander-assessed bases in ${galaxy}`
+    `${importedMatches.length} imported / ${savedMatches.length} saved / ${annotationMatches.length} Lysander-assessed bases in ${escapeHtml(scopeLabel)}`
   ];
   let currentSection = "";
   for (const entry of pageEntries) {
@@ -3937,13 +3979,14 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
 
 async function handleBoard(ctx, text, mode) {
   const kind = boardKind(text);
-  const galaxy = await galaxyForContext(ctx);
+  const queryGalaxy = explicitGalaxyFromText(commandBody(text));
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const [operations, appClaims, incomingRows] = await Promise.all([
-    fetchActiveOperations(galaxy, scopeId, kind),
-    kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(galaxy, scopeId),
-    kind === "attack" || kind === "scout" ? [] : fetchActiveIncoming(galaxy, scopeId)
+    fetchActiveOperations(queryGalaxy, scopeId, kind),
+    kind === "defense" || kind === "scout" ? [] : fetchBoardClaims(queryGalaxy, scopeId),
+    kind === "attack" || kind === "scout" ? [] : fetchActiveIncoming(queryGalaxy, scopeId)
   ]);
   const membersByOperation = await fetchMembersByOperation(operations);
   const claimsByOperation = await fetchClaimsByOperation(operations);
@@ -3953,12 +3996,16 @@ async function handleBoard(ctx, text, mode) {
   const scouts = operations.filter((operation) => operation.type === "scout");
   const attackCount = attacks.length + appClaims.length;
 
-  const lines = [`<b>${galaxy} Board</b>`];
+  const formatOperation = (operation, members = [], claims = []) => {
+    const prefix = queryGalaxy ? "" : `${galaxyFromMapId(operation.map_id)} `;
+    return `${prefix}${formatBoardOperationCompact(operation, members, claims)}`;
+  };
+  const lines = [`<b>${escapeHtml(scopeLabel)} Board</b>`];
   if (kind !== "defense" && kind !== "scout") {
     lines.push("", `<b>Attacks</b> (${attackCount})`);
     const attackLines = [
       ...attacks.map((operation) => {
-        return formatBoardOperationCompact(
+        return formatOperation(
           operation,
           membersByOperation.get(operation.operation_id) || [],
           claimsByOperation.get(operation.operation_id) || []
@@ -3972,14 +4019,14 @@ async function handleBoard(ctx, text, mode) {
   if (kind !== "attack" && kind !== "scout") {
     const defenseLines = [
       ...incomingRows.map(formatDefenseBoardIncomingCompact),
-      ...defenses.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || []))
+      ...defenses.map((operation) => formatOperation(operation, membersByOperation.get(operation.operation_id) || []))
     ];
     lines.push("", `<b>Defense</b> (${defenseLines.length})`);
     lines.push(...(defenseLines.length ? [`<pre>${defenseLines.join("\n")}</pre>`] : ["No active defense operations."]));
   }
   if (kind !== "attack" && kind !== "defense") {
     lines.push("", `<b>Scouts</b> (${scouts.length})`);
-    lines.push(...(scouts.length ? [`<pre>${scouts.map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`] : ["No active scout operations."]));
+    lines.push(...(scouts.length ? [`<pre>${scouts.map((operation) => formatOperation(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`] : ["No active scout operations."]));
   }
 
   return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
@@ -3987,7 +4034,9 @@ async function handleBoard(ctx, text, mode) {
 
 async function handleNext(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !next in a group or private chat so I know who to look up.");
-  const galaxy = await galaxyForContext(ctx);
+  const workingGalaxy = await galaxyForContext(ctx);
+  const queryGalaxy = explicitGalaxyFromText(commandBody(text));
+  const scopeLabel = displayGalaxyScope(queryGalaxy);
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) {
     return respond(ctx, mode, [
@@ -4023,21 +4072,21 @@ async function handleNext(ctx, text, mode) {
     ].join("\n"), { parse_mode: "HTML" });
   }
 
-  const scope = parseNextScope(text);
+  const scope = parseNextScope(`${mode}next ${stripLeadingGalaxyScope(commandBody(text), queryGalaxy)}`);
   const [memberships, bases] = await Promise.all([
     fetchRows("b24_operation_members", {
       user_id: `eq.${userId}`
-    }, { mapId: galaxyToMapId(galaxy), order: "updated_at.asc" }),
+    }, queryOptionsForGalaxy(queryGalaxy, { order: "updated_at.asc" })),
     fetchRows("b24_user_bases", {
       user_id: `eq.${telegramUserId(ctx)}`,
       status: "eq.active"
-    }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" })
+    }, queryOptionsForGalaxy(queryGalaxy, { order: "base_coord.asc" }))
   ]);
   const activeMemberships = memberships.filter((member) => member.state !== "withdrawn");
-  const operations = await fetchOperationsForMemberships(galaxy, activeMemberships);
+  const operations = await fetchOperationsForMemberships(queryGalaxy, activeMemberships);
   const actionOps = operations.filter((operation) => operation.status === "active" && operation.chat_id === scopeId);
   const membersByOperation = await fetchMembersByOperation(actionOps);
-  const incoming = scope.kind === "empire" ? [] : await incomingForUserBases(galaxy, scopeId, bases, telegramUserId(ctx));
+  const incoming = scope.kind === "empire" ? [] : await incomingForUserBases(queryGalaxy, scopeId, bases, telegramUserId(ctx));
   const filteredOps = actionOps
     .filter((operation) => scope.kind === "all" || scope.kind === "combat" || operation.type === scope.kind)
     .filter((operation) => new Date(operation.arrival_at).getTime() <= Date.now() + scope.hours * 60 * 60 * 1000);
@@ -4052,8 +4101,8 @@ async function handleNext(ctx, text, mode) {
     ]
     : [
       "<b>Setup</b>",
-      `Save one of your bases: <code>!mine ${galaxy}:06:10:20</code>`,
-      `Working galaxy: ${escapeHtml(galaxy)}. Change it with <code>!g B23</code> when needed.`,
+      `Save one of your bases: <code>!mine ${workingGalaxy}:06:10:20</code>`,
+      `Working galaxy: ${escapeHtml(workingGalaxy)}. Change it with <code>!g B23</code> when needed.`,
       "Then run <code>!next</code> again."
     ];
   const readyLines = scope.kind === "all" && !filteredOps.length && !filteredIncoming.length
@@ -4065,12 +4114,12 @@ async function handleNext(ctx, text, mode) {
     : [];
 
   const lines = [
-    `<b>${galaxy} Next Actions</b>`,
+    `<b>${escapeHtml(scopeLabel)} Next Actions</b>`,
     `${scope.label}`,
     "",
     `<b>Operations</b> (${filteredOps.length})`,
     ...(filteredOps.length
-      ? [`<pre>${filteredOps.slice(0, 8).map((operation) => formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])).join("\n")}</pre>`]
+      ? [`<pre>${filteredOps.slice(0, 8).map((operation) => `${queryGalaxy ? "" : `${galaxyFromMapId(operation.map_id)} `}${formatBoardOperationCompact(operation, membersByOperation.get(operation.operation_id) || [])}`).join("\n")}</pre>`]
       : ["No active operations need you."]),
     "",
     `<b>Incoming Near Your Bases</b> (${filteredIncoming.length})`,
@@ -4411,14 +4460,13 @@ async function buildSystemReport(systemCoord, options = {}) {
 async function buildStaleReport(query, fallbackGalaxy) {
   const parsed = query ? parseCoordinate(query, fallbackGalaxy) : null;
   const region = query && !parsed ? parseRegion(query, fallbackGalaxy) : "";
-  const galaxy = parsed?.galaxy || galaxyFromCoord(region) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  const mapId = galaxyToMapId(galaxy);
+  const galaxy = parsed?.galaxy || galaxyFromCoord(region) || normalizeGalaxy(fallbackGalaxy);
   const cutoff = new Date(Date.now() - staleIntelMs).toISOString();
 
   if (parsed?.kind === "astro") return buildAstroAgeReport(parsed.coord);
 
   const filters = { updated_at: `lt.${cutoff}` };
-  let title = galaxy;
+  let title = displayGalaxyScope(galaxy);
   if (parsed?.kind === "system") {
     filters.system_id = `eq.${parsed.coord}`;
     title = parsed.coord;
@@ -4428,8 +4476,8 @@ async function buildStaleReport(query, fallbackGalaxy) {
   }
 
   const [astros, bases] = await Promise.all([
-    fetchRows("b24_astros", filters, { mapId, order: "updated_at.asc", limit: 12 }),
-    fetchRows("b24_bases", filters, { mapId, order: "updated_at.asc", limit: 12 })
+    fetchRows("b24_astros", filters, queryOptionsForGalaxy(galaxy, { order: "updated_at.asc", limit: 12 })),
+    fetchRows("b24_bases", filters, queryOptionsForGalaxy(galaxy, { order: "updated_at.asc", limit: 12 }))
   ]);
 
   if (!astros.length && !bases.length) return `No stale intel older than ${formatAgeWindow(staleIntelMs)} found for ${escapeHtml(title)}.`;
@@ -4449,10 +4497,10 @@ async function buildStaleReport(query, fallbackGalaxy) {
 async function buildScoreReport(query, fallbackGalaxy) {
   const parsed = query ? parseCoordinate(query, fallbackGalaxy) : null;
   const region = query && !parsed ? parseRegion(query, fallbackGalaxy) : "";
-  const galaxy = parsed?.galaxy || galaxyFromCoord(region) || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  const mapId = galaxyToMapId(galaxy);
+  const galaxy = parsed?.galaxy || galaxyFromCoord(region) || normalizeGalaxy(fallbackGalaxy);
 
   if (parsed?.kind === "astro") {
+    const mapId = mapIdForCoord(parsed.coord);
     const [astro, base] = await Promise.all([
       fetchOne("b24_astros", { coord: parsed.coord }, mapId),
       fetchOne("b24_bases", { coord: parsed.coord }, mapId)
@@ -4462,7 +4510,7 @@ async function buildScoreReport(query, fallbackGalaxy) {
   }
 
   const filters = {};
-  let title = galaxy;
+  let title = displayGalaxyScope(galaxy);
   if (parsed?.kind === "system") {
     filters.system_id = `eq.${parsed.coord}`;
     title = parsed.coord;
@@ -4473,11 +4521,11 @@ async function buildScoreReport(query, fallbackGalaxy) {
     filters.has_base = "eq.true";
   }
 
-  const astros = await fetchRows("b24_astros", filters, { mapId, order: "coord.asc", limit: 100 });
+  const astros = await fetchRows("b24_astros", filters, queryOptionsForGalaxy(galaxy, { order: "coord.asc", limit: 100 }));
   if (!astros.length) return `No scoreable astro intel found for ${escapeHtml(title)} yet.`;
 
   const scored = await Promise.all(astros.map(async (astro) => {
-    const base = await fetchOne("b24_bases", { coord: astro.coord }, mapId);
+    const base = await fetchOne("b24_bases", { coord: astro.coord }, mapIdForCoord(astro.coord));
     return { astro, base, score: targetScore(astro, base) };
   }));
 
@@ -4599,13 +4647,12 @@ async function buildSectorScoutReport(query, fallbackGalaxy) {
 }
 
 async function buildAstroBreakdown(galaxy, region = "") {
-  const mapId = galaxyToMapId(galaxy);
   const filters = {};
   if (region) filters.region_id = `eq.${region}`;
-  const rows = await fetchAllRows("b24_astros", filters, { mapId, select: "terrain,has_base", order: "terrain.asc" });
-  if (!rows.length) return `No astro intel found for ${escapeHtml(region || galaxy)} yet.`;
+  const rows = await fetchAllRows("b24_astros", filters, queryOptionsForGalaxy(galaxy, { select: "terrain,has_base", order: "terrain.asc" }));
+  const title = region || displayGalaxyScope(galaxy);
+  if (!rows.length) return `No astro intel found for ${escapeHtml(title)} yet.`;
   const counts = countBy(rows, "terrain");
-  const title = region || galaxy;
   const lines = [`<b>Astro Breakdown ${escapeHtml(title)}</b>`];
   Object.entries(counts)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -4616,7 +4663,8 @@ async function buildAstroBreakdown(galaxy, region = "") {
 
 async function buildAstroSearch(parsed) {
   const filters = {};
-  const titleParts = [parsed.filter || "astros", parsed.region || parsed.galaxy].filter(Boolean);
+  const scopeLabel = parsed.region || displayGalaxyScope(parsed.galaxy);
+  const titleParts = [parsed.filter || "astros", scopeLabel].filter(Boolean);
   if (parsed.region) filters.region_id = `eq.${parsed.region}`;
   if (parsed.filter) filters.terrain = `ilike.*${parsed.filter}*`;
   const pageSize = 50;
@@ -4626,7 +4674,7 @@ async function buildAstroSearch(parsed) {
   let count = 0;
   if (parsed.attrFilters.length || parsed.excludedTags.length || parsed.includedTags.length || parsed.nearTags.length || parsed.emptyOnly || parsed.bodyType) {
     const allRows = await fetchAllRows("b24_astros", filters, {
-      mapId: galaxyToMapId(parsed.galaxy),
+      ...queryOptionsForGalaxy(parsed.galaxy),
       order: "coord.asc"
     });
     const excludedFootprint = await tagBaseFootprint(parsed, "excludedTags");
@@ -4653,7 +4701,7 @@ async function buildAstroSearch(parsed) {
     ].filter(Boolean).join(", "));
   } else {
     const result = await fetchRowsWithCount("b24_astros", filters, {
-      mapId: galaxyToMapId(parsed.galaxy),
+      ...queryOptionsForGalaxy(parsed.galaxy),
       order: "coord.asc",
       from,
       to: from + pageSize - 1
@@ -4661,7 +4709,7 @@ async function buildAstroSearch(parsed) {
     rows = result.rows;
     count = result.count;
   }
-  if (!rows.length) return `No ${escapeHtml(parsed.filter || "matching")} astros found in ${escapeHtml(parsed.region || parsed.galaxy)}.`;
+  if (!rows.length) return `No ${escapeHtml(parsed.filter || "matching")} astros found in ${escapeHtml(scopeLabel)}.`;
   const lines = [`<b>${escapeHtml(titleParts.join(" in "))}</b>`];
   rows.forEach((astro) => {
     const attrs = Array.isArray(astro.attributes) ? astro.attributes.join("/") : "";
@@ -4702,8 +4750,8 @@ function parseAstrosQuery(query, fallbackGalaxy) {
   const attrFilters = parseAttributeFilters(withoutPage);
   const raw = attrFilters.reduce((value, filter) => value.replace(filter.tokenRegex, " "), withoutPage).trim();
   const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
-  const fallback = normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  const location = parseAstrosLocation(raw, fallbackGalaxy);
+  const fallback = normalizeGalaxy(fallbackGalaxy);
+  const location = parseAstrosLocation(raw, fallback);
   let remainder = raw;
   let galaxy = explicitGalaxy || fallback;
   let region = "";
@@ -4935,7 +4983,7 @@ async function tagBaseFootprint(parsed, tagKey) {
   const tags = parsed[tagKey] || [];
   if (!tags.length) return { coords: new Set(), regions: new Set() };
   const rows = await fetchRows("b24_bases", {}, {
-    mapId: galaxyToMapId(parsed.galaxy),
+    ...queryOptionsForGalaxy(parsed.galaxy),
     order: "coord.asc"
   });
   const selected = new Set(tags.map((tag) => tag.value));
@@ -5412,9 +5460,9 @@ function parsePageFromQuery(query) {
   };
 }
 
-function parseBasesQuery(query, fallbackGalaxy = defaultGalaxy) {
+function parseBasesQuery(query, fallbackGalaxy = "") {
   let raw = String(query || "").trim();
-  let galaxy = normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
+  let galaxy = normalizeGalaxy(fallbackGalaxy);
   const explicitGalaxy = raw.match(/^(B\d{2})(?:\b|:)\s*/i);
   const leadingDigits = raw.match(/^(\d{2})\s+/);
 
@@ -5430,10 +5478,9 @@ function parseBasesQuery(query, fallbackGalaxy = defaultGalaxy) {
 }
 
 async function fetchStanceMap(galaxy) {
-  const rows = await fetchRows("b24_stances", {}, {
-    mapId: galaxyToMapId(galaxy),
+  const rows = await fetchRows("b24_stances", {}, queryOptionsForGalaxy(galaxy, {
     order: "scope_type.asc,scope_value.asc"
-  }).catch(() => []);
+  })).catch(() => []);
   return {
     coord: new Map(rows.filter((row) => row.scope_type === "coord").map((row) => [row.scope_value, row.stance])),
     tag: new Map(rows.filter((row) => row.scope_type === "tag").map((row) => [normalizeStanceTarget(row.scope_value), row.stance]))
@@ -5614,7 +5661,7 @@ function fetchActiveClaims(galaxy, chatId = "") {
     arrival_at: `gt.${new Date().toISOString()}`
   };
   if (chatId) filters.chat_id = `eq.${chatId}`;
-  return fetchRows("b24_claims", filters, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
+  return fetchRows("b24_claims", filters, queryOptionsForGalaxy(galaxy, { order: "arrival_at.asc" }));
 }
 
 async function fetchBoardClaims(galaxy, chatId = "") {
@@ -5632,7 +5679,7 @@ function fetchActiveIncoming(galaxy, chatId = "") {
     arrival_at: `gt.${new Date().toISOString()}`
   };
   if (chatId) filters.chat_id = `eq.${chatId}`;
-  return fetchRows("b24_incoming", filters, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
+  return fetchRows("b24_incoming", filters, queryOptionsForGalaxy(galaxy, { order: "arrival_at.asc" }));
 }
 
 function fetchActiveOperations(galaxy, chatId = "", kind = "all") {
@@ -5642,7 +5689,7 @@ function fetchActiveOperations(galaxy, chatId = "", kind = "all") {
   };
   if (chatId) filters.chat_id = `eq.${chatId}`;
   if (kind === "attack" || kind === "defense" || kind === "scout") filters.type = `eq.${kind}`;
-  return fetchRows("b24_operations", filters, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
+  return fetchRows("b24_operations", filters, queryOptionsForGalaxy(galaxy, { order: "arrival_at.asc" }));
 }
 
 function fetchDueNotifications() {
@@ -5682,7 +5729,7 @@ async function fetchOperationsForMemberships(galaxy, memberships) {
   const operations = await fetchRows("b24_operations", {
     status: "eq.active",
     arrival_at: `gt.${new Date().toISOString()}`
-  }, { mapId: galaxyToMapId(galaxy), order: "arrival_at.asc" });
+  }, queryOptionsForGalaxy(galaxy, { order: "arrival_at.asc" }));
   return operations.filter((operation) => ids.has(operation.operation_id));
 }
 
@@ -6599,7 +6646,7 @@ async function enrichIncomingReports(incoming, galaxy) {
   if (!genericUserIds.length) return incoming;
   const bases = await fetchRows("b24_user_bases", {
     status: "eq.active"
-  }, { mapId: galaxyToMapId(galaxy), order: "base_coord.asc" });
+  }, { ...queryOptionsForGalaxy(galaxy), order: "base_coord.asc" });
   const basesByUser = new Map();
   bases.forEach((base) => {
     if (!genericUserIds.includes(String(base.user_id))) return;
