@@ -39,6 +39,7 @@
   const confirmFleetButton = document.querySelector("#confirmFleetButton");
   const confirmFleetResult = document.querySelector("#confirmFleetResult");
   const headerGalaxy = document.querySelector("#headerGalaxy");
+  const galaxySwitcher = document.querySelector("#galaxySwitcher");
   const headerSector = document.querySelector("#headerSector");
   const onlineCount = document.querySelector("#onlineCount");
   const bulkTargetText = document.querySelector("#bulkTargetText");
@@ -149,6 +150,7 @@
       }
       galaxy = normalizeGalaxy(miniAppSession.galaxy) || galaxy;
       telegramChatId = miniAppSession.chatId || telegramChatId;
+      populateGalaxySwitcher(miniAppSession.galaxies || [galaxy]);
     }
 
     if (hasSupabase && !miniAppSession && !urlParams.get("gal") && !initialLocation) {
@@ -206,6 +208,7 @@
     PLAYABLE_SECTORS = SECTORS.slice(1);
     intel = loadLocalState();
     if (headerGalaxy) headerGalaxy.textContent = galaxy;
+    if (galaxySwitcher) galaxySwitcher.value = galaxy;
     document.title = `${galaxy} Vision Tracker`;
     grid.setAttribute("aria-label", `${galaxy} sector map`);
     claimTarget.placeholder = `${galaxy}:44:76:10`;
@@ -246,9 +249,9 @@
     let url = `${botApiUrl}${path}`;
     if (method === "GET") {
       const separator = url.includes("?") ? "&" : "?";
-      url += `${separator}access=${encodeURIComponent(miniAppAccess)}`;
+      url += `${separator}access=${encodeURIComponent(miniAppAccess)}&galaxy=${encodeURIComponent(galaxy)}`;
     } else {
-      request.body = JSON.stringify({ access: miniAppAccess, ...(options.body || {}) });
+      request.body = JSON.stringify({ access: miniAppAccess, ...(options.body || {}), galaxy });
     }
     let response;
     try {
@@ -269,6 +272,13 @@
     if (!miniAppAccess) return;
     const payload = await miniAppApi("/api/miniapp/coverage");
     coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
+    intel.claims = {};
+    intel.operations = {};
+    intel.incoming = {};
+    (payload.claims || []).forEach(mergeClaimRow);
+    (payload.operations || []).forEach(mergeOperationRow);
+    (payload.incoming || []).forEach(mergeIncomingRow);
+    saveLocalState();
   }
 
   async function loadSharedAttacks() {
@@ -758,6 +768,7 @@
   }
 
   function bindControls() {
+    galaxySwitcher?.addEventListener("change", () => switchGalaxy(galaxySwitcher.value));
     toolButtons.forEach((button) => {
       if (miniAppSession) {
         button.disabled = true;
@@ -831,6 +842,47 @@
       }
       try { await loadBattleHistory(); setSync("Live", true); } catch {}
     });
+  }
+
+  function populateGalaxySwitcher(galaxies) {
+    if (!galaxySwitcher) return;
+    const choices = [...new Set((galaxies || []).map(normalizeGalaxy).filter(Boolean))]
+      .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)) || left.localeCompare(right));
+    if (!choices.includes(galaxy)) choices.push(galaxy);
+    galaxySwitcher.innerHTML = choices.map((choice) => `<option value="${choice}">${choice}</option>`).join("");
+    galaxySwitcher.value = galaxy;
+    galaxySwitcher.disabled = choices.length < 2;
+  }
+
+  async function switchGalaxy(nextGalaxy) {
+    const requested = normalizeGalaxy(nextGalaxy);
+    if (!requested || requested === galaxy || !miniAppSession) return;
+    galaxySwitcher.disabled = true;
+    setSync(`Loading ${requested}`);
+    setGalaxy(requested);
+    const nextUrl = new URL(location.href);
+    nextUrl.searchParams.set("gal", requested);
+    if (galaxyFromLocation(nextUrl.searchParams.get("loc")) !== requested) nextUrl.searchParams.delete("loc");
+    history.replaceState(null, "", nextUrl);
+    coverageByRegion = new Map();
+    sharedIntelByRegion = new Map();
+    sharedBattleHistoryData = { coord: "", occupation: null, timeline: [] };
+    selectedHistoryCoord = "";
+    grid.replaceChildren();
+    try {
+      miniAppSession = await loadMiniAppSession();
+      if (!miniAppSession || normalizeGalaxy(miniAppSession.galaxy) !== requested) throw new Error("That galaxy is not available.");
+      populateGalaxySwitcher(miniAppSession.galaxies || [requested]);
+      await Promise.all([loadCoverage(), loadSharedAttacks(), loadSharedIncoming(), loadSharedScouting()]);
+      renderGrid();
+      selectSector(selected);
+      renderAttackBoard();
+      renderIncomingBoard();
+      renderBulkTargets();
+      setSync("Live", true);
+    } catch (error) {
+      renderAccessRequired(error.message || "Lysander could not open that galaxy.");
+    }
   }
 
   async function connectSupabase() {
@@ -1160,6 +1212,15 @@
     selectSector(selected);
     tg?.HapticFeedback?.impactOccurred("light");
 
+    if (miniAppSession) {
+      const payload = await miniAppApi("/api/miniapp/claims", {
+        method: "POST",
+        body: { action: "create", claimId: id, target, arrivalAt, arrivalLabel, note: claim.note }
+      });
+      coverageByRegion = new Map((payload.sectors || []).map((sector) => [sector.region, sector]));
+      return;
+    }
+
     if (!client) return;
 
     const { error } = await client.from("b24_sectors").upsert({
@@ -1319,6 +1380,11 @@
     renderAttackBoard();
     renderBulkTargets();
 
+    if (miniAppSession) {
+      await miniAppApi("/api/miniapp/claims", { method: "POST", body: { action: "release", claimId } });
+      return;
+    }
+
     if (!client) return;
 
     const { error } = await client
@@ -1347,6 +1413,14 @@
     saveLocalState();
     if (claim.region === selected) renderClaimsPanel(selected);
     renderAttackBoard();
+
+    if (miniAppSession) {
+      await miniAppApi("/api/miniapp/claims", {
+        method: "POST",
+        body: { action: "confirm", claimId, confirmed: Boolean(confirmed), fleetLabel: claim.fleetLabel }
+      });
+      return;
+    }
 
     if (!client) return;
 

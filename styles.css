@@ -131,6 +131,44 @@ h1 {
   gap: 8px;
 }
 
+.galaxy-switcher {
+  display: grid;
+  min-width: 94px;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid rgba(57, 183, 255, 0.5);
+  border-radius: 8px;
+  background: rgba(8, 27, 39, 0.94);
+  padding: 7px 10px;
+}
+
+.galaxy-switcher span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.galaxy-switcher select {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 950;
+  outline: none;
+}
+
+.galaxy-switcher select:disabled {
+  opacity: 1;
+}
+
+.galaxy-switcher option {
+  background: #081b27;
+  color: var(--text);
+}
+
 .stat-card {
   min-width: 112px;
   border: 1px solid var(--line);
@@ -1775,7 +1813,12 @@ details.shared-scouting-panel > .workspace-section-body {
 
   .top-stats {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .galaxy-switcher,
+  .stat-card {
+    min-width: 0;
   }
 
   .map-workspace-body {
@@ -1940,6 +1983,10 @@ details.shared-scouting-panel > .workspace-section-body {
 }
 
 @media (max-width: 380px) {
+  .top-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .tool-button span:last-child {
     display: none;
   }

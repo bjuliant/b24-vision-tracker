@@ -51,6 +51,8 @@ Prefix a command with `!` to get the reply privately. Prefix the same command wi
 - `/map [galaxy] [coord]` opens that galaxy once without changing any saved default, for example `/map B23`.
 - `!galaxy [galaxy]` sets your personal default galaxy; `!g` remains a short alias.
 - `$setgroup [galaxy]` sets the current Telegram room's default galaxy. `$setgalaxy` remains an alias.
+- Bare read-only lists such as `$astros`, `$bases`, `$attacks`, `$incoming`, `$scouts`, `$watches`, `$claimed`, `$board`, and `$next` span imported galaxies; add `Bxx` to focus one galaxy.
+- Commands that create or change state use an explicit `Bxx` coordinate/scope or the user's saved working galaxy.
 - `$guild bind` remembers the current group as your active operation group for later DM commands.
 - `!guild status` shows your active operation group.
 - `![coord]` sends planet intel to the user by private message.
@@ -139,7 +141,7 @@ Send `/map` to the bot, then pin its message in your guild chat.
 
 ## Secure Mini App Map
 
-`/map` now creates a signed, short-lived link tied to the requesting Telegram user and their approved operation group. The Mini App verifies that link against the Render bot before it loads live coverage or accepts a watch claim. Opening the GitHub Pages URL directly shows the access screen.
+`/map` now creates a signed, short-lived link tied to the requesting Telegram user and their approved operation group. The Mini App verifies that link against the Render bot before it loads live coverage or accepts a write. The credential authorizes the approved user and operation scope rather than restricting access to one galaxy. Opening the GitHub Pages URL directly shows the access screen.
 
 Set these on Render before deploying the map update:
 
@@ -166,7 +168,7 @@ The Mini App reads the same persistent exact-base and region scouting agendas us
 
 ### Shared Intel and Secure Export
 
-Selecting a sector loads its systems, astros, bases, stances, and freshness from Render. Manual imports and the generated AE bookmarklet post to the signed `/api/miniapp/import` endpoint; the exporter never contains a Supabase key. Copying the exporter from an authorized map now requests a separate galaxy-bound credential that defaults to 30 days. It remains tied to the Telegram user and APP scope, and every import rechecks current access, so banning or removing the member revokes it.
+Selecting a sector loads its systems, astros, bases, stances, and freshness from Render. Manual imports and the generated AE bookmarklet post to the signed `/api/miniapp/import` endpoint; the exporter never contains a Supabase key. Copying the exporter from an authorized map requests a separate credential that defaults to 30 days and starts in the currently displayed galaxy. It remains tied to the Telegram user and APP scope, and every import rechecks current access, so banning or removing the member revokes it.
 
 ### Multiple Galaxies on Borealis
 
@@ -175,6 +177,7 @@ Lysander supports multiple Borealis galaxies without mixing their intel or opera
 - Use `/map B23` for a one-time B23 map without changing your defaults.
 - Use `!galaxy B23` in DM or a group to save your personal default.
 - Use `$setgroup B23` in an approved Telegram room to make that room operate in B23. `$setgalaxy` remains an alias.
+- Use the header switcher to move between imported galaxies without changing `!g`; the selected `gal` remains in the URL across refreshes and shared links.
 - Copy the exporter separately from each galaxy map. A B23 exporter imports only B23 data, while a B24 exporter imports only B24 data.
 
 A B23 room and a B24 room can therefore create claims, scouting agendas, and attacks at the same time using the same bot and database.

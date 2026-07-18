@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vision Tracker</title>
-    <link rel="stylesheet" href="./styles.css?v=20260715-4" />
+    <link rel="stylesheet" href="./styles.css?v=20260718-1" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   </head>
@@ -16,6 +16,12 @@
           <strong id="headerGalaxy" hidden>B24</strong>
         </div>
         <div class="top-stats" aria-label="Current status">
+          <label class="galaxy-switcher" for="galaxySwitcher">
+            <span>Galaxy</span>
+            <select id="galaxySwitcher" aria-label="Displayed galaxy" disabled>
+              <option value="B24">B24</option>
+            </select>
+          </label>
           <div class="stat-card">
             <span class="stat-kicker" id="headerSector">B24</span>
             <strong>Active Sector</strong>
@@ -326,6 +332,6 @@
     </template>
 
     <script src="./config.js"></script>
-    <script src="./app.js?v=20260717-4"></script>
+    <script src="./app.js?v=20260718-1"></script>
   </body>
 </html>
