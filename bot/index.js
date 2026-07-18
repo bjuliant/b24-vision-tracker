@@ -10,8 +10,9 @@ import {
   validateMiniAppHistoryRequest
 } from "./battle-history.js";
 import { resolveCommandMatches } from "./command-routing.js";
-import { selectGalaxyPreference } from "./galaxy-context.js";
+import { explicitGalaxyScope, personalGalaxySettings, readOnlyGalaxyQueryOptions, selectGalaxyPreference } from "./galaxy-context.js";
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
+import { buildGalaxyMapUrl, naturalGalaxySort, rowBelongsToMiniAppGalaxy, selectMiniAppGalaxy } from "./miniapp-galaxy.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -37,6 +38,7 @@ const configuredGuildScopeChatId = String(
 const accessMemberCache = new Map();
 const approvedChatCache = new Map();
 let primaryScopeCache = { value: "", expiresAt: 0 };
+let importedGalaxyCache = { value: [], expiresAt: 0 };
 
 if (!token) throw new Error("BOT_TOKEN is required");
 if (!webAppUrl) throw new Error("WEB_APP_URL is required");
@@ -54,7 +56,6 @@ if (requireAccessControl) {
 }
 
 const bot = new Telegraf(token);
-const galaxyPattern = /B\d{2}/i;
 const claimPattern = /^[!$](claim|attack)\s+(.+)$/i;
 const targetClaimPattern = /^[!$](claim|take)\s+([ADS]-?[A-Z0-9]{3,8})\s+(.+)$/i;
 const attackedPattern = /^[!$](attacked|sos)\s+(.+)$/i;
@@ -1123,16 +1124,13 @@ function normalizeIncomingText(text) {
 }
 
 function explicitGalaxyFromText(text) {
-  return normalizeGalaxy((String(text || "").match(galaxyPattern) || [])[0]);
+  return explicitGalaxyScope(text);
 }
 
 // Read-only views can span every imported galaxy. Commands that write data
 // always resolve a concrete galaxy before reaching this helper.
 function queryOptionsForGalaxy(galaxy, options = {}) {
-  const normalized = normalizeGalaxy(galaxy);
-  return normalized
-    ? { ...options, mapId: galaxyToMapId(normalized) }
-    : { ...options, includeMap: false };
+  return readOnlyGalaxyQueryOptions(galaxy, options);
 }
 
 function displayGalaxyScope(galaxy) {
@@ -2178,12 +2176,7 @@ async function handleUserGalaxy(ctx, text, mode) {
   const galaxy = explicitGalaxyFromText(text);
   if (!galaxy) return respond(ctx, mode, "Use: !galaxy B23\nShort form: !g B23");
 
-  const saved = await upsertRow("b24_user_settings", {
-    user_id: telegramUserId(ctx),
-    galaxy,
-    map_id: galaxyToMapId(galaxy),
-    updated_at: new Date().toISOString()
-  }, "user_id");
+  const saved = await upsertRow("b24_user_settings", personalGalaxySettings(telegramUserId(ctx), galaxy), "user_id");
 
   if (!saved) return respond(ctx, mode, "Could not save your galaxy setting.");
   return respond(ctx, mode, `Your default galaxy is now ${galaxy}.`);
@@ -5638,9 +5631,10 @@ async function fetchRowsWithCount(table, filters, options = {}) {
 
 async function fetchAllRows(table, filters, options = {}) {
   const pageSize = options.pageSize || 1000;
+  const maxRows = options.maxRows || 20000;
   const all = [];
   let count = NaN;
-  for (let from = 0; from < 20000; from += pageSize) {
+  for (let from = 0; from < maxRows; from += pageSize) {
     const result = await fetchRowsWithCount(table, filters, {
       ...options,
       from,
@@ -7445,15 +7439,34 @@ function mapUrlForContext(ctx, galaxy, loc = "", chatId = "") {
     p: "map",
     e: Date.now() + miniAppTokenMinutes * 60 * 1000
   };
-  const separator = webAppUrl.includes("?") ? "&" : "?";
-  return `${webAppUrl}${separator}${new URLSearchParams({ gal: payload.g, v: botBuild, access: signMiniAppToken(miniAppAccessSecret, payload) })}`;
+  return buildGalaxyMapUrl(webAppUrl, {
+    galaxy: payload.g,
+    version: botBuild,
+    access: signMiniAppToken(miniAppAccessSecret, payload),
+    loc
+  });
 }
 
 function verifyMiniAppAccess(value) {
   return verifyMiniAppToken(miniAppAccessSecret, value);
 }
 
-async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"]) {
+async function importedMiniAppGalaxies() {
+  if (importedGalaxyCache.expiresAt > Date.now()) return importedGalaxyCache.value;
+  const tables = ["b24_systems", "b24_astros", "b24_bases"];
+  const results = await Promise.all(tables.map((table) => fetchAllRows(table, {}, {
+    includeMap: false,
+    select: "map_id",
+    order: "map_id.asc",
+    pageSize: 1000,
+    maxRows: 100000
+  }).catch(() => [])));
+  const galaxies = naturalGalaxySort(results.flat().map((row) => row.map_id));
+  importedGalaxyCache = { value: galaxies, expiresAt: Date.now() + 5 * 60 * 1000 };
+  return galaxies;
+}
+
+async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], requestedGalaxy = "") {
   const session = verifyMiniAppAccess(accessToken);
   if (!session) return null;
   if (!allowedPurposes.includes(session.p)) return null;
@@ -7462,7 +7475,14 @@ async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"]) {
   if (!member || member.status !== "active" || !["member", "officer", "owner"].includes(member.role)) return null;
   if (accessChatIds.length && member.access_mode !== "private" &&
       !(await isMemberOfAnyAccessChat({ telegram: bot.telegram }, session.u))) return null;
-  return { ...session, member };
+  const galaxies = await importedMiniAppGalaxies();
+  const selectedGalaxy = selectMiniAppGalaxy({
+    requestedGalaxy,
+    tokenGalaxy: session.g,
+    availableGalaxies: galaxies
+  });
+  if (!selectedGalaxy) return null;
+  return { ...session, g: selectedGalaxy, linkGalaxy: session.g, galaxies, member };
 }
 
 function createExporterAccess(session) {
@@ -7552,6 +7572,81 @@ async function miniAppCoverage(session) {
     entry.watchNeeded = !entry.app && !entry.watchAssigned;
   });
   return [...byRegion.values()];
+}
+
+async function miniAppMapState(session) {
+  const [sectors, claims, operations, incoming] = await Promise.all([
+    miniAppCoverage(session),
+    fetchActiveClaims(session.g, session.c),
+    fetchActiveOperations(session.g, session.c),
+    fetchActiveIncoming(session.g, session.c)
+  ]);
+  return {
+    sectors,
+    claims: claims.filter((row) => rowBelongsToMiniAppGalaxy(row, session.g)),
+    operations: operations.filter((row) => rowBelongsToMiniAppGalaxy(row, session.g)),
+    incoming: incoming.filter((row) => rowBelongsToMiniAppGalaxy(row, session.g))
+  };
+}
+
+async function updateMiniAppClaim(session, body) {
+  const action = String(body.action || "create").toLowerCase();
+  const mapId = galaxyToMapId(session.g);
+  if (action === "create") {
+    const target = normalizeAstro(body.target);
+    const arrivalAt = new Date(body.arrivalAt || "");
+    if (!target || mapIdForCoord(target) !== mapId) throw new Error(`Choose a target in ${session.g}.`);
+    if (!Number.isFinite(arrivalAt.getTime()) || arrivalAt.getTime() <= Date.now()) throw new Error("Choose a future arrival time.");
+    const stamp = new Date().toISOString();
+    const row = {
+      map_id: mapId,
+      claim_id: String(body.claimId || randomId()).slice(0, 100),
+      target_coord: target,
+      region_id: astroToRegion(target),
+      system_id: astroToSystem(target),
+      claimed_by: session.member.display_name || `Telegram ${session.u}`,
+      claimed_by_user_id: session.u,
+      chat_id: session.c,
+      arrival_at: arrivalAt.toISOString(),
+      arrival_label: String(body.arrivalLabel || "").slice(0, 40),
+      confirmed_sent: false,
+      confirmed_at: null,
+      confirmed_by: "",
+      fleet_label: "",
+      note: String(body.note || "").trim().slice(0, 500),
+      status: "active",
+      created_at: stamp,
+      updated_at: stamp
+    };
+    if (!(await insertRow("b24_claims", row))) throw new Error("Could not save the claim.");
+  } else {
+    const claim = await fetchOne("b24_claims", {
+      claim_id: String(body.claimId || ""),
+      chat_id: session.c
+    }, mapId);
+    if (!claim) throw new Error("Claim not found in this galaxy.");
+    const ownsClaim = String(claim.claimed_by_user_id || "") === session.u;
+    if (!ownsClaim && !miniAppOfficer(session)) throw new Error("Only the claimant or an officer can change this claim.");
+    const stamp = new Date().toISOString();
+    const patch = action === "release"
+      ? { status: "cancelled", updated_at: stamp }
+      : action === "confirm"
+        ? {
+          confirmed_sent: Boolean(body.confirmed),
+          confirmed_at: body.confirmed ? stamp : null,
+          confirmed_by: body.confirmed ? (session.member.display_name || `Telegram ${session.u}`) : "",
+          fleet_label: body.confirmed ? String(body.fleetLabel || claim.fleet_label || "").slice(0, 120) : "",
+          updated_at: stamp
+        }
+        : null;
+    if (!patch) throw new Error("Unknown claim action.");
+    if (!(await updateRows("b24_claims", patch, {
+      map_id: `eq.${mapId}`,
+      claim_id: `eq.${claim.claim_id}`,
+      chat_id: `eq.${session.c}`
+    }))) throw new Error("Could not update the claim.");
+  }
+  return miniAppMapState(session);
 }
 
 async function miniAppAttacks(session) {
@@ -8681,10 +8776,11 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/session" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, {
         galaxy: session.g,
+        galaxies: session.galaxies,
         chatId: session.c,
         userId: session.u,
         displayName: session.member.display_name || "Guild member",
@@ -8699,7 +8795,7 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/export-token" && request.method === "POST") {
     try {
       const body = await readJson(request, 16 * 1024);
-      const session = await verifiedMiniAppSession(body.access, ["map"]);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, {
         galaxy: session.g,
@@ -8712,9 +8808,9 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/coverage" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
-      return writeJson(response, 200, { sectors: await miniAppCoverage(session) });
+      return writeJson(response, 200, await miniAppMapState(session));
     } catch (error) {
       console.error("Mini app coverage lookup failed", error?.message || error);
       return writeJson(response, 500, { error: "Could not load region coverage." });
@@ -8723,18 +8819,29 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/watch" && request.method === "POST") {
     try {
       const body = await readJson(request);
-      const session = await verifiedMiniAppSession(body.access);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       await updateMiniAppWatch(session, body.region, body.action === "release" ? "release" : "take");
-      return writeJson(response, 200, { sectors: await miniAppCoverage(session) });
+      return writeJson(response, 200, await miniAppMapState(session));
     } catch (error) {
       console.error("Mini app watch update failed", error?.message || error);
       return writeJson(response, 400, { error: error?.message || "Could not update this watch." });
     }
   }
+  if (path === "/api/miniapp/claims" && request.method === "POST") {
+    try {
+      const body = await readJson(request);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
+      if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
+      return writeJson(response, 200, await updateMiniAppClaim(session, body));
+    } catch (error) {
+      console.error("Mini app claim update failed", error?.message || error);
+      return writeJson(response, 400, { error: error?.message || "Could not update the claim." });
+    }
+  }
   if (path === "/api/miniapp/attacks" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await miniAppAttacks(session));
     } catch (error) {
@@ -8745,7 +8852,7 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/attacks" && request.method === "POST") {
     try {
       const body = await readJson(request);
-      const session = await verifiedMiniAppSession(body.access);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await updateMiniAppAttack(session, body));
     } catch (error) {
@@ -8755,7 +8862,7 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/incoming" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await miniAppIncoming(session));
     } catch (error) {
@@ -8766,7 +8873,7 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/incoming" && request.method === "POST") {
     try {
       const body = await readJson(request, 64 * 1024);
-      const session = await verifiedMiniAppSession(body.access);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await updateMiniAppIncoming(session, body));
     } catch (error) {
@@ -8776,7 +8883,7 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/scouting" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await miniAppScouting(session));
     } catch (error) {
@@ -8787,7 +8894,7 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/scouting" && request.method === "POST") {
     try {
       const body = await readJson(request, 256 * 1024);
-      const session = await verifiedMiniAppSession(body.access);
+      const session = await verifiedMiniAppSession(body.access, ["map"], body.galaxy);
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await updateMiniAppScouting(session, body));
     } catch (error) {
@@ -8797,7 +8904,7 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/battles" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await miniAppBattles(session, url.searchParams.get("coord")));
     } catch (error) {
@@ -8808,7 +8915,7 @@ http.createServer(async (request, response) => {
   }
   if (path === "/api/miniapp/intel" && request.method === "GET") {
     try {
-      const session = await verifiedMiniAppSession(url.searchParams.get("access"));
+      const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
       return writeJson(response, 200, await miniAppIntel(session, url.searchParams.get("region")));
     } catch (error) {
@@ -8819,13 +8926,9 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/import" && request.method === "POST") {
     try {
       const body = await readJson(request, 8 * 1024 * 1024);
-      const session = await verifiedMiniAppSession(body.access, ["map", "export"]);
+      const session = await verifiedMiniAppSession(body.access, ["map", "export"], body.galaxy || body.intel?.galaxy);
       if (!session) return writeJson(response, 401, { error: "Exporter access is invalid, expired, or revoked. Open /map and recopy it." });
-      const requestedGalaxy = normalizeGalaxy(body.galaxy || body.intel?.galaxy || session.g);
-      const importSession = session.p === "export" && requestedGalaxy
-        ? { ...session, g: requestedGalaxy }
-        : session;
-      return writeJson(response, 200, await miniAppImportIntel(importSession, body));
+      return writeJson(response, 200, await miniAppImportIntel(session, body));
     } catch (error) {
       console.error("Mini app intel import failed", error?.message || error);
       return writeJson(response, 400, { error: error?.message || "Could not import intel." });
