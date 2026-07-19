@@ -16,6 +16,7 @@ import {
   identityOwnerSearchTerms,
   personalGalaxySettings,
   readOnlyGalaxyQueryOptions,
+  regionNeedsWatch,
   selectGalaxyPreference,
   uncoveredRegionPage,
   uncoveredWatchableRegions,
@@ -75,7 +76,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.11";
+const botBuild = "2026-07-19.13";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -727,7 +728,7 @@ async function helpText(ctx, input = "") {
       "<code>$sectors B24 near [APP] not [APP]</code>",
       "Explicit version of the same region-level scouting query.",
       "<code>$regions B24</code> or <code>$unscouted B24</code>",
-      "Shows a read-only, paginated coordinate list of sectors without an APP/friendly base, scout flag, or assigned watch.",
+      "Shows a read-only, paginated coordinate list of sectors without an APP base, scout flag, or assigned watch. Friendly bases remain scout targets because they do not share vision.",
       "Tap a Watch button to claim that sector; it will then appear under <code>$watches</code> and <code>$scouts B24</code>.",
       "<code>!join S-9R2JD [role]</code>",
       "<code>!ready S-9R2JD</code>",
@@ -2997,6 +2998,10 @@ async function handleScoutWatchTakeButton(ctx) {
       await ctx.answerCbQuery(`${operation.target_coord} has no known systems to watch.`);
       return;
     }
+    if (coverage.baseRegions.has(operation.target_coord)) {
+      await ctx.answerCbQuery(`${operation.target_coord} is covered by an APP base.`);
+      return;
+    }
   }
   const assignments = await scoutAgendaAssignments(agenda);
   const existing = assignments.get(operation.operation_id);
@@ -5080,11 +5085,7 @@ async function regionCoverage(galaxy, scopeId) {
     .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`)
     .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
   const covered = new Set(sectorRows
-    .filter((row) => row.has_friendly || row.has_scout || row.status === "base" || row.status === "scout")
-    .map((row) => `${galaxy}:${Number(row.sector_id)}`)
-    .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
-  const sectorBaseRegions = new Set(sectorRows
-    .filter((row) => row.has_friendly || row.status === "base")
+    .filter((row) => row.has_scout || row.status === "scout")
     .map((row) => `${galaxy}:${Number(row.sector_id)}`)
     .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
   const savedBaseRegions = new Set(savedBases
@@ -5094,13 +5095,21 @@ async function regionCoverage(galaxy, scopeId) {
   savedBaseRegions.forEach((region) => covered.add(region));
 
   const friendlyTags = coverageFriendlyTags([...stances.tag.entries()], primaryGuildTag);
-  const friendlyBaseRegions = new Set(importedBases
-    .filter((base) => friendlyTags.has(normalizeStanceTarget(base.guild)))
+  const appBaseRegions = new Set(importedBases
+    .filter((base) => normalizeStanceTarget(base.guild) === primaryGuildTag)
     .map((base) => base.region_id || astroToRegion(base.coord || ""))
     .filter(Boolean)
     .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`));
-  friendlyBaseRegions.forEach((region) => covered.add(region));
-  const baseRegions = new Set([...sectorBaseRegions, ...savedBaseRegions, ...friendlyBaseRegions]);
+  const friendlyBaseRegions = new Set(importedBases
+    .filter((base) => {
+      const tag = normalizeStanceTarget(base.guild);
+      return tag !== primaryGuildTag && friendlyTags.has(tag);
+    })
+    .map((base) => base.region_id || astroToRegion(base.coord || ""))
+    .filter(Boolean)
+    .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`));
+  appBaseRegions.forEach((region) => covered.add(region));
+  const baseRegions = new Set([...savedBaseRegions, ...appBaseRegions]);
 
   const scoutOperations = await fetchActiveOperations(galaxy, scopeId, "scout");
   const assignments = await Promise.all(scoutOperations.map(async (operation) => {
@@ -5118,6 +5127,7 @@ async function regionCoverage(galaxy, scopeId) {
 
   covered.friendlyTags = friendlyTags;
   covered.friendlyBaseRegions = friendlyBaseRegions;
+  covered.appBaseRegions = appBaseRegions;
   covered.baseRegions = baseRegions;
   covered.watchableRegions = watchableRegions;
   covered.nonScoutableRegions = new Set(Array.from({ length: 99 }, (_, index) => `${galaxy}:${index + 1}`)
@@ -5633,11 +5643,11 @@ function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
   const assigned = agenda?.operations?.filter((operation) => Boolean(assignments.get(operation.operation_id))).length || 0;
   const uncovered = regionsWithoutCoverage(galaxy, coverage).length;
   const friendlyTags = [...(coverage?.friendlyTags || [])].join(", ") || "none";
-  const friendlyBaseRegions = coverage?.friendlyBaseRegions?.size || 0;
+  const appBaseRegions = coverage?.baseRegions?.size || 0;
   return [
     `<b>${escapeHtml(agenda?.name || "Region Coverage")} MAP</b>`,
     `Uncovered: ${uncovered} | Active watch assignments: ${assigned}`,
-    `Friendly tags: ${escapeHtml(friendlyTags)} | Base regions: ${friendlyBaseRegions}`,
+    `Friendly tags: ${escapeHtml(friendlyTags)} | APP base regions: ${appBaseRegions}`,
     "",
     "🟥 needs coverage   🟩 base, scout, or watch assigned",
     "Tap a red region to take responsibility for its watch."
@@ -5646,12 +5656,12 @@ function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
 
 function formatUnscoutedRegions(galaxy, regions, coverage, page = 1) {
   const pageData = uncoveredRegionPage(regions, page, unscoutedPageSize);
-  const baseRegions = coverage?.friendlyBaseRegions?.size || 0;
+  const baseRegions = coverage?.baseRegions?.size || 0;
   const watchableRegions = coverage?.watchableRegions?.size || 0;
   const lines = [
     `<b>${escapeHtml(galaxy)} SECTORS NEEDING SCOUTS</b>`,
-    "No APP/friendly base, scout flag, or assigned watch coverage.",
-    `Uncovered: ${pageData.total} | APP/friendly base regions: ${baseRegions}`,
+    "No APP base, scout flag, or assigned watch coverage.",
+    `Uncovered: ${pageData.total} | APP base regions: ${baseRegions}`,
     `Scoutable sectors: ${watchableRegions} | No-system sectors: ${99 - watchableRegions}`,
     `Page ${pageData.page}/${pageData.pages}`
   ];
@@ -7891,7 +7901,7 @@ async function miniAppCoverage(session) {
     entry.watchOwnerId = String(watch.user_id || "");
   });
   byRegion.forEach((entry) => {
-    entry.watchNeeded = entry.scoutable && !entry.app && !entry.watchAssigned;
+    entry.watchNeeded = regionNeedsWatch(entry);
   });
   return [...byRegion.values()];
 }
@@ -8412,8 +8422,9 @@ async function miniAppTakeScoutWatch(session, body) {
   const operation = await miniAppScoutOperation(session, body.operationId);
   if (!operation) throw new Error("Scout target not found or no longer active.");
   if (/^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || ""))) {
-    const knownSystem = await fetchOne("b24_systems", { region_id: operation.target_coord }, galaxyToMapId(session.g));
-    if (!knownSystem) throw new Error(`${operation.target_coord} has no known systems to watch.`);
+    const coverage = await regionCoverage(session.g, session.c);
+    if (!coverage.watchableRegions.has(operation.target_coord)) throw new Error(`${operation.target_coord} has no known systems to watch.`);
+    if (coverage.baseRegions.has(operation.target_coord)) throw new Error(`${operation.target_coord} is covered by an APP base.`);
   }
   const members = await fetchOperationMembers(operation);
   const assigned = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
@@ -9041,8 +9052,10 @@ async function ensureMiniAppRegionOperation(session, region) {
 async function updateMiniAppWatch(session, region, action) {
   const normalizedRegion = `${session.g}:${Number(String(region || "").split(":")[1])}`;
   if (action !== "release") {
-    const knownSystem = await fetchOne("b24_systems", { region_id: normalizedRegion }, galaxyToMapId(session.g));
-    if (!knownSystem) throw new Error(`${normalizedRegion} has no known systems to watch`);
+    const coverage = await miniAppCoverage(session);
+    const sector = coverage.find((entry) => entry.region === normalizedRegion);
+    if (!sector?.scoutable) throw new Error(`${normalizedRegion} has no known systems to watch`);
+    if (sector.app) throw new Error(`${normalizedRegion} is covered by an APP base`);
   }
   const operation = await ensureMiniAppRegionOperation(session, region);
   if (!operation) throw new Error("Invalid watch region");

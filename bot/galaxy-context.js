@@ -42,6 +42,10 @@ export function coverageFriendlyTags(stanceEntries = [], primaryGuildTag = "") {
   ].map((tag) => String(tag || "").trim()).filter(Boolean));
 }
 
+export function regionNeedsWatch({ scoutable = false, app = false, friendly = false, watchAssigned = false } = {}) {
+  return Boolean(scoutable && !app && !watchAssigned);
+}
+
 export function uncoveredRegionPage(regions = [], page = 1, pageSize = 20) {
   const safeSize = Math.max(1, Number(pageSize) || 20);
   const pages = Math.max(1, Math.ceil(regions.length / safeSize));
