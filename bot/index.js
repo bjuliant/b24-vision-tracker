@@ -76,7 +76,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.13";
+const botBuild = "2026-07-19.14";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -858,6 +858,7 @@ async function helpText(ctx, input = "") {
       "",
       "<code>!mine [coord] [note]</code> - save one of your bases",
       "<code>$mine [coord] [note]</code> - save one publicly",
+      "<code>!mine remove [coord]</code> - remove a base from your personal saved list",
       "<code>!me</code> - your personal dashboard",
       "<code>!me bases</code> - planned base-only view",
       "<code>!save me [coord] [note]</code> - save/update a base note",
@@ -3771,6 +3772,9 @@ async function handleIntel(ctx, text, mode) {
 
   const scopeId = await operationScopeId(ctx);
   if (parsed.kind === "astro" && parsed.remainder) {
+    if (/^clear$/i.test(parsed.remainder.trim())) {
+      return respond(ctx, mode, `To remove your personal saved-base claim, use <code>$mine remove ${escapeHtml(parsed.coord)}</code>. Shared imported intel is not deleted by that command.`, { parse_mode: "HTML" });
+    }
     const identityMatch = parsed.remainder.trim().match(/^@([A-Za-z0-9_]{5,32})$/);
     if (identityMatch) return handleIdentityLink(ctx, mode, parsed, scopeId, identityMatch[1]);
     const alliance = normalizeStanceTarget(parsed.remainder);
@@ -4551,6 +4555,30 @@ async function handleMine(ctx, text, mode) {
   if (!ctx.from?.id) return respond(ctx, mode, "Use !mine in a group or private chat so I know who owns the base.");
   const match = text.trim().match(minePattern);
   if (!match) return respond(ctx, mode, "Use: !mine B24:06:10:20 optional note");
+
+  const removeMatch = match[1].trim().match(/^(?:remove|delete|clear)\s+(.+)$/i);
+  if (removeMatch) {
+    const parsed = parseCoordinate(removeMatch[1], await galaxyForContext(ctx));
+    const location = parsed ? normalizeLocation(parsed.coord) : null;
+    if (!location || location.coord.split(":").length !== 4) return respond(ctx, mode, "Use: !mine remove B24:06:10:20");
+    const existing = await fetchOne("b24_user_bases", {
+      user_id: telegramUserId(ctx),
+      base_coord: location.coord
+    }, galaxyToMapId(location.galaxy));
+    if (!existing || existing.status !== "active") {
+      return respond(ctx, mode, `<code>${escapeHtml(location.coord)}</code> is not on your active saved-base list.`, { parse_mode: "HTML" });
+    }
+    const saved = await updateRows("b24_user_bases", {
+      status: "removed",
+      updated_at: new Date().toISOString()
+    }, {
+      map_id: `eq.${galaxyToMapId(location.galaxy)}`,
+      user_id: `eq.${telegramUserId(ctx)}`,
+      base_coord: `eq.${location.coord}`
+    });
+    if (!saved) return respond(ctx, mode, "Could not remove that saved base.");
+    return respond(ctx, mode, `Removed <code>${escapeHtml(location.coord)}</code> from your saved-base list. Shared imported intel was left unchanged.`, { parse_mode: "HTML" });
+  }
 
   const parsed = parseCoordinate(match[1], await galaxyForContext(ctx));
   const location = parsed ? normalizeLocation(parsed.coord) : null;
