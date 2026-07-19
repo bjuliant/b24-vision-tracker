@@ -2532,6 +2532,8 @@
       watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> watched by ${escapeHtml(coverage.watchOwner || "Guild member")}</span>${own ? `<button class="ghost-button" type="button" data-watch-action="release" data-watch-region="${escapeHtml(id)}">Release Watch</button>` : ""}`;
     } else if (!coverage.scoutable) {
       watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> has no known systems and cannot receive a scout fleet.</span>`;
+    } else if (coverage.friendly) {
+      watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> has a friendly base, but APP still needs its own scout vision.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
     } else {
       watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> needs scout coverage.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
     }

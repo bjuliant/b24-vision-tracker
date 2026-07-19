@@ -52,7 +52,7 @@ Prefix a command with `!` to get the reply privately. Prefix the same command wi
 - `!galaxy [galaxy]` sets your personal default galaxy; `!g` remains a short alias.
 - `$setgroup [galaxy]` sets the current Telegram room's default galaxy. `$setgalaxy` remains an alias.
 - Bare read-only lists such as `$astros`, `$bases`, `$attacks`, `$incoming`, `$scouts`, `$watches`, `$claimed`, `$board`, and `$next` span imported galaxies; add `Bxx` to focus one galaxy.
-- `$regions B24` and `$unscouted B24` show a paginated list of B24 sectors with no APP/friendly base, scout flag, or assigned watch. A member can tap a Watch button to create and claim only that region watch.
+- `$regions B24` and `$unscouted B24` show a paginated list of B24 sectors with no APP base, scout flag, or assigned watch. Friendly bases remain scouting targets because another guild's base does not share vision. A member can tap a Watch button to create and claim only that region watch.
 - Commands that create or change state use an explicit `Bxx` coordinate/scope or the user's saved working galaxy.
 - `$guild bind` remembers the current group as your active operation group for later DM commands.
 - `!guild status` shows your active operation group.
