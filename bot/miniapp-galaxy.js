@@ -21,7 +21,7 @@ export function naturalGalaxySort(values = []) {
     .sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)) || left.localeCompare(right));
 }
 
-export function selectMiniAppGalaxy({ requestedGalaxy = "", tokenGalaxy = "", availableGalaxies = [] } = {}) {
+export function selectMiniAppGalaxy({ requestedGalaxy = "", tokenGalaxy = "", availableGalaxies = [], allowUnavailable = false } = {}) {
   const available = naturalGalaxySort(availableGalaxies);
   const rawRequested = String(requestedGalaxy || "").trim();
   const requested = normalizeMiniAppGalaxy(rawRequested);
@@ -29,7 +29,7 @@ export function selectMiniAppGalaxy({ requestedGalaxy = "", tokenGalaxy = "", av
   const fallback = normalizeMiniAppGalaxy(tokenGalaxy);
   const selected = requested || fallback;
   if (!selected) return "";
-  if (available.length && !available.includes(selected)) return "";
+  if (!allowUnavailable && available.length && !available.includes(selected)) return "";
   return selected;
 }
 

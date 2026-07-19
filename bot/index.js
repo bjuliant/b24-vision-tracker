@@ -73,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.7";
+const botBuild = "2026-07-19.8";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -7697,7 +7697,7 @@ async function importedMiniAppGalaxies() {
   return galaxies;
 }
 
-async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], requestedGalaxy = "") {
+async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], requestedGalaxy = "", { allowUnimportedGalaxy = false } = {}) {
   const session = verifyMiniAppAccess(accessToken);
   if (!session) return null;
   if (!allowedPurposes.includes(session.p)) return null;
@@ -7710,7 +7710,8 @@ async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], re
   const selectedGalaxy = selectMiniAppGalaxy({
     requestedGalaxy,
     tokenGalaxy: session.g,
-    availableGalaxies: galaxies
+    availableGalaxies: galaxies,
+    allowUnavailable: allowUnimportedGalaxy
   });
   if (!selectedGalaxy) return null;
   return { ...session, g: selectedGalaxy, linkGalaxy: session.g, galaxies, member };
@@ -8906,6 +8907,7 @@ async function miniAppImportIntel(session, body) {
     upsertRows("b24_occupations", uniqueOccupations, "map_id,coord"),
     upsertRows("b24_game_events", uniqueGameEvents, "map_id,event_id")
   ]);
+  if (systemCount || baseCount || astroCount) importedGalaxyCache.expiresAt = 0;
   return {
     systems: systemCount, bases: baseCount, astros: astroCount, fleetMovements: movementCount,
     incoming: incomingCount, battleReports: battleReportCount, fleetObservations: observationCount,
@@ -9157,7 +9159,12 @@ http.createServer(async (request, response) => {
   if (path === "/api/miniapp/import" && request.method === "POST") {
     try {
       const body = await readJson(request, 8 * 1024 * 1024);
-      const session = await verifiedMiniAppSession(body.access, ["map", "export"], body.galaxy || body.intel?.galaxy);
+      const session = await verifiedMiniAppSession(
+        body.access,
+        ["map", "export"],
+        body.galaxy || body.intel?.galaxy,
+        { allowUnimportedGalaxy: true }
+      );
       if (!session) return writeJson(response, 401, { error: "Exporter access is invalid, expired, or revoked. Open /map and recopy it." });
       return writeJson(response, 200, await miniAppImportIntel(session, body));
     } catch (error) {
