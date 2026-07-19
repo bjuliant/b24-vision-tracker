@@ -73,7 +73,8 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.3";
+const botBuild = "2026-07-19.5";
+const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -5565,32 +5566,27 @@ function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
 }
 
 function formatUnscoutedRegions(galaxy, regions, coverage, page = 1) {
-  const pageData = uncoveredRegionPage(regions, page, 20);
+  const pageData = uncoveredRegionPage(regions, page, unscoutedPageSize);
   const baseRegions = coverage?.friendlyBaseRegions?.size || 0;
   const lines = [
     `<b>${escapeHtml(galaxy)} SECTORS NEEDING SCOUTS</b>`,
     "No APP/friendly base, scout flag, or assigned watch coverage.",
     `Uncovered: ${pageData.total} | APP/friendly base regions: ${baseRegions}`,
-    `Page ${pageData.page}/${pageData.pages}`,
-    ""
+    `Page ${pageData.page}/${pageData.pages}`
   ];
   if (!pageData.rows.length) {
-    lines.push("Every sector currently has coverage.");
+    lines.push("", "Every sector currently has coverage.");
     return lines.join("\n");
   }
-  lines.push("<pre>");
-  pageData.rows.forEach((region, offset) => {
-    lines.push(`${String(pageData.from + offset + 1).padStart(2, "0")}  ${escapeHtml(region)}`);
-  });
-  lines.push("</pre>", `${pageData.from + 1}-${pageData.to} of ${pageData.total}`, "Tap a Watch button to take responsibility for that sector.");
+  lines.push("", `Showing ${pageData.from + 1}-${pageData.to} of ${pageData.total}. Tap a sector to watch it.`);
   return lines.join("\n");
 }
 
 function unscoutedRegionsKeyboard(galaxy, regions, page = 1) {
-  const pageData = uncoveredRegionPage(regions, page, 20);
+  const pageData = uncoveredRegionPage(regions, page, unscoutedPageSize);
   const rows = [];
-  for (let index = 0; index < pageData.rows.length; index += 2) {
-    rows.push(pageData.rows.slice(index, index + 2).map((region) => {
+  for (let index = 0; index < pageData.rows.length; index += 3) {
+    rows.push(pageData.rows.slice(index, index + 3).map((region) => {
       const regionNumber = Number(String(region).split(":")[1]);
       return Markup.button.callback(`Watch ${region}`, `unscoutedtake:${galaxy}:${regionNumber}:${pageData.page}`);
     }));
