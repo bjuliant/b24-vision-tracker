@@ -73,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.6";
+const botBuild = "2026-07-19.7";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -1164,7 +1164,6 @@ function deliveryMode(text) {
 function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
-  value = value.replace(/\s+@\w+$/, "").trim();
   return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|uncovered|unscouted|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
