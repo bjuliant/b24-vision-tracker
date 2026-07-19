@@ -14,6 +14,7 @@ import { explicitGalaxyScope, personalGalaxySettings, readOnlyGalaxyQueryOptions
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
 import { buildGalaxyMapUrl, naturalGalaxySort, rowBelongsToMiniAppGalaxy, selectMiniAppGalaxy } from "./miniapp-galaxy.js";
 import { approvalOfficerMessage, enlistmentOfficerMessage, officerNotificationRecipientIds } from "./access-notifications.js";
+import { coverageFriendlyTags, uncoveredRegionPage, withoutCoveredRegionTargets } from "./region-coverage.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -83,6 +84,7 @@ const preferredCommandAliases = {
   astros: ["as", "ast", "astr", "astro", "astros"],
   sectors: ["sec", "sector", "sectors"],
   regions: ["region", "regions"],
+  unscouted: ["uncovered", "unscouted"],
   report: ["rep", "repo", "repor", "report"],
   attacks: ["attacks"],
   friend: ["fr", "fri", "frie", "frien", "friend"],
@@ -94,7 +96,7 @@ const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "approvechat", "officer", "demote", "ban", "access",
   "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "galaxy", "setgroup", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
-  "stale", "score", "bases", "sectors", "regions", "op", "join", "respond", "ready", "sent", "leave",
+  "stale", "score", "bases", "sectors", "regions", "unscouted", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
   "targets", "claimed", "mine", "me", "friend", "enemy", ...BATTLE_HISTORY_COMMANDS
 ];
@@ -366,6 +368,7 @@ bot.action(/^attackadd:([A-Z]-[A-Z0-9]{3,8}):(B\d{2}:\d{2}:\d{2}:\d{2})$/, handl
 bot.action(/^quickattack:(\d):(B\d{2}):(.*)$/, handleQuickAttackButton);
 bot.action(/^quickscout:(B\d{2}):(.*)$/, handleQuickScoutButton);
 bot.action(/^regionagenda:(B\d{2}):([^:]{1,24})$/, handleRegionAgendaButton);
+bot.action(/^unscouted:(B\d{2}):(\d{1,2})$/, handleUnscoutedPageButton);
 bot.action(/^scoutagenda:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaButton);
 bot.action(/^scoutregionmap:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutRegionMapButton);
 bot.action(/^scoutwatchlist:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchListButton);
@@ -476,6 +479,7 @@ async function handleText(ctx) {
   if (isAstrosCommand(lower)) return handleAstros(ctx, text, mode);
   if (isCommand(lower, "sectors")) return handleSectors(ctx, text, mode);
   if (isCommand(lower, "regions")) return handleRegions(ctx, text, mode);
+  if (isCommand(lower, "unscouted")) return handleUnscouted(ctx, text, mode);
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
   if (isCommand(lower, "score")) return handleScore(ctx, text, mode);
   if (isCommand(lower, "bases")) return handleBases(ctx, text, mode);
@@ -710,8 +714,8 @@ async function helpText(ctx, input = "") {
       "Find sectors near APP-held sectors that do not already contain an APP base.",
       "<code>$sectors B24 near [APP] not [APP]</code>",
       "Explicit version of the same region-level scouting query.",
-      "<code>$regions B24</code>",
-      "Lists every B24 region without friendly-base or scout coverage. Officers can turn it into a persistent region-watch agenda.",
+      "<code>$regions B24</code> or <code>$unscouted B24</code>",
+      "Shows a read-only, paginated coordinate list of sectors without an APP/friendly base, scout flag, or assigned watch.",
       "<code>!join S-9R2JD [role]</code>",
       "<code>!ready S-9R2JD</code>",
       "<code>!sent S-9R2JD [note]</code>"
@@ -1150,7 +1154,7 @@ function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
   value = value.replace(/\s+@\w+$/, "").trim();
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|uncovered|unscouted|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function explicitGalaxyFromText(text) {
@@ -1316,6 +1320,7 @@ function isProtectedOperationalCommand(lowerText) {
     "astros",
     "sectors",
     "regions",
+    "unscouted",
     "mine",
     "me",
     "friend",
@@ -1367,6 +1372,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "astros",
     "sectors",
     "regions",
+    "unscouted",
     "mine",
     "me",
     "friend",
@@ -1382,7 +1388,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "galaxy", "setgroup", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "galaxy", "setgroup", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "unscouted", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -2806,7 +2812,7 @@ async function handleScoutings(ctx, text, mode) {
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const queryGalaxy = explicitGalaxyFromText(commandBody(text));
   const scopeLabel = displayGalaxyScope(queryGalaxy);
-  const agendas = groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId));
+  const agendas = await scoutAgendasForPresentation(groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId)), scopeId);
   if (!agendas.length) {
     return respond(ctx, mode, [
       `<b>${scopeLabel} Scouting Agendas</b>`,
@@ -2833,7 +2839,7 @@ async function handleWatches(ctx, text, mode) {
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
   const queryGalaxy = explicitGalaxyFromText(commandBody(text));
   const scopeLabel = displayGalaxyScope(queryGalaxy);
-  const agendas = groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId));
+  const agendas = await scoutAgendasForPresentation(groupScoutAgendas(await fetchScoutAgendas(queryGalaxy, scopeId)), scopeId);
   const userId = telegramUserId(ctx);
   const watches = [];
   for (const agenda of agendas) {
@@ -3792,18 +3798,47 @@ async function handleSectors(ctx, text, mode) {
 }
 
 async function handleRegions(ctx, text, mode) {
+  return handleUnscouted(ctx, text, mode);
+}
+
+async function handleUnscouted(ctx, text, mode) {
   const fallbackGalaxy = await galaxyForContext(ctx);
-  const parsed = parseRegionCoverageQuery(commandBody(text), fallbackGalaxy);
+  const rawQuery = commandBody(text);
+  const galaxy = explicitGalaxyFromText(rawQuery) || fallbackGalaxy;
+  const pageInfo = parsePageFromQuery(stripLeadingGalaxyScope(rawQuery, galaxy));
   const scopeId = await operationScopeId(ctx);
   if (!scopeId) return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
-  const coverage = await regionCoverage(parsed.galaxy, scopeId);
-  const regions = regionsWithoutCoverage(parsed.galaxy, coverage);
-  const agenda = await ensureRegionCoverageAgenda(ctx, parsed.galaxy, scopeId, regions);
-  const assignments = agenda ? await scoutAgendaAssignments(agenda) : new Map();
-  return respond(ctx, mode, formatScoutRegionMap(parsed.galaxy, agenda, assignments, coverage), {
+  const coverage = await regionCoverage(galaxy, scopeId);
+  const regions = regionsWithoutCoverage(galaxy, coverage);
+  return respond(ctx, mode, formatUnscoutedRegions(galaxy, regions, coverage, pageInfo.page), {
     parse_mode: "HTML",
-    ...scoutRegionMapKeyboard(parsed.galaxy, agenda, assignments, coverage)
+    ...unscoutedRegionsKeyboard(galaxy, regions, pageInfo.page)
   });
+}
+
+async function handleUnscoutedPageButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to view scouting coverage.");
+    return;
+  }
+  const [, galaxyText, pageText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText);
+  const scopeId = await operationScopeId(ctx);
+  if (!galaxy || !scopeId) {
+    await ctx.answerCbQuery("Coverage scope is unavailable.");
+    return;
+  }
+  const coverage = await regionCoverage(galaxy, scopeId);
+  const regions = regionsWithoutCoverage(galaxy, coverage);
+  const page = Number(pageText || 1) || 1;
+  await ctx.answerCbQuery(`Uncovered sectors page ${page}`);
+  const message = formatUnscoutedRegions(galaxy, regions, coverage, page);
+  const options = { parse_mode: "HTML", ...unscoutedRegionsKeyboard(galaxy, regions, page) };
+  try {
+    return await ctx.editMessageText(message, options);
+  } catch {
+    return ctx.reply(message, options);
+  }
 }
 
 async function handleStale(ctx, text, mode) {
@@ -4839,13 +4874,6 @@ function parseSectorScoutQuery(query, fallbackGalaxy) {
   return { galaxy, nearTags, excludedTags };
 }
 
-function parseRegionCoverageQuery(query, fallbackGalaxy) {
-  const raw = String(query || "").trim();
-  const explicitGalaxy = normalizeGalaxy((raw.toUpperCase().match(/\bB\d{2}\b/) || [])[0]);
-  const galaxy = explicitGalaxy || normalizeGalaxy(fallbackGalaxy) || defaultGalaxy;
-  return { galaxy };
-}
-
 async function regionCoverage(galaxy, scopeId) {
   const mapId = galaxyToMapId(galaxy);
   const [sectorRows, savedBases, importedBases, stances] = await Promise.all([
@@ -4863,9 +4891,7 @@ async function regionCoverage(galaxy, scopeId) {
     .filter(Boolean)
     .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
 
-  const friendlyTags = new Set([...stances.tag.entries()]
-    .filter(([, stance]) => stance === "friend")
-    .map(([tag]) => tag));
+  const friendlyTags = coverageFriendlyTags([...stances.tag.entries()], primaryGuildTag);
   const friendlyBaseRegions = new Set(importedBases
     .filter((base) => friendlyTags.has(normalizeStanceTarget(base.guild)))
     .map((base) => base.region_id || astroToRegion(base.coord || ""))
@@ -4899,33 +4925,6 @@ function regionsWithoutCoverage(galaxy, covered) {
     if (!covered.has(regionId)) regions.push(regionId);
   }
   return regions;
-}
-
-async function ensureRegionCoverageAgenda(ctx, galaxy, scopeId, uncoveredRegions) {
-  const agendaName = `${galaxy} Region Coverage`;
-  let agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
-  let agenda = agendas.find((item) => item.name === agendaName) || null;
-  if (!uncoveredRegions.length) return agenda;
-
-  const existingTargets = new Set((agenda?.operations || []).map((operation) => operation.target_coord));
-  const missingTargets = uncoveredRegions.filter((region) => !existingTargets.has(region));
-  if (!missingTargets.length) return agenda;
-
-  const arrivalAt = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
-  const agendaKey = agenda?.key || newScoutAgendaKey();
-  for (const targetCoord of missingTargets) {
-    const operation = operationRow(ctx, {
-      type: "scout",
-      targetCoord,
-      arrivalAt,
-      note: scoutAgendaNote(agendaKey, agendaName),
-      chatId: scopeId
-    });
-    operation.map_id = galaxyToMapId(galaxy);
-    await insertRow("b24_operations", operation);
-  }
-  agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
-  return agendas.find((item) => item.key === agendaKey) || agendas.find((item) => item.name === agendaName) || null;
 }
 
 function astrosNextQuery(parsed, page) {
@@ -5271,6 +5270,22 @@ function groupScoutAgendas(operations) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function scoutAgendasForPresentation(agendas, scopeId) {
+  const coverageByGalaxy = new Map();
+  const visible = [];
+  for (const agenda of agendas) {
+    if (scoutAgendaTargetKind(agenda) !== "region") {
+      visible.push(agenda);
+      continue;
+    }
+    const galaxy = galaxyFromMapId(agenda.operations[0]?.map_id) || galaxyFromCoord(agenda.operations[0]?.target_coord);
+    if (!coverageByGalaxy.has(galaxy)) coverageByGalaxy.set(galaxy, await regionCoverage(galaxy, scopeId));
+    const filtered = withoutCoveredRegionTargets(agenda, coverageByGalaxy.get(galaxy));
+    if (filtered.operations.length) visible.push(filtered);
+  }
+  return visible;
+}
+
 function scoutAgendaTargetKind(agenda) {
   return agenda?.operations?.every((operation) => /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")))
     ? "region"
@@ -5418,6 +5433,36 @@ function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
     "🟥 needs coverage   🟩 base, scout, or watch assigned",
     "Tap a red region to take responsibility for its watch."
   ].join("\n");
+}
+
+function formatUnscoutedRegions(galaxy, regions, coverage, page = 1) {
+  const pageData = uncoveredRegionPage(regions, page, 20);
+  const baseRegions = coverage?.friendlyBaseRegions?.size || 0;
+  const lines = [
+    `<b>${escapeHtml(galaxy)} SECTORS NEEDING SCOUTS</b>`,
+    "No APP/friendly base, scout flag, or assigned watch coverage.",
+    `Uncovered: ${pageData.total} | APP/friendly base regions: ${baseRegions}`,
+    `Page ${pageData.page}/${pageData.pages}`,
+    ""
+  ];
+  if (!pageData.rows.length) {
+    lines.push("Every sector currently has coverage.");
+    return lines.join("\n");
+  }
+  lines.push("<pre>");
+  pageData.rows.forEach((region, offset) => {
+    lines.push(`${String(pageData.from + offset + 1).padStart(2, "0")}  ${escapeHtml(region)}`);
+  });
+  lines.push("</pre>", `${pageData.from + 1}-${pageData.to} of ${pageData.total}`);
+  return lines.join("\n");
+}
+
+function unscoutedRegionsKeyboard(galaxy, regions, page = 1) {
+  const pageData = uncoveredRegionPage(regions, page, 20);
+  const buttons = [];
+  if (pageData.page > 1) buttons.push(Markup.button.callback("Previous", `unscouted:${galaxy}:${pageData.page - 1}`));
+  if (pageData.page < pageData.pages) buttons.push(Markup.button.callback("Next", `unscouted:${galaxy}:${pageData.page + 1}`));
+  return buttons.length ? Markup.inlineKeyboard([buttons]) : {};
 }
 
 function scoutRegionMapKeyboard(galaxy, agenda, assignments, coverage) {
@@ -8090,7 +8135,7 @@ async function updateMiniAppIncoming(session, body) {
 
 async function miniAppScouting(session) {
   const role = String(session.member.role || "member").toLowerCase();
-  const grouped = groupScoutAgendas(await fetchScoutAgendas(session.g, session.c));
+  const grouped = await scoutAgendasForPresentation(groupScoutAgendas(await fetchScoutAgendas(session.g, session.c)), session.c);
   const agendas = await Promise.all(grouped.map(async (agenda) => {
     const assignments = await scoutAgendaAssignments(agenda);
     const targets = agenda.operations.map((operation) => {
