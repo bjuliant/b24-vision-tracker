@@ -19,6 +19,26 @@ test("a signed B24 session may temporarily select imported B23", () => {
   }), "");
 });
 
+test("an authorized exporter may seed a valid galaxy before it is imported", () => {
+  assert.equal(selectMiniAppGalaxy({
+    requestedGalaxy: "B25",
+    tokenGalaxy: "B23",
+    availableGalaxies: ["B23", "B24"],
+    allowUnavailable: true
+  }), "B25");
+  assert.equal(selectMiniAppGalaxy({
+    requestedGalaxy: "B25",
+    tokenGalaxy: "B23",
+    availableGalaxies: ["B23", "B24"]
+  }), "");
+  assert.equal(selectMiniAppGalaxy({
+    requestedGalaxy: "galaxy-25",
+    tokenGalaxy: "B23",
+    availableGalaxies: ["B23", "B24"],
+    allowUnavailable: true
+  }), "");
+});
+
 test("a bare /map keeps the saved/token galaxy while /map B23 retains B23 in the link", () => {
   assert.equal(selectMiniAppGalaxy({ tokenGalaxy: "B24", availableGalaxies: ["B23", "B24"] }), "B24");
   const url = new URL(buildGalaxyMapUrl("https://example.test/map?theme=dark", {
