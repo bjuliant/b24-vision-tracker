@@ -73,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.5";
+const botBuild = "2026-07-19.6";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -5588,7 +5588,7 @@ function unscoutedRegionsKeyboard(galaxy, regions, page = 1) {
   for (let index = 0; index < pageData.rows.length; index += 3) {
     rows.push(pageData.rows.slice(index, index + 3).map((region) => {
       const regionNumber = Number(String(region).split(":")[1]);
-      return Markup.button.callback(`Watch ${region}`, `unscoutedtake:${galaxy}:${regionNumber}:${pageData.page}`);
+      return Markup.button.callback(region, `unscoutedtake:${galaxy}:${regionNumber}:${pageData.page}`);
     }));
   }
   const navigation = [];
