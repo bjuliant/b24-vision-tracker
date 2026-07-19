@@ -10,11 +10,18 @@ import {
   validateMiniAppHistoryRequest
 } from "./battle-history.js";
 import { resolveCommandMatches } from "./command-routing.js";
-import { explicitGalaxyScope, personalGalaxySettings, readOnlyGalaxyQueryOptions, selectGalaxyPreference } from "./galaxy-context.js";
+import {
+  coverageFriendlyTags,
+  explicitGalaxyScope,
+  personalGalaxySettings,
+  readOnlyGalaxyQueryOptions,
+  selectGalaxyPreference,
+  uncoveredRegionPage,
+  withoutCoveredRegionTargets
+} from "./galaxy-context.js";
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
 import { buildGalaxyMapUrl, naturalGalaxySort, rowBelongsToMiniAppGalaxy, selectMiniAppGalaxy } from "./miniapp-galaxy.js";
 import { approvalOfficerMessage, enlistmentOfficerMessage, officerNotificationRecipientIds } from "./access-notifications.js";
-import { coverageFriendlyTags, uncoveredRegionPage, withoutCoveredRegionTargets } from "./region-coverage.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -66,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-17.5";
+const botBuild = "2026-07-19.1";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],

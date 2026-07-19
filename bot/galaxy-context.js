@@ -34,3 +34,35 @@ export function readOnlyGalaxyQueryOptions(galaxy, options = {}) {
     ? { ...options, mapId: `${normalized.toLowerCase()}-main` }
     : { ...options, includeMap: false };
 }
+
+export function coverageFriendlyTags(stanceEntries = [], primaryGuildTag = "") {
+  return new Set([
+    primaryGuildTag,
+    ...stanceEntries.filter(([, stance]) => stance === "friend").map(([tag]) => tag)
+  ].map((tag) => String(tag || "").trim()).filter(Boolean));
+}
+
+export function uncoveredRegionPage(regions = [], page = 1, pageSize = 20) {
+  const safeSize = Math.max(1, Number(pageSize) || 20);
+  const pages = Math.max(1, Math.ceil(regions.length / safeSize));
+  const safePage = Math.max(1, Math.min(pages, Number(page) || 1));
+  const from = (safePage - 1) * safeSize;
+  return {
+    page: safePage,
+    pages,
+    total: regions.length,
+    from,
+    to: Math.min(regions.length, from + safeSize),
+    rows: regions.slice(from, from + safeSize)
+  };
+}
+
+export function withoutCoveredRegionTargets(agenda, covered = new Set()) {
+  const operations = Array.isArray(agenda?.operations) ? agenda.operations : [];
+  const isRegionAgenda = operations.length > 0 && operations.every((operation) => /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")));
+  if (!isRegionAgenda) return agenda;
+  return {
+    ...agenda,
+    operations: operations.filter((operation) => !covered.has(String(operation.target_coord || "")))
+  };
+}
