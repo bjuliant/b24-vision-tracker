@@ -13,6 +13,7 @@ import { resolveCommandMatches } from "./command-routing.js";
 import { explicitGalaxyScope, personalGalaxySettings, readOnlyGalaxyQueryOptions, selectGalaxyPreference } from "./galaxy-context.js";
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
 import { buildGalaxyMapUrl, naturalGalaxySort, rowBelongsToMiniAppGalaxy, selectMiniAppGalaxy } from "./miniapp-galaxy.js";
+import { approvalOfficerMessage, enlistmentOfficerMessage, officerNotificationRecipientIds } from "./access-notifications.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -1054,6 +1055,17 @@ async function handleOnboardMe(ctx, text, mode) {
     approvedAt: existing?.approved_at || null
   });
   if (!saved) return respond(ctx, mode, "I could not save your onboarding record. Has the Supabase access table been created?");
+  const scopeLabel = await operationScopeLabel(ctx, scopeId).catch(() => String(scopeId));
+  await notifyAccessOfficers(scopeId, enlistmentOfficerMessage({
+    guild: primaryGuildId,
+    scopeLabel,
+    status,
+    member: {
+      userId: telegramUserId(ctx),
+      username: ctx.from.username || "",
+      displayName: telegramName(ctx)
+    }
+  }));
   return respond(ctx, mode, status === "active"
     ? `Enlisted as ${role}. Lysander access is active for APP${existing?.access_mode === "private" ? " in private mode" : ""}.`
     : "APP enlistment saved. An officer can approve you with <code>$approve</code>.", { parse_mode: "HTML" });
@@ -1108,6 +1120,24 @@ async function handleAccessCommand(ctx, text, mode) {
     approvedAt: next.status === "active" ? new Date().toISOString() : existing?.approved_at || null
   });
   if (!saved) return respond(ctx, mode, "Could not update access. Has the Supabase access table been created?");
+  if (command === "approve") {
+    const scopeLabel = await operationScopeLabel(ctx, scopeId).catch(() => String(scopeId));
+    await notifyAccessOfficers(scopeId, approvalOfficerMessage({
+      guild: primaryGuildId,
+      scopeLabel,
+      accessMode,
+      member: {
+        userId: target.userId,
+        username: target.username || existing?.username || "",
+        displayName: target.displayName || existing?.display_name || target.userId
+      },
+      approvedBy: {
+        userId: telegramUserId(ctx),
+        username: ctx.from?.username || "",
+        displayName: telegramName(ctx)
+      }
+    }));
+  }
   return respond(ctx, mode, `${escapeHtml(target.displayName || existing?.display_name || target.userId)} is now ${next.status}/${next.role || existing?.role || "member"} with ${accessMode} access.`, { parse_mode: "HTML" });
 }
 
@@ -1615,6 +1645,26 @@ async function upsertAccessMember({ chatId, userId, username, displayName, role,
     last_seen_at: now,
     updated_at: now
   }, "chat_id,user_id");
+}
+
+async function notifyAccessOfficers(scopeId, message) {
+  try {
+    const rows = await fetchRows("b24_access_members", { chat_id: `eq.${scopeId}` }, {
+      includeMap: false,
+      select: "user_id,role,status"
+    });
+    const recipientIds = officerNotificationRecipientIds(rows, officerUserIds);
+    const results = await Promise.allSettled(recipientIds.map((userId) => bot.telegram.sendMessage(userId, message)));
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error(`Officer access notification failed for ${recipientIds[index]}`, result.reason?.message || result.reason);
+      }
+    });
+    return results.filter((result) => result.status === "fulfilled").length;
+  } catch (error) {
+    console.error("Officer access notification lookup failed", error?.message || error);
+    return 0;
+  }
 }
 
 async function resolveAccessTarget(ctx, query, scopeId) {
