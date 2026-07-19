@@ -74,6 +74,24 @@ export function uncoveredWatchableRegions(galaxy, covered = new Set(), watchable
     .sort((left, right) => Number(left.split(":")[1]) - Number(right.split(":")[1]));
 }
 
+export function identityOwnerSearchTerms(query, links = []) {
+  const normalize = (value) => String(value || "")
+    .replace(/^@/, "")
+    .replace(/[\[\]]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  const needle = normalize(query);
+  if (!needle) return [];
+  return [...new Set([
+    needle,
+    ...links
+      .filter((link) => normalize(link.telegram_username).includes(needle))
+      .map((link) => normalize(link.game_username_key || link.game_username))
+      .filter(Boolean)
+  ])];
+}
+
 export function withoutCoveredRegionTargets(agenda, covered = new Set()) {
   const operations = Array.isArray(agenda?.operations) ? agenda.operations : [];
   const isRegionAgenda = operations.length > 0 && operations.every((operation) => /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")));

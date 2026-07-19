@@ -13,6 +13,7 @@ import { resolveCommandMatches } from "./command-routing.js";
 import {
   coverageFriendlyTags,
   explicitGalaxyScope,
+  identityOwnerSearchTerms,
   personalGalaxySettings,
   readOnlyGalaxyQueryOptions,
   selectGalaxyPreference,
@@ -74,7 +75,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.9";
+const botBuild = "2026-07-19.11";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -749,6 +750,7 @@ async function helpText(ctx, input = "") {
       "<code>!intel [coord]</code> - DM intel to you",
       "<code>$intel [coord]</code> - post intel in the current chat",
       "<code>!intel [coord] [TAG]</code> - officer-only manual alliance assessment",
+      "<code>$intel [base coord] @username</code> - officer-only verified Telegram-to-game owner link",
       "<code>!friend [tag|coord]</code> - officer-only: mark a shared friendly classification",
       "<code>!enemy [tag|coord]</code> - officer-only: mark a shared hostile classification",
       "",
@@ -1025,6 +1027,7 @@ function officerHelpText() {
     "<code>$attack add [ID] [coord]</code> - add targets to a plan",
     "<code>$standdown [operation-ID] [reason]</code> - close an operation",
     "<code>$incoming clear [coord|system|region|tag|all]</code> - clear false incoming reports",
+    "<code>$intel [base coord] @username</code> - link a Telegram handle to the imported in-game owner at that base",
     "<code>/id</code> - show chat/user IDs for setup",
     "",
     "Tip: reply to someone's message with <code>$approve</code>, <code>$officer</code>, <code>$demote</code>, <code>$ban</code>, or <code>$access</code>."
@@ -3763,6 +3766,8 @@ async function handleIntel(ctx, text, mode) {
 
   const scopeId = await operationScopeId(ctx);
   if (parsed.kind === "astro" && parsed.remainder) {
+    const identityMatch = parsed.remainder.trim().match(/^@([A-Za-z0-9_]{5,32})$/);
+    if (identityMatch) return handleIdentityLink(ctx, mode, parsed, scopeId, identityMatch[1]);
     const alliance = normalizeStanceTarget(parsed.remainder);
     if (!alliance) return respond(ctx, mode, "Use: !intel B24:45:21:10 [ROTC]");
     if (!(await safeUserCanUseOfficerCommands(ctx))) {
@@ -3800,6 +3805,53 @@ async function handleIntel(ctx, text, mode) {
     parse_mode: "HTML",
     ...(parsed.coord ? await intelKeyboard(parsed.coord) : {})
   });
+}
+
+async function handleIdentityLink(ctx, mode, parsed, scopeId, username) {
+  if (!(await safeUserCanUseOfficerCommands(ctx))) {
+    return respond(ctx, mode, "Only Lysander officers can create verified player identity links.");
+  }
+  if (!scopeId) {
+    return respond(ctx, mode, "No approved APP operation room is active. Ask an officer to run $approvechat in the room.");
+  }
+  const base = await fetchOne("b24_bases", { coord: parsed.coord }, galaxyToMapId(parsed.galaxy));
+  const gameUsername = String(base?.label || "").trim();
+  if (!base || !gameUsername) {
+    return respond(ctx, mode, `No imported in-game owner is recorded at <code>${escapeHtml(parsed.coord)}</code>. Import that base before linking it.`, { parse_mode: "HTML" });
+  }
+  const telegramUsername = String(username || "").toLowerCase();
+  const accessRows = await fetchRows("b24_access_members", { chat_id: `eq.${scopeId}` }, {
+    includeMap: false,
+    order: "updated_at.desc"
+  });
+  const accessTarget = accessRows.find((row) => searchText(row.username) === telegramUsername);
+  const stamp = new Date().toISOString();
+  const existingLink = await fetchOne("b24_player_links", {
+    chat_id: String(scopeId),
+    telegram_username: telegramUsername
+  }, null, false);
+  const saved = await upsertRow("b24_player_links", {
+    chat_id: String(scopeId),
+    telegram_username: telegramUsername,
+    telegram_user_id: accessTarget?.user_id ? String(accessTarget.user_id) : null,
+    game_username: gameUsername,
+    game_username_key: searchText(gameUsername),
+    evidence_coord: parsed.coord,
+    evidence_map_id: galaxyToMapId(parsed.galaxy),
+    linked_by: telegramName(ctx),
+    linked_by_user_id: telegramUserId(ctx),
+    created_at: existingLink?.created_at || stamp,
+    updated_at: stamp
+  }, "chat_id,telegram_username");
+  if (!saved) {
+    return respond(ctx, mode, "Player identity link failed. Run supabase-player-links.sql, then verify SUPABASE_SERVICE_ROLE_KEY in Render.");
+  }
+  return respond(ctx, mode, [
+    "<b>Verified player identity saved</b>",
+    `<code>@${escapeHtml(telegramUsername)}</code> -> <b>${escapeHtml(gameUsername)}</b>`,
+    `Evidence: <code>${escapeHtml(parsed.coord)}</code>`,
+    `Search with <code>$bases ${escapeHtml(telegramUsername)}</code>.`
+  ].join("\n"), { parse_mode: "HTML" });
 }
 
 async function handleHistory(ctx, text, mode) {
@@ -4074,16 +4126,21 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     fetchRows("b24_bases", {}, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })),
     scopeId ? fetchRows("b24_intel_annotations", {
       chat_id: `eq.${scopeId}`
-    }, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })) : []
+    }, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })) : [],
+    scopeId ? fetchRows("b24_player_links", {
+      chat_id: `eq.${scopeId}`
+    }, { includeMap: false, order: "telegram_username.asc,game_username.asc" }) : []
   ]);
-  const [savedRows, importedRows, annotations] = baseLookups.map((result, index) => {
+  const [savedRows, importedRows, annotations, playerLinks] = baseLookups.map((result, index) => {
     if (result.status === "fulfilled") return Array.isArray(result.value) ? result.value : [];
-    const labels = ["saved bases", "imported bases", "intel annotations"];
+    const labels = ["saved bases", "imported bases", "intel annotations", "player identity links"];
     console.error(`Base report ${labels[index]} lookup failed`, result.reason);
     return [];
   });
 
   const needle = searchText(query);
+  const ownerTerms = identityOwnerSearchTerms(query, playerLinks);
+  const matchingLinks = playerLinks.filter((link) => searchText(link.telegram_username).includes(needle));
   const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
   const exactOwner = ownerSuggestions.find((owner) => searchText(owner) === needle);
   if (!exactOwner && ownerSuggestions.length > 1) {
@@ -4095,10 +4152,10 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   }
 
   const savedMatches = savedRows.filter((row) => {
-    return searchText(row.owner_label).includes(needle);
+    return ownerTerms.some((term) => searchText(row.owner_label).includes(term));
   });
   const importedMatches = importedRows.filter((row) => {
-    return searchText(`${row.guild || ""} ${row.label || ""}`).includes(needle);
+    return ownerTerms.some((term) => searchText(`${row.guild || ""} ${row.label || ""}`).includes(term));
   });
   const annotationMatches = annotations.filter((row) => searchText(row.alliance).includes(needle));
 
@@ -4106,7 +4163,7 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${escapeHtml(scopeLabel)}.`, { parse_mode: "HTML" });
   }
 
-  const stances = galaxy ? await fetchStanceMap(galaxy) : new Map();
+  const stances = await fetchStanceMap(galaxy);
   const canManageOperations = Boolean(galaxy && scopeId && await safeUserCanUseOfficerCommands(ctx));
   const activeOperations = canManageOperations
     ? await fetchActiveOperations(galaxy, scopeId).catch((error) => {
@@ -4140,6 +4197,11 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     `<b>${escapeHtml(compactOwnerTitle)}</b>`,
     `${importedMatches.length} imported / ${savedMatches.length} saved / ${annotationMatches.length} Lysander-assessed bases in ${escapeHtml(scopeLabel)}`
   ];
+  if (matchingLinks.length) {
+    lines.push(...matchingLinks.slice(0, 8).map((link) =>
+      `Identity: <code>@${escapeHtml(link.telegram_username)}</code> -> <b>${escapeHtml(link.game_username)}</b> via <code>${escapeHtml(link.evidence_coord)}</code>`
+    ));
+  }
   let currentSection = "";
   for (const entry of pageEntries) {
     if (entry.section !== currentSection) {
@@ -5310,7 +5372,7 @@ function formatImportedBaseLine(row, stances = null) {
 }
 
 function resolveBaseStance(row, stances = null) {
-  if (!stances) return "";
+  if (!stances?.coord?.get || !stances?.tag?.get) return "";
   const coordStance = stances.coord.get(row.coord);
   if (coordStance) return coordStance;
   const tag = normalizeStanceTarget(row.guild);
