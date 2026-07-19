@@ -73,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.1";
+const botBuild = "2026-07-19.2";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -376,6 +376,7 @@ bot.action(/^quickattack:(\d):(B\d{2}):(.*)$/, handleQuickAttackButton);
 bot.action(/^quickscout:(B\d{2}):(.*)$/, handleQuickScoutButton);
 bot.action(/^regionagenda:(B\d{2}):([^:]{1,24})$/, handleRegionAgendaButton);
 bot.action(/^unscouted:(B\d{2}):(\d{1,2})$/, handleUnscoutedPageButton);
+bot.action(/^unscoutedtake:(B\d{2}):(\d{1,2}):(\d{1,2})$/, handleUnscoutedTakeButton);
 bot.action(/^scoutagenda:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaButton);
 bot.action(/^scoutregionmap:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutRegionMapButton);
 bot.action(/^scoutwatchlist:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchListButton);
@@ -723,6 +724,7 @@ async function helpText(ctx, input = "") {
       "Explicit version of the same region-level scouting query.",
       "<code>$regions B24</code> or <code>$unscouted B24</code>",
       "Shows a read-only, paginated coordinate list of sectors without an APP/friendly base, scout flag, or assigned watch.",
+      "Tap a Watch button to claim that sector; it will then appear under <code>$watches</code> and <code>$scouts B24</code>.",
       "<code>!join S-9R2JD [role]</code>",
       "<code>!ready S-9R2JD</code>",
       "<code>!sent S-9R2JD [note]</code>"
@@ -3848,6 +3850,75 @@ async function handleUnscoutedPageButton(ctx) {
   }
 }
 
+async function handleUnscoutedTakeButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission to claim scout watches.");
+    return;
+  }
+  const [, galaxyText, regionText, pageText] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText);
+  const regionNumber = Number(regionText);
+  const region = galaxy && regionNumber >= 1 && regionNumber <= 99 ? `${galaxy}:${regionNumber}` : "";
+  const scopeId = await operationScopeId(ctx);
+  if (!region || !scopeId) {
+    await ctx.answerCbQuery("Watch scope is unavailable.");
+    return;
+  }
+  const currentCoverage = await regionCoverage(galaxy, scopeId);
+  if (currentCoverage.has(region)) {
+    await ctx.answerCbQuery(`${region} is already covered.`);
+  } else {
+    const operation = await ensureRegionWatchOperation(ctx, galaxy, scopeId, region);
+    if (!operation) {
+      await ctx.answerCbQuery("Could not create that watch.");
+      return;
+    }
+    const members = await fetchOperationMembers(operation);
+    const existing = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
+    if (existing && String(existing.user_id || "") !== telegramUserId(ctx)) {
+      await ctx.answerCbQuery(`Already watched by ${String(existing.display_name || "another member").slice(0, 40)}.`);
+      return;
+    }
+    if (!(await upsertOperationMember(ctx, operation, "joined", "watch"))) {
+      await ctx.answerCbQuery("Could not save that watch assignment.");
+      return;
+    }
+    await ctx.answerCbQuery(`You are now watching ${region}.`);
+  }
+
+  const coverage = await regionCoverage(galaxy, scopeId);
+  const regions = regionsWithoutCoverage(galaxy, coverage);
+  const page = Number(pageText || 1) || 1;
+  const message = formatUnscoutedRegions(galaxy, regions, coverage, page);
+  const options = { parse_mode: "HTML", ...unscoutedRegionsKeyboard(galaxy, regions, page) };
+  try {
+    return await ctx.editMessageText(message, options);
+  } catch {
+    return;
+  }
+}
+
+async function ensureRegionWatchOperation(ctx, galaxy, scopeId, region) {
+  const agendas = groupScoutAgendas(await fetchScoutAgendas(galaxy, scopeId));
+  const existing = agendas
+    .filter((agenda) => scoutAgendaTargetKind(agenda) === "region")
+    .flatMap((agenda) => agenda.operations)
+    .find((operation) => operation.target_coord === region);
+  if (existing) return existing;
+
+  const agendaName = `${galaxy} Region Coverage`;
+  const agenda = agendas.find((item) => item.name === agendaName && scoutAgendaTargetKind(item) === "region");
+  const operation = operationRow(ctx, {
+    type: "scout",
+    targetCoord: region,
+    arrivalAt: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000),
+    note: scoutAgendaNote(agenda?.key || newScoutAgendaKey(), agendaName),
+    chatId: scopeId
+  });
+  operation.map_id = galaxyToMapId(galaxy);
+  return await insertRow("b24_operations", operation) ? operation : null;
+}
+
 async function handleStale(ctx, text, mode) {
   const query = text.replace(/^[!$]stale\b/i, "").trim();
   const report = await buildStaleReport(query, explicitGalaxyFromText(query));
@@ -4893,10 +4964,15 @@ async function regionCoverage(galaxy, scopeId) {
     .filter((row) => row.has_friendly || row.has_scout || row.status === "base" || row.status === "scout")
     .map((row) => `${galaxy}:${Number(row.sector_id)}`)
     .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
-  savedBases
+  const sectorBaseRegions = new Set(sectorRows
+    .filter((row) => row.has_friendly || row.status === "base")
+    .map((row) => `${galaxy}:${Number(row.sector_id)}`)
+    .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
+  const savedBaseRegions = new Set(savedBases
     .map((base) => base.region_id || astroToRegion(base.base_coord || ""))
     .filter(Boolean)
-    .forEach((region) => covered.add(`${galaxy}:${Number(String(region).split(":")[1])}`));
+    .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`));
+  savedBaseRegions.forEach((region) => covered.add(region));
 
   const friendlyTags = coverageFriendlyTags([...stances.tag.entries()], primaryGuildTag);
   const friendlyBaseRegions = new Set(importedBases
@@ -4905,6 +4981,7 @@ async function regionCoverage(galaxy, scopeId) {
     .filter(Boolean)
     .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`));
   friendlyBaseRegions.forEach((region) => covered.add(region));
+  const baseRegions = new Set([...sectorBaseRegions, ...savedBaseRegions, ...friendlyBaseRegions]);
 
   const scoutOperations = await fetchActiveOperations(galaxy, scopeId, "scout");
   const assignments = await Promise.all(scoutOperations.map(async (operation) => {
@@ -4922,6 +4999,7 @@ async function regionCoverage(galaxy, scopeId) {
 
   covered.friendlyTags = friendlyTags;
   covered.friendlyBaseRegions = friendlyBaseRegions;
+  covered.baseRegions = baseRegions;
   return covered;
 }
 
@@ -5287,7 +5365,7 @@ async function scoutAgendasForPresentation(agendas, scopeId) {
     }
     const galaxy = galaxyFromMapId(agenda.operations[0]?.map_id) || galaxyFromCoord(agenda.operations[0]?.target_coord);
     if (!coverageByGalaxy.has(galaxy)) coverageByGalaxy.set(galaxy, await regionCoverage(galaxy, scopeId));
-    const filtered = withoutCoveredRegionTargets(agenda, coverageByGalaxy.get(galaxy));
+    const filtered = withoutCoveredRegionTargets(agenda, coverageByGalaxy.get(galaxy).baseRegions);
     if (filtered.operations.length) visible.push(filtered);
   }
   return visible;
@@ -5460,16 +5538,24 @@ function formatUnscoutedRegions(galaxy, regions, coverage, page = 1) {
   pageData.rows.forEach((region, offset) => {
     lines.push(`${String(pageData.from + offset + 1).padStart(2, "0")}  ${escapeHtml(region)}`);
   });
-  lines.push("</pre>", `${pageData.from + 1}-${pageData.to} of ${pageData.total}`);
+  lines.push("</pre>", `${pageData.from + 1}-${pageData.to} of ${pageData.total}`, "Tap a Watch button to take responsibility for that sector.");
   return lines.join("\n");
 }
 
 function unscoutedRegionsKeyboard(galaxy, regions, page = 1) {
   const pageData = uncoveredRegionPage(regions, page, 20);
-  const buttons = [];
-  if (pageData.page > 1) buttons.push(Markup.button.callback("Previous", `unscouted:${galaxy}:${pageData.page - 1}`));
-  if (pageData.page < pageData.pages) buttons.push(Markup.button.callback("Next", `unscouted:${galaxy}:${pageData.page + 1}`));
-  return buttons.length ? Markup.inlineKeyboard([buttons]) : {};
+  const rows = [];
+  for (let index = 0; index < pageData.rows.length; index += 2) {
+    rows.push(pageData.rows.slice(index, index + 2).map((region) => {
+      const regionNumber = Number(String(region).split(":")[1]);
+      return Markup.button.callback(`Watch ${region}`, `unscoutedtake:${galaxy}:${regionNumber}:${pageData.page}`);
+    }));
+  }
+  const navigation = [];
+  if (pageData.page > 1) navigation.push(Markup.button.callback("Previous", `unscouted:${galaxy}:${pageData.page - 1}`));
+  if (pageData.page < pageData.pages) navigation.push(Markup.button.callback("Next", `unscouted:${galaxy}:${pageData.page + 1}`));
+  if (navigation.length) rows.push(navigation);
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
 }
 
 function scoutRegionMapKeyboard(galaxy, agenda, assignments, coverage) {
