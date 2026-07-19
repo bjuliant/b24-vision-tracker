@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { coverageFriendlyTags, uncoveredRegionPage, uncoveredWatchableRegions, withoutCoveredRegionTargets } from "../galaxy-context.js";
+import { coverageFriendlyTags, identityOwnerSearchTerms, uncoveredRegionPage, uncoveredWatchableRegions, withoutCoveredRegionTargets } from "../galaxy-context.js";
 
 test("the configured APP tag counts as friendly coverage without a manual stance row", () => {
   const tags = coverageFriendlyTags([
@@ -29,6 +29,12 @@ test("regions without any imported systems are not scouting targets", () => {
   const covered = new Set(["B24:4"]);
   assert.deepEqual(uncoveredWatchableRegions("B24", covered, watchable), ["B24:1", "B24:12"]);
   assert.equal(uncoveredWatchableRegions("B24", covered, watchable).includes("B24:2"), false);
+});
+
+test("a Telegram handle expands base searches through its verified game owner", () => {
+  const links = [{ telegram_username: "henrybob123", game_username: "Pug Commander", game_username_key: "pug commander" }];
+  assert.deepEqual(identityOwnerSearchTerms("@henrybob", links), ["henrybob", "pug commander"]);
+  assert.deepEqual(identityOwnerSearchTerms("fear", links), ["fear"]);
 });
 
 test("scout agenda presentation omits regions covered by APP bases", () => {
