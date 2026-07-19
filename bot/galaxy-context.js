@@ -57,6 +57,23 @@ export function uncoveredRegionPage(regions = [], page = 1, pageSize = 20) {
   };
 }
 
+export function uncoveredWatchableRegions(galaxy, covered = new Set(), watchableRegions = null) {
+  const normalizedGalaxy = String(galaxy || "").trim().toUpperCase();
+  if (!/^B\d{2}$/.test(normalizedGalaxy)) return [];
+  const candidates = watchableRegions instanceof Set
+    ? [...watchableRegions]
+    : Array.from({ length: 99 }, (_, index) => `${normalizedGalaxy}:${index + 1}`);
+  return [...new Set(candidates
+    .map((region) => {
+      const match = String(region || "").toUpperCase().match(/^B\d{2}:(\d{1,2})$/);
+      return match && String(region).toUpperCase().startsWith(`${normalizedGalaxy}:`)
+        ? `${normalizedGalaxy}:${Number(match[1])}`
+        : "";
+    })
+    .filter((region) => region && Number(region.split(":")[1]) >= 1 && Number(region.split(":")[1]) <= 99 && !covered.has(region)))]
+    .sort((left, right) => Number(left.split(":")[1]) - Number(right.split(":")[1]));
+}
+
 export function withoutCoveredRegionTargets(agenda, covered = new Set()) {
   const operations = Array.isArray(agenda?.operations) ? agenda.operations : [];
   const isRegionAgenda = operations.length > 0 && operations.every((operation) => /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")));

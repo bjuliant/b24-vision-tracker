@@ -17,6 +17,7 @@ import {
   readOnlyGalaxyQueryOptions,
   selectGalaxyPreference,
   uncoveredRegionPage,
+  uncoveredWatchableRegions,
   withoutCoveredRegionTargets
 } from "./galaxy-context.js";
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
@@ -73,7 +74,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.8";
+const botBuild = "2026-07-19.9";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -2987,6 +2988,13 @@ async function handleScoutWatchTakeButton(ctx) {
     await ctx.answerCbQuery("Watch target not found.");
     return;
   }
+  if (/^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || ""))) {
+    const coverage = await regionCoverage(galaxy, scopeId);
+    if (!coverage.watchableRegions.has(operation.target_coord)) {
+      await ctx.answerCbQuery(`${operation.target_coord} has no known systems to watch.`);
+      return;
+    }
+  }
   const assignments = await scoutAgendaAssignments(agenda);
   const existing = assignments.get(operation.operation_id);
   if (existing && existing.user_id !== telegramUserId(ctx)) {
@@ -3904,6 +3912,10 @@ async function handleUnscoutedTakeButton(ctx) {
     return;
   }
   const currentCoverage = await regionCoverage(galaxy, scopeId);
+  if (!currentCoverage.watchableRegions.has(region)) {
+    await ctx.answerCbQuery(`${region} has no known systems to watch.`);
+    return;
+  }
   if (currentCoverage.has(region)) {
     await ctx.answerCbQuery(`${region} is already covered.`);
   } else {
@@ -4993,12 +5005,18 @@ function parseSectorScoutQuery(query, fallbackGalaxy) {
 
 async function regionCoverage(galaxy, scopeId) {
   const mapId = galaxyToMapId(galaxy);
-  const [sectorRows, savedBases, importedBases, stances] = await Promise.all([
+  const [sectorRows, systemRows, savedBases, importedBases, stances] = await Promise.all([
     fetchAllRows("b24_sectors", {}, { mapId, select: "sector_id,status,has_friendly,has_scout" }),
+    fetchAllRows("b24_systems", {}, { mapId, select: "region_id,coord" }),
     fetchAllRows("b24_user_bases", { status: "eq.active" }, { mapId, select: "region_id,base_coord" }),
     fetchAllRows("b24_bases", {}, { mapId, select: "region_id,coord,guild" }),
     fetchStanceMap(galaxy)
   ]);
+  const watchableRegions = new Set(systemRows
+    .map((system) => system.region_id || astroToRegion(system.coord || ""))
+    .filter(Boolean)
+    .map((region) => `${galaxy}:${Number(String(region).split(":")[1])}`)
+    .filter((region) => /^B\d{2}:(?:[1-9]|[1-9]\d)$/.test(region)));
   const covered = new Set(sectorRows
     .filter((row) => row.has_friendly || row.has_scout || row.status === "base" || row.status === "scout")
     .map((row) => `${galaxy}:${Number(row.sector_id)}`)
@@ -5039,16 +5057,14 @@ async function regionCoverage(galaxy, scopeId) {
   covered.friendlyTags = friendlyTags;
   covered.friendlyBaseRegions = friendlyBaseRegions;
   covered.baseRegions = baseRegions;
+  covered.watchableRegions = watchableRegions;
+  covered.nonScoutableRegions = new Set(Array.from({ length: 99 }, (_, index) => `${galaxy}:${index + 1}`)
+    .filter((region) => !watchableRegions.has(region)));
   return covered;
 }
 
 function regionsWithoutCoverage(galaxy, covered) {
-  const regions = [];
-  for (let region = 1; region <= 99; region += 1) {
-    const regionId = `${galaxy}:${region}`;
-    if (!covered.has(regionId)) regions.push(regionId);
-  }
-  return regions;
+  return uncoveredWatchableRegions(galaxy, covered, covered?.watchableRegions);
 }
 
 function astrosNextQuery(parsed, page) {
@@ -5404,7 +5420,9 @@ async function scoutAgendasForPresentation(agendas, scopeId) {
     }
     const galaxy = galaxyFromMapId(agenda.operations[0]?.map_id) || galaxyFromCoord(agenda.operations[0]?.target_coord);
     if (!coverageByGalaxy.has(galaxy)) coverageByGalaxy.set(galaxy, await regionCoverage(galaxy, scopeId));
-    const filtered = withoutCoveredRegionTargets(agenda, coverageByGalaxy.get(galaxy).baseRegions);
+    const coverage = coverageByGalaxy.get(galaxy);
+    const excludedRegions = new Set([...coverage.baseRegions, ...coverage.nonScoutableRegions]);
+    const filtered = withoutCoveredRegionTargets(agenda, excludedRegions);
     if (filtered.operations.length) visible.push(filtered);
   }
   return visible;
@@ -5567,14 +5585,16 @@ function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
 function formatUnscoutedRegions(galaxy, regions, coverage, page = 1) {
   const pageData = uncoveredRegionPage(regions, page, unscoutedPageSize);
   const baseRegions = coverage?.friendlyBaseRegions?.size || 0;
+  const watchableRegions = coverage?.watchableRegions?.size || 0;
   const lines = [
     `<b>${escapeHtml(galaxy)} SECTORS NEEDING SCOUTS</b>`,
     "No APP/friendly base, scout flag, or assigned watch coverage.",
     `Uncovered: ${pageData.total} | APP/friendly base regions: ${baseRegions}`,
+    `Scoutable sectors: ${watchableRegions} | No-system sectors: ${99 - watchableRegions}`,
     `Page ${pageData.page}/${pageData.pages}`
   ];
   if (!pageData.rows.length) {
-    lines.push("", "Every sector currently has coverage.");
+    lines.push("", "No scoutable sector currently needs coverage.");
     return lines.join("\n");
   }
   lines.push("", `Showing ${pageData.from + 1}-${pageData.to} of ${pageData.total}. Tap a sector to watch it.`);
@@ -5609,6 +5629,10 @@ function scoutRegionMapKeyboard(galaxy, agenda, assignments, coverage) {
       const id = `${galaxy}:${region}`;
       const target = targets.get(id);
       const label = String(region).padStart(2, "0");
+      if (!coverage.watchableRegions.has(id)) {
+        row.push(Markup.button.callback(`⬛${label}`, "noop:no systems"));
+        continue;
+      }
       if (!target) {
         const covered = coverage.has(id);
         row.push(Markup.button.callback(
@@ -7766,6 +7790,7 @@ async function miniAppCoverage(session) {
     app: false,
     friendly: false,
     enemy: false,
+    scoutable: false,
     watchNeeded: false,
     watchAssigned: false,
     watchOwner: "",
@@ -7791,7 +7816,10 @@ async function miniAppCoverage(session) {
   systems.forEach((system) => {
     const region = astroToRegion(system.region_id || system.system_id || "");
     const entry = byRegion.get(region);
-    if (entry && system.system_id) entry.systems.push(String(system.system_id));
+    if (entry && system.system_id) {
+      entry.systems.push(String(system.system_id));
+      entry.scoutable = true;
+    }
   });
   watches.forEach((watch, region) => {
     const entry = byRegion.get(region);
@@ -7801,7 +7829,7 @@ async function miniAppCoverage(session) {
     entry.watchOwnerId = String(watch.user_id || "");
   });
   byRegion.forEach((entry) => {
-    entry.watchNeeded = !entry.app && !entry.watchAssigned;
+    entry.watchNeeded = entry.scoutable && !entry.app && !entry.watchAssigned;
   });
   return [...byRegion.values()];
 }
@@ -8321,6 +8349,10 @@ async function miniAppScoutOperation(session, operationId) {
 async function miniAppTakeScoutWatch(session, body) {
   const operation = await miniAppScoutOperation(session, body.operationId);
   if (!operation) throw new Error("Scout target not found or no longer active.");
+  if (/^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || ""))) {
+    const knownSystem = await fetchOne("b24_systems", { region_id: operation.target_coord }, galaxyToMapId(session.g));
+    if (!knownSystem) throw new Error(`${operation.target_coord} has no known systems to watch.`);
+  }
   const members = await fetchOperationMembers(operation);
   const assigned = members.find((member) => member.state !== "withdrawn" && String(member.role || "").toLowerCase() === "watch");
   if (assigned && String(assigned.user_id || "") !== session.u) {
@@ -8360,11 +8392,14 @@ async function miniAppCreateScoutAgenda(session, body) {
   if (!miniAppOfficer(session)) throw new Error("Officer access is required to create a scouting agenda.");
   const kind = String(body.kind || "base").toLowerCase() === "region" ? "region" : "base";
   let targets = miniAppScoutTargets(session, body);
-  if (kind === "region" && !targets.length) {
+  if (kind === "region") {
     const coverage = await miniAppCoverage(session);
-    targets = coverage.filter((region) => region.watchNeeded).map((region) => region.region);
+    const scoutable = new Set(coverage.filter((region) => region.scoutable).map((region) => region.region));
+    targets = targets.length
+      ? targets.filter((region) => scoutable.has(region))
+      : coverage.filter((region) => region.watchNeeded).map((region) => region.region);
   }
-  if (!targets.length) throw new Error(kind === "region" ? "No uncovered regions were found." : "Paste at least one full base coordinate.");
+  if (!targets.length) throw new Error(kind === "region" ? "No scoutable uncovered regions were found." : "Paste at least one full base coordinate.");
   const name = String(body.name || (kind === "region" ? `${session.g} Region Coverage` : "Scout Watch")).trim().slice(0, 48);
   const key = newScoutAgendaKey();
   const arrivalAt = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
@@ -8942,6 +8977,11 @@ async function ensureMiniAppRegionOperation(session, region) {
 }
 
 async function updateMiniAppWatch(session, region, action) {
+  const normalizedRegion = `${session.g}:${Number(String(region || "").split(":")[1])}`;
+  if (action !== "release") {
+    const knownSystem = await fetchOne("b24_systems", { region_id: normalizedRegion }, galaxyToMapId(session.g));
+    if (!knownSystem) throw new Error(`${normalizedRegion} has no known systems to watch`);
+  }
   const operation = await ensureMiniAppRegionOperation(session, region);
   if (!operation) throw new Error("Invalid watch region");
   const existing = (await fetchOperationMembers(operation))
