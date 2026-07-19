@@ -1,14 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { coverageFriendlyTags, identityOwnerSearchTerms, uncoveredRegionPage, uncoveredWatchableRegions, withoutCoveredRegionTargets } from "../galaxy-context.js";
+import { coverageFriendlyTags, identityOwnerSearchTerms, regionNeedsWatch, uncoveredRegionPage, uncoveredWatchableRegions, withoutCoveredRegionTargets } from "../galaxy-context.js";
 
-test("the configured APP tag counts as friendly coverage without a manual stance row", () => {
+test("the configured APP tag is included in friendly classification without a manual stance row", () => {
   const tags = coverageFriendlyTags([
     ["ALLY", "friend"],
     ["ENEMY", "enemy"]
   ], "APP");
   assert.deepEqual([...tags], ["APP", "ALLY"]);
   assert.equal(tags.has("APP"), true);
+});
+
+test("APP bases provide vision while diplomatic friends still need APP scouts", () => {
+  assert.equal(regionNeedsWatch({ scoutable: true }), true);
+  assert.equal(regionNeedsWatch({ scoutable: true, app: true }), false);
+  assert.equal(regionNeedsWatch({ scoutable: true, friendly: true }), true);
+  assert.equal(regionNeedsWatch({ scoutable: true, watchAssigned: true }), false);
 });
 
 test("uncovered sector coordinates paginate deterministically", () => {
