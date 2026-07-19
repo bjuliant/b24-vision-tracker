@@ -73,7 +73,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.2";
+const botBuild = "2026-07-19.3";
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
   ohelp: ["oh", "ohelp"],
@@ -383,6 +383,7 @@ bot.action(/^scoutwatchlist:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWat
 bot.action(/^scoutwatchtarget:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchTargetButton);
 bot.action(/^scoutwatchtake:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchTakeButton);
 bot.action(/^scoutwatchrelease:(B\d{2}):(G-[A-Z0-9]{5}):(\d{1,3})$/, handleScoutWatchReleaseButton);
+bot.action(/^mywatchrelease:(B\d{2}):([A-Za-z0-9-]{1,40})$/, handleMyWatchReleaseButton);
 bot.action(/^scoutagendaattack:(B\d{2}):(G-[A-Z0-9]{5}):(\d)$/, handleScoutAgendaAttackButton);
 bot.action(/^scoutagendacancel:(B\d{2}):(G-[A-Z0-9]{5})$/, handleScoutAgendaCancelButton);
 bot.action(/^defpool:(\d{1,3})$/, handleDefensePoolButton);
@@ -715,9 +716,9 @@ async function helpText(ctx, input = "") {
       "<code>$scout B24:45:21:10 240 orbit watch</code>",
       "Ask someone to park a scout at that exact enemy base coordinate.",
       "<code>$scouts</code>",
-      "Shows persistent base-watch agendas created from a base list. Officers can turn an agenda into an attack pool or cancel it.",
-      "<code>!watches</code>",
-      "Shows the watch targets currently assigned to you. <code>$scoutings</code> and <code>!watched</code> still work as aliases.",
+      "Shows shared persistent watch agendas, including claimed region watches and base-watch lists. Officers can turn a base agenda into an attack pool or cancel it.",
+      "<code>$watches</code>",
+      "Shows the watch targets currently assigned to you, with buttons to release them. <code>$scoutings</code> and <code>!watched</code> still work as aliases.",
       "<code>$sectors [APP]</code>",
       "Find sectors near APP-held sectors that do not already contain an APP base.",
       "<code>$sectors B24 near [APP] not [APP]</code>",
@@ -2855,7 +2856,7 @@ async function handleWatches(ctx, text, mode) {
     const assignments = await scoutAgendaAssignments(agenda);
     agenda.operations.forEach((operation) => {
       const assignment = assignments.get(operation.operation_id);
-      if (assignment?.user_id === userId) watches.push({ agenda, coord: operation.target_coord });
+      if (assignment?.user_id === userId) watches.push({ agenda, coord: operation.target_coord, operation });
     });
   }
   if (!watches.length) {
@@ -2874,8 +2875,11 @@ async function handleWatches(ctx, text, mode) {
   if (baseWatches.length) {
     lines.push("", `<b>Base Watches (${baseWatches.length})</b>`, ...baseWatches.map(formatWatch));
   }
-  lines.push("", "Use <code>$scouts</code> to open an agenda or release a watch.");
-  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+  lines.push("", "Use a Release button below to open that sector for another watcher.");
+  return respond(ctx, mode, lines.join("\n"), {
+    parse_mode: "HTML",
+    ...myWatchesKeyboard(watches)
+  });
 }
 
 async function handleScoutAgendaButton(ctx) {
@@ -3025,6 +3029,41 @@ async function handleScoutWatchReleaseButton(ctx) {
   }
   await ctx.answerCbQuery("Watch released");
   return ctx.reply(`<code>${escapeHtml(operation.target_coord)}</code> is open for a watcher.`, { parse_mode: "HTML" });
+}
+
+async function handleMyWatchReleaseButton(ctx) {
+  if (!(await userCanUseSensitiveCommands(ctx))) {
+    await ctx.answerCbQuery("You do not have permission for scouting agendas.");
+    return;
+  }
+  const [, galaxyText, operationId] = ctx.match || [];
+  const galaxy = normalizeGalaxy(galaxyText);
+  const scopeId = await operationScopeId(ctx);
+  const operation = galaxy && scopeId
+    ? await fetchOne("b24_operations", {
+      operation_id: operationId,
+      chat_id: String(scopeId),
+      type: "scout",
+      status: "active"
+    }, galaxyToMapId(galaxy))
+    : null;
+  if (!operation || !scoutAgendaInfo(operation)) {
+    await ctx.answerCbQuery("Watch assignment not found.");
+    return;
+  }
+  const members = await fetchOperationMembers(operation);
+  const existing = members.find((member) => member.state === "joined" && member.role === "watch");
+  if (!existing || existing.user_id !== telegramUserId(ctx)) {
+    await ctx.answerCbQuery("Only the assigned watcher can release this target.");
+    return;
+  }
+  const saved = await upsertOperationMember(ctx, operation, "withdrawn", "watch released");
+  if (!saved) {
+    await ctx.answerCbQuery("Could not release that watch assignment.");
+    return;
+  }
+  await ctx.answerCbQuery("Watch released");
+  return ctx.reply(`<code>${escapeHtml(operation.target_coord)}</code> is open for a watcher. Use <code>$unscouted ${escapeHtml(galaxy)}</code> to see open sectors.`, { parse_mode: "HTML" });
 }
 
 async function handleScoutAgendaAttackButton(ctx) {
@@ -5424,9 +5463,6 @@ function scoutAgendaListKeyboard(galaxy, agendas) {
 function scoutAgendaKeyboard(galaxy, agenda, assignments, canManage) {
   const targetKind = scoutAgendaTargetKind(agenda);
   const rows = [];
-  if (targetKind === "region") {
-    rows.push([Markup.button.callback("Region map (10x10)", `scoutregionmap:${galaxy}:${agenda.key}`)]);
-  }
   rows.push([Markup.button.callback(`Watch ${targetKind}s (${agenda.operations.length})`, `scoutwatchlist:${galaxy}:${agenda.key}:1`)]);
   if (canManage && targetKind === "base") {
     rows.push([
@@ -5505,6 +5541,14 @@ function scoutWatchTargetKeyboard(galaxy, agenda, index, assignment, mine) {
   return Markup.inlineKeyboard([[Markup.button.callback("Take watch", `scoutwatchtake:${galaxy}:${agenda.key}:${index}`)]]);
 }
 
+function myWatchesKeyboard(watches) {
+  const rows = watches.slice(0, 50).map(({ operation, coord }) => {
+    const galaxy = galaxyFromMapId(operation.map_id) || galaxyFromCoord(coord);
+    return [Markup.button.callback(`Release ${coord}`.slice(0, 50), `mywatchrelease:${galaxy}:${operation.operation_id}`)];
+  });
+  return rows.length ? Markup.inlineKeyboard(rows) : {};
+}
+
 function formatScoutRegionMap(galaxy, agenda, assignments, coverage) {
   const assigned = agenda?.operations?.filter((operation) => Boolean(assignments.get(operation.operation_id))).length || 0;
   const uncovered = regionsWithoutCoverage(galaxy, coverage).length;
@@ -5571,7 +5615,11 @@ function scoutRegionMapKeyboard(galaxy, agenda, assignments, coverage) {
       const target = targets.get(id);
       const label = String(region).padStart(2, "0");
       if (!target) {
-        row.push(Markup.button.callback(`🟩${label}`, "noop:covered"));
+        const covered = coverage.has(id);
+        row.push(Markup.button.callback(
+          `${covered ? "🟩" : "🟥"}${label}`,
+          covered ? "noop:covered" : `unscoutedtake:${galaxy}:${region}:1`
+        ));
         continue;
       }
       const assigned = assignments.get(target.operation.operation_id);
