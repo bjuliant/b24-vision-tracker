@@ -76,7 +76,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-19.14";
+const botBuild = "2026-07-19.15";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -661,6 +661,10 @@ async function helpText(ctx, input = "") {
     scoutings: "scout",
     watches: "scout",
     watched: "scout",
+    regions: "scout",
+    region: "scout",
+    unscouted: "scout",
+    uncovered: "scout",
     attacks: "attack",
     board: "operations",
     op: "operations"
@@ -673,6 +677,7 @@ async function helpText(ctx, input = "") {
       "<code>!enlist</code> - request APP access",
       "<code>$approvechat</code> - approve this Telegram room (officer)",
       "<code>/map [B23] [coord]</code> - open one galaxy without changing your defaults",
+      "The Mini App galaxy switcher changes only your current view and does not overwrite <code>!g</code>.",
       "<code>!guild status</code> - show the shared APP operation scope",
       "<code>!galaxy B23</code> - set your personal galaxy (<code>!g</code> also works)",
       "<code>$setgroup B23</code> - set this Telegram room's galaxy",
@@ -729,6 +734,7 @@ async function helpText(ctx, input = "") {
       "Explicit version of the same region-level scouting query.",
       "<code>$regions B24</code> or <code>$unscouted B24</code>",
       "Shows a read-only, paginated coordinate list of sectors without an APP base, scout flag, or assigned watch. Friendly bases remain scout targets because they do not share vision.",
+      "Sectors with no imported systems are excluded because no scout fleet can be sent there.",
       "Tap a Watch button to claim that sector; it will then appear under <code>$watches</code> and <code>$scouts B24</code>.",
       "<code>!join S-9R2JD [role]</code>",
       "<code>!ready S-9R2JD</code>",
@@ -863,6 +869,7 @@ async function helpText(ctx, input = "") {
       "<code>!me bases</code> - planned base-only view",
       "<code>!save me [coord] [note]</code> - save/update a base note",
       "<code>!bases [name]</code>/<code>$bases [name]</code> - list a player's saved bases",
+      "A verified Telegram handle also works after an officer links it with <code>$intel [base coord] @username</code>.",
       "<code>$bases B24 [ROTC]</code> - list bases for a tag in a specific galaxy",
       "",
       "Example:",
@@ -976,7 +983,7 @@ async function helpText(ctx, input = "") {
     "<code>!enlist</code> - request APP access",
     "<code>!next</code> - your setup, watches, and urgent work",
     "<code>!g B23</code> - switch your personal galaxy",
-    "<code>/map</code> - open the galaxy map",
+    "<code>/map</code> - open your personal galaxy; <code>/map B23</code> opens B23 temporarily",
     "",
     "<b>INTEL</b>",
     "<code>![coord]</code> - coordinate or system intel",
@@ -987,6 +994,7 @@ async function helpText(ctx, input = "") {
     "<b>SCOUT AND WATCH</b>",
     "<code>!scouts</code> - active scouting agendas",
     "<code>!watches</code> - your watch commitments",
+    "<code>!regions B24</code> - scoutable sectors that still need APP vision",
     "<code>!scout [coord]</code> - claim or request a scout",
     "",
     "<b>OPERATIONS</b>",
@@ -1049,7 +1057,8 @@ function basicHelpText() {
     "!attacks - attack plans",
     "!scouts - scouting agendas",
     "!watches - your watch commitments",
-    "!me / !mine [coord] - your bases",
+    "!regions B24 - sectors that need APP scout vision",
+    "!me / !mine [coord] / !mine remove [coord] - your bases",
     "!buildplan [1-16] / !researchplan [1-16] - doctrine",
     "",
     "Try !help [topic] for more detail."
