@@ -2456,7 +2456,7 @@
     headerGalaxy.textContent = galaxy;
     headerSector.textContent = id;
     onlineCount.textContent = "1";
-    selectedStatus.textContent = flags.length ? flags.join(" ") : "None";
+    selectedStatus.textContent = flags.length ? flags.join(" ") : coverage && !coverage.scoutable ? "No systems" : "None";
     selectedSystems.textContent = `${getSystemCount(id)} known`;
     selectedBases.textContent = `${getBaseCount(id)} known`;
     selectedOperations.textContent = `${getOperationCount(id)} active`;
@@ -2500,7 +2500,9 @@
         return `<span class="system-chip">${escapeHtml(id)}:${escapeHtml(systemNo)}</span>`;
       }).join("");
     } else {
-      systemList.textContent = "No systems imported for this sector.";
+      systemList.textContent = coverageByRegion.get(id) && !coverageByRegion.get(id).scoutable
+        ? "No known systems; this sector cannot be watched."
+        : "No systems imported for this sector.";
     }
 
     if (astros.length) {
@@ -2528,6 +2530,8 @@
     } else if (coverage.watchAssigned) {
       const own = String(coverage.watchOwnerId || "") === String(miniAppSession?.userId || "");
       watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> watched by ${escapeHtml(coverage.watchOwner || "Guild member")}</span>${own ? `<button class="ghost-button" type="button" data-watch-action="release" data-watch-region="${escapeHtml(id)}">Release Watch</button>` : ""}`;
+    } else if (!coverage.scoutable) {
+      watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> has no known systems and cannot receive a scout fleet.</span>`;
     } else {
       watchActionRow.innerHTML = `<span><strong>${escapeHtml(id)}</strong> needs scout coverage.</span><button class="command-button" type="button" data-watch-action="take" data-watch-region="${escapeHtml(id)}">Claim Watch</button>`;
     }
