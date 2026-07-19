@@ -52,6 +52,7 @@ Prefix a command with `!` to get the reply privately. Prefix the same command wi
 - `!galaxy [galaxy]` sets your personal default galaxy; `!g` remains a short alias.
 - `$setgroup [galaxy]` sets the current Telegram room's default galaxy. `$setgalaxy` remains an alias.
 - Bare read-only lists such as `$astros`, `$bases`, `$attacks`, `$incoming`, `$scouts`, `$watches`, `$claimed`, `$board`, and `$next` span imported galaxies; add `Bxx` to focus one galaxy.
+- `$regions B24` and `$unscouted B24` show a paginated list of B24 sectors with no APP/friendly base, scout flag, or assigned watch. A member can tap a Watch button to create and claim only that region watch.
 - Commands that create or change state use an explicit `Bxx` coordinate/scope or the user's saved working galaxy.
 - `$guild bind` remembers the current group as your active operation group for later DM commands.
 - `!guild status` shows your active operation group.
@@ -112,6 +113,8 @@ Recommended hostile-use setup:
 4. Put your actual operation room/group ID in `APPROVED_CHAT_IDS`.
 
 All map, intel, coverage, scouting, and operation commands require an approved guild member. There is no public-intel exception.
+
+When someone runs `!enlist`, Lysander privately notifies every active officer/owner in that APP scope and every configured `OFFICER_USER_IDS` officer. A successful `$approve` sends a second private notification naming the member and approving officer. Telegram can deliver these alerts only to officers who have opened a private chat with Lysander and have not blocked the bot; an undeliverable alert does not block the access change.
 
 ## Create The Telegram Bot
 
@@ -178,7 +181,7 @@ Lysander supports multiple Borealis galaxies without mixing their intel or opera
 - Use `!galaxy B23` in DM or a group to save your personal default.
 - Use `$setgroup B23` in an approved Telegram room to make that room operate in B23. `$setgalaxy` remains an alias.
 - Use the header switcher to move between imported galaxies without changing `!g`; the selected `gal` remains in the URL across refreshes and shared links.
-- Copy the exporter separately from each galaxy map. A B23 exporter imports only B23 data, while a B24 exporter imports only B24 data.
+- The secure exporter detects the galaxy currently open in Astro Empires. An authorized exporter can seed a new valid `Bxx` galaxy; once intel is stored, that galaxy appears in the Mini App switcher without a code change.
 
 A B23 room and a B24 room can therefore create claims, scouting agendas, and attacks at the same time using the same bot and database.
 

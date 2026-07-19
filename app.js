@@ -1492,21 +1492,25 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
-      const exporterVersion = "2026-07-17.4";
+      const exporterVersion = "2026-07-19.5";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
       };
+      const text = document.body.innerText || "";
+      const html = document.documentElement.innerHTML;
       const isAstroReport = /\/report\.aspx$/i.test(location.pathname)
         && new URLSearchParams(location.search).get("view") === "astros";
       const galaxySelect = document.querySelector('select[name="galaxy"]');
       const selectedGalaxyOption = galaxySelect?.selectedOptions?.[0];
+      const locationValue = decodeURIComponent(new URLSearchParams(location.search).get("loc") || "");
+      const locationGalaxy = normalizeGalaxy((locationValue.match(/^B\d{1,2}/i) || [])[0]);
+      const headingGalaxy = normalizeGalaxy((text.match(/\bGalaxy\s+(B\d{1,2})\b/i) || [])[1]);
+      const coordinateGalaxy = normalizeGalaxy((text.match(/\b(B\d{1,2}):\d{1,2}(?::\d{1,2})?/i) || [])[1]);
       const exportGalaxy = isAstroReport
         ? normalizeGalaxy(selectedGalaxyOption?.textContent || selectedGalaxyOption?.value)
-        : activeGalaxy;
+        : locationGalaxy || headingGalaxy || coordinateGalaxy || normalizeGalaxy(activeGalaxy);
       if (!exportGalaxy) throw new Error("Could not determine the selected galaxy.");
-      const text = document.body.innerText || "";
-      const html = document.documentElement.innerHTML;
       const systemPattern = new RegExp(`${exportGalaxy}:\\d{2}:\\d{2}(?!:)`, "g");
       const astroPattern = new RegExp(`${exportGalaxy}:\\d{2}:\\d{2}:\\d{2}`, "g");
       let systems = [...new Set(html.match(systemPattern) || [])].map((coord) => ({ coord }));
