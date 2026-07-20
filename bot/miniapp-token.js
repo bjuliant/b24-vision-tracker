@@ -7,7 +7,7 @@ export function signMiniAppToken(secret, payload) {
   return `${encoded}.${signature}`;
 }
 
-export function verifyMiniAppToken(secret, value, { now = Date.now() } = {}) {
+export function verifyMiniAppToken(secret, value, { now = Date.now(), allowExpired = false } = {}) {
   const [encoded, signature] = String(value || "").split(".");
   if (!encoded || !signature || !secret) return null;
 
@@ -19,7 +19,9 @@ export function verifyMiniAppToken(secret, value, { now = Date.now() } = {}) {
   try {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     const galaxy = String(payload.g || "").trim().toUpperCase();
-    if (!payload.u || !payload.c || !/^B\d{2}$/.test(galaxy) || Number(payload.e) <= now) return null;
+    const expiresAt = Number(payload.e);
+    if (!payload.u || !payload.c || !/^B\d{2}$/.test(galaxy) || !Number.isFinite(expiresAt)) return null;
+    if (!allowExpired && expiresAt <= now) return null;
     return {
       ...payload,
       u: String(payload.u),

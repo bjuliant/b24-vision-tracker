@@ -41,6 +41,7 @@ const telegramWebhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
 const requireAccessControl = /^(1|true|yes)$/i.test(process.env.REQUIRE_ACCESS_CONTROL || "");
 const miniAppAccessSecret = process.env.MINI_APP_ACCESS_SECRET || token;
 const miniAppTokenMinutes = Math.max(5, Math.min(60, Number(process.env.MINI_APP_TOKEN_MINUTES || 20)));
+const miniAppRenewGraceHours = Math.max(1, Math.min(168, Number(process.env.MINI_APP_RENEW_GRACE_HOURS || 24)));
 const miniAppExportTokenDays = Math.max(1, Math.min(90, Number(process.env.MINI_APP_EXPORT_TOKEN_DAYS || 30)));
 const primaryGuildTag = normalizeStanceTarget(process.env.PRIMARY_GUILD_TAG || "APP");
 const primaryGuildId = String(process.env.PRIMARY_GUILD_ID || "APP").trim().toUpperCase() || "APP";
@@ -76,7 +77,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-20.2";
+const botBuild = "2026-07-20.3";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -7811,8 +7812,8 @@ function mapUrlForContext(ctx, galaxy, loc = "", chatId = "") {
   });
 }
 
-function verifyMiniAppAccess(value) {
-  return verifyMiniAppToken(miniAppAccessSecret, value);
+function verifyMiniAppAccess(value, options = {}) {
+  return verifyMiniAppToken(miniAppAccessSecret, value, options);
 }
 
 async function importedMiniAppGalaxies() {
@@ -7830,9 +7831,10 @@ async function importedMiniAppGalaxies() {
   return galaxies;
 }
 
-async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], requestedGalaxy = "", { allowUnimportedGalaxy = false } = {}) {
-  const session = verifyMiniAppAccess(accessToken);
+async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], requestedGalaxy = "", { allowUnimportedGalaxy = false, allowExpired = false } = {}) {
+  const session = verifyMiniAppAccess(accessToken, { allowExpired });
   if (!session) return null;
+  if (allowExpired && Date.now() - Number(session.e) > miniAppRenewGraceHours * 60 * 60 * 1000) return null;
   if (!allowedPurposes.includes(session.p)) return null;
   if (!(await isRecognizedGuildScope(session.c))) return null;
   const member = await fetchAccessMember(session.c, session.u);
@@ -7848,6 +7850,33 @@ async function verifiedMiniAppSession(accessToken, allowedPurposes = ["map"], re
   });
   if (!selectedGalaxy) return null;
   return { ...session, g: selectedGalaxy, linkGalaxy: session.g, galaxies, member };
+}
+
+function createRenewedMapAccess(session) {
+  const expiresAt = Date.now() + miniAppTokenMinutes * 60 * 1000;
+  return {
+    access: signMiniAppToken(miniAppAccessSecret, {
+      u: session.u,
+      c: session.c,
+      g: session.g,
+      l: session.l || "",
+      p: "map",
+      e: expiresAt
+    }),
+    expiresAt
+  };
+}
+
+function miniAppSessionPayload(session) {
+  return {
+    galaxy: session.g,
+    galaxies: session.galaxies,
+    chatId: session.c,
+    userId: session.u,
+    displayName: session.member.display_name || "Guild member",
+    role: session.member.role || "member",
+    expiresAt: Number(session.e)
+  };
 }
 
 function createExporterAccess(session) {
@@ -9163,18 +9192,31 @@ http.createServer(async (request, response) => {
     try {
       const session = await verifiedMiniAppSession(url.searchParams.get("access"), ["map"], url.searchParams.get("galaxy"));
       if (!session) return writeJson(response, 401, { error: "Map access expired or is no longer approved." });
-      return writeJson(response, 200, {
-        galaxy: session.g,
-        galaxies: session.galaxies,
-        chatId: session.c,
-        userId: session.u,
-        displayName: session.member.display_name || "Guild member",
-        role: session.member.role || "member",
-        expiresAt: Number(session.e)
-      });
+      return writeJson(response, 200, miniAppSessionPayload(session));
     } catch (error) {
       console.error("Mini app session lookup failed", error?.message || error);
       return writeJson(response, 500, { error: "Could not verify map access." });
+    }
+  }
+  if (path === "/api/miniapp/renew" && request.method === "POST") {
+    try {
+      const body = await readJson(request, 16 * 1024);
+      const session = await verifiedMiniAppSession(
+        body.access,
+        ["map"],
+        body.galaxy,
+        { allowExpired: true }
+      );
+      if (!session) return writeJson(response, 401, { error: "Map access could not be renewed. Open a fresh /map link from Lysander." });
+      const renewed = createRenewedMapAccess(session);
+      const renewedSession = { ...session, e: renewed.expiresAt };
+      return writeJson(response, 200, {
+        ...renewed,
+        session: miniAppSessionPayload(renewedSession)
+      });
+    } catch (error) {
+      console.error("Mini app session renewal failed", error?.message || error);
+      return writeJson(response, 400, { error: "Could not renew map access." });
     }
   }
   if (path === "/api/miniapp/export-token" && request.method === "POST") {
