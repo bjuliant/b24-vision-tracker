@@ -104,7 +104,7 @@
   const sharedMyWatches = document.querySelector("#sharedMyWatches");
 
   const urlParams = new URLSearchParams(location.search);
-  const miniAppAccess = urlParams.get("access") || "";
+  let miniAppAccess = urlParams.get("access") || "";
   const botApiUrl = String(config.BOT_API_URL || "https://b24-vision-bot.onrender.com").replace(/\/$/, "");
   const defaultGalaxy = normalizeGalaxy(config.GALAXY || galaxyFromMapId(config.MAP_ID) || "B24");
   const initialLocation = normalizeExternalLocation(urlParams.get("loc"));
@@ -130,6 +130,7 @@
   let sharedIntelByRegion = new Map();
   let intelLoadSequence = 0;
   let sharedRefreshBusy = false;
+  let miniAppRenewPromise = null;
 
   init();
 
@@ -186,7 +187,13 @@
     renderIncomingBoard();
     renderBulkTargets();
     setInterval(tickClaims, 1000);
-    if (miniAppSession) setInterval(refreshSharedViews, 20000);
+    if (miniAppSession) {
+      setInterval(refreshSharedViews, 20000);
+      setInterval(ensureMiniAppSessionFresh, 60000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) ensureMiniAppSessionFresh();
+      });
+    }
 
     // Signed sessions use the bot API as their trust boundary. Do not silently
     // re-enable the legacy browser-to-Supabase path if public keys are present.
@@ -228,9 +235,12 @@
     if (!shell) return;
     shell.innerHTML = [
       `<section class="access-lock">`,
+      `<img class="access-lock-art" src="./assets/lysander-access-required.png" alt="Lysander awaiting authorization">`,
+      `<div class="access-lock-copy">`,
       `<h1>VisionBot Access Required</h1>`,
       `<p>${escapeHtml(reason)}</p>`,
       `<p>Use <code>/map</code> in your approved guild group or DM.</p>`,
+      `</div>`,
       `</section>`
     ].join("");
   }
@@ -240,6 +250,51 @@
       return await miniAppApi("/api/miniapp/session");
     } catch {
       return null;
+    }
+  }
+
+  async function renewMiniAppAccess() {
+    if (!miniAppAccess) return null;
+    if (miniAppRenewPromise) return miniAppRenewPromise;
+    miniAppRenewPromise = (async () => {
+      const response = await fetch(`${botApiUrl}/api/miniapp/renew`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access: miniAppAccess, galaxy })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.access || !payload.session) {
+        const error = new Error(payload.error || "Lysander could not renew this map session.");
+        error.status = response.status;
+        throw error;
+      }
+      miniAppAccess = payload.access;
+      miniAppSession = payload.session;
+      urlParams.set("access", miniAppAccess);
+      urlParams.set("gal", normalizeGalaxy(payload.session.galaxy) || galaxy);
+      const renewedUrl = `${location.pathname}?${urlParams.toString()}${location.hash}`;
+      history.replaceState(null, "", renewedUrl);
+      return payload.session;
+    })();
+    try {
+      return await miniAppRenewPromise;
+    } finally {
+      miniAppRenewPromise = null;
+    }
+  }
+
+  async function ensureMiniAppSessionFresh() {
+    if (!miniAppSession || document.hidden) return;
+    if (Number(miniAppSession.expiresAt || 0) - Date.now() > 2 * 60 * 1000) return;
+    try {
+      await renewMiniAppAccess();
+      setSync("Live", true);
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        renderAccessRequired("This map link has expired or your Lysander access was removed.");
+      } else {
+        setSync("Renewal pending");
+      }
     }
   }
 
@@ -261,6 +316,14 @@
     }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 401 && !options.skipRenew && path !== "/api/miniapp/renew") {
+        try {
+          const renewed = await renewMiniAppAccess();
+          if (renewed) return miniAppApi(path, { ...options, skipRenew: true });
+        } catch {
+          renderAccessRequired("This map link has expired or your Lysander access was removed.");
+        }
+      }
       const error = new Error(payload.error || "Lysander could not complete that request.");
       error.status = response.status;
       throw error;

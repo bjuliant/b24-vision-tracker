@@ -59,13 +59,26 @@ button {
 }
 
 .access-lock {
-  width: min(520px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - 32px));
   align-self: center;
   border: 1px solid rgba(57, 169, 225, 0.34);
   border-radius: 8px;
   background: linear-gradient(135deg, rgba(8, 27, 39, 0.96), rgba(6, 12, 18, 0.98));
   box-shadow: 0 0 40px rgba(57, 183, 255, 0.16);
-  padding: 28px;
+  overflow: hidden;
+}
+
+.access-lock-art {
+  display: block;
+  width: 100%;
+  max-height: min(56vh, 500px);
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  object-position: center;
+}
+
+.access-lock-copy {
+  padding: clamp(20px, 4vw, 30px);
 }
 
 .access-lock h1 {
