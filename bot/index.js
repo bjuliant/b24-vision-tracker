@@ -12,8 +12,10 @@ import {
 import { resolveCommandMatches } from "./command-routing.js";
 import {
   coverageFriendlyTags,
+  exactGuildTagQuery,
   explicitGalaxyScope,
   identityOwnerSearchTerms,
+  importedBaseMatchesQuery,
   personalGalaxySettings,
   readOnlyGalaxyQueryOptions,
   regionNeedsWatch,
@@ -25,6 +27,7 @@ import {
 import { signMiniAppToken, verifyMiniAppToken } from "./miniapp-token.js";
 import { buildGalaxyMapUrl, naturalGalaxySort, rowBelongsToMiniAppGalaxy, selectMiniAppGalaxy } from "./miniapp-galaxy.js";
 import { approvalOfficerMessage, enlistmentOfficerMessage, officerNotificationRecipientIds } from "./access-notifications.js";
+import { fleetMatchesSearch, parseFleetSearch } from "./fleet-search.js";
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEB_APP_URL;
@@ -77,7 +80,7 @@ const saveMePattern = /^[!$]save\s+me\s+(.+)$/i;
 const staleIntelMs = 24 * 60 * 60 * 1000;
 const webhookPath = `/telegram-${webhookPathSecret}`;
 const webhookUrl = webhookBaseUrl ? `${webhookBaseUrl}${webhookPath}` : "";
-const botBuild = "2026-07-20.3";
+const botBuild = "2026-07-20.5";
 const unscoutedPageSize = 45;
 const preferredCommandAliases = {
   help: ["h", "he", "hel", "help"],
@@ -93,6 +96,7 @@ const preferredCommandAliases = {
   scout: ["sc", "scout"],
   scouts: ["scouting", "scoutings", "scouts"],
   watches: ["watched", "watches"],
+  fleets: ["fleet", "fleets"],
   astros: ["as", "ast", "astr", "astro", "astros"],
   sectors: ["sec", "sector", "sectors"],
   regions: ["region", "regions"],
@@ -108,7 +112,7 @@ const canonicalCommands = [
   "help", "ohelp", "onboardme", "approve", "approvechat", "officer", "demote", "ban", "access",
   "status", "version", "map", "wakeup", "buildplan", "research", "researchplan", "galaxy", "setgroup", "setgalaxy", "guild",
   "claim", "take", "attack", "scout", "scouts", "watches", "attacked", "sos", "intel", "astros",
-  "stale", "score", "bases", "sectors", "regions", "unscouted", "op", "join", "respond", "ready", "sent", "leave",
+  "stale", "score", "bases", "fleets", "sectors", "regions", "unscouted", "op", "join", "respond", "ready", "sent", "leave",
   "standdown", "cancelop", "board", "defense", "next", "myops", "incoming", "report", "attacks",
   "targets", "claimed", "mine", "me", "friend", "enemy", ...BATTLE_HISTORY_COMMANDS
 ];
@@ -364,7 +368,7 @@ bot.command("status", async (ctx) => ctx.reply(await statusReport(ctx)));
 bot.command("version", (ctx) => ctx.reply(versionReport()));
 bot.command("board", async (ctx) => {
   if (!(await chatApproved(ctx))) return ctx.reply(notApprovedMessage(ctx), { parse_mode: "HTML" });
-  if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use VisionBot operation commands.");
+  if (!(await userCanUseSensitiveCommands(ctx))) return ctx.reply("You do not have permission to use Lysander operation commands.");
   return handleBoard(ctx, ctx.message?.text || "/board", "$");
 });
 
@@ -398,7 +402,7 @@ bot.action(/^noop:(.+)$/, async (ctx) => ctx.answerCbQuery(String(ctx.match?.[1]
 
 async function sendMapButton(ctx) {
   if (!(await userCanUseSensitiveCommands(ctx))) {
-    return ctx.reply("You do not have permission to open the VisionBot map.");
+    return ctx.reply("You do not have permission to open the Lysander map.");
   }
   const requestedGalaxy = explicitGalaxyFromText(ctx.message?.text || ctx.channelPost?.text || "");
   const galaxy = requestedGalaxy || await galaxyForContext(ctx);
@@ -458,7 +462,7 @@ async function handleText(ctx) {
   // their next onboarding step without exposing operational information.
   const isOnboardingGuidance = isCommand(lower, "next");
   if (isSensitiveOperationalCommand(lower) && !isOnboardingGuidance && !(await userCanUseSensitiveCommands(ctx))) {
-    return respond(ctx, mode, "You do not have permission to use VisionBot operation commands.");
+    return respond(ctx, mode, "You do not have permission to use Lysander operation commands.");
   }
 
   if (isCommand(lower, "help")) return handleHelp(ctx, text, mode);
@@ -497,6 +501,7 @@ async function handleText(ctx) {
   if (isCommand(lower, "stale")) return handleStale(ctx, text, mode);
   if (isCommand(lower, "score")) return handleScore(ctx, text, mode);
   if (isCommand(lower, "bases")) return handleBases(ctx, text, mode);
+  if (isCommand(lower, "fleets")) return handleFleets(ctx, text, mode);
   if (isCommand(lower, "friend")) return handleStance(ctx, text, mode, "friend");
   if (isCommand(lower, "enemy")) return handleStance(ctx, text, mode, "enemy");
   if (isCommand(lower, "op")) return handleOp(ctx, text, mode);
@@ -518,7 +523,7 @@ async function handleText(ctx) {
   const astroShortcut = parseAstrosShortcutCommand(text, await galaxyForContext(ctx));
   if (astroShortcut) {
     if (!(await chatApproved(ctx)) || !(await userCanUseSensitiveCommands(ctx))) {
-      return respond(ctx, mode, "You do not have permission to use VisionBot intel commands.");
+      return respond(ctx, mode, "You do not have permission to use Lysander intel commands.");
     }
     const report = await buildAstrosReport(astroShortcut.query, astroShortcut.galaxy);
     return respond(ctx, mode, report, { parse_mode: "HTML" });
@@ -527,7 +532,7 @@ async function handleText(ctx) {
   const lookup = parseLookupCommand(text, await galaxyForContext(ctx));
   if (!lookup) return handleUnknownCommand(ctx, text, mode);
   if (!(await chatApproved(ctx)) || !(await userCanUseSensitiveCommands(ctx))) {
-    return respond(ctx, mode, "You do not have permission to use VisionBot intel commands.");
+    return respond(ctx, mode, "You do not have permission to use Lysander intel commands.");
   }
 
   const lookupMode = lookup.mode;
@@ -668,7 +673,8 @@ async function helpText(ctx, input = "") {
     uncovered: "scout",
     attacks: "attack",
     board: "operations",
-    op: "operations"
+    op: "operations",
+    fleet: "fleets"
   };
   const topic = topicAliases[requestedTopic] || requestedTopic;
   const topics = {
@@ -878,6 +884,19 @@ async function helpText(ctx, input = "") {
       "<code>$bases storebo</code>",
       "<code>$bases B24 rotc page 2</code>"
     ],
+    fleets: [
+      "<b>Moving Fleets Help</b>",
+      "",
+      "Use the separate Lysander Moving Fleets bookmarklet on Astro Empires' Galaxy &gt; Moving Fleets report before searching.",
+      "<code>$fleets</code> - all recently imported moving fleets across imported galaxies",
+      "<code>$fleets B24 no app</code> - B24 fleets not owned by APP",
+      "<code>$fleets [LoB]</code> - fleets owned by LoB (short for <code>from [LoB]</code>)",
+      "<code>$fleets from [LoB]</code> - filter by the fleet owner's guild or player",
+      "<code>$fleets to app</code> - fleets heading to a coordinate with a known APP base",
+      "<code>$fleets B24 page 2</code> - continue a long result",
+      "",
+      "The report exposes destination but not origin coordinates. Rows whose Arrival is <code>-</code> remain visible for 24 hours as arrival unknown."
+    ],
     alerts: [
       "<b>Alerts Help</b>",
       "",
@@ -990,6 +1009,7 @@ async function helpText(ctx, input = "") {
     "<code>![coord]</code> - coordinate or system intel",
     "<code>!bases [player|tag]</code> - known bases",
     "<code>!astros [filters]</code> - search astros",
+    "<code>!fleets [filters]</code> - recently imported moving fleets",
     "<code>!history [coord]</code> - battle and occupation history",
     "",
     "<b>SCOUT AND WATCH</b>",
@@ -1012,7 +1032,7 @@ async function helpText(ctx, input = "") {
     "",
     "<b>HELP</b>",
     "<code>!help [topic]</code>",
-    "Topics: setup, attack, defense, scout, operations, intel, astros, history, stale, score, bases, incoming, doctrine, guild, aliases",
+    "Topics: setup, attack, defense, scout, operations, intel, astros, fleets, history, stale, score, bases, incoming, doctrine, guild, aliases",
     "",
     "Officer reference: <code>$ohelp</code>"
   ].join("\n");
@@ -1180,7 +1200,7 @@ function deliveryMode(text) {
 function normalizeIncomingText(text) {
   let value = String(text || "").trim();
   value = value.replace(/^@\w+\s+(?=[!$@/])/, "");
-  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|uncovered|unscouted|stale|score|bases|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
+  return value.replace(/^@(status|st|version|ohelp|oh|enlist|onboardme|onboard|on|approvechat|approve|officer|demote|ban|access|help|hel|he|h|map|g|galaxy|setgroup|setgalaxy|guild|research|researchplan|rp|buildplan|bp|claim|take|attack|attacks|scoutings|scouting|scouts|watched|watches|scout|sc|attacked|sos|report|rep|history|hist|occupied|occ|intel|as|ast|astr|astro|astros|sec|sector|sectors|region|regions|uncovered|unscouted|stale|score|bases|fleet|fleets|friend|fr|enemy|en|op|join|respond|ready|sent|leave|standdown|cancelop|board|defense|next|myops|incoming|targets|claimed|mine|me|wakeup)\b/i, "$$$1");
 }
 
 function explicitGalaxyFromText(text) {
@@ -1251,7 +1271,7 @@ async function statusReport(ctx) {
 }
 
 function versionReport() {
-  return `VisionBot build ${botBuild}`;
+  return `Lysander build ${botBuild}`;
 }
 
 function isCommand(lowerText, command) {
@@ -1347,6 +1367,7 @@ function isProtectedOperationalCommand(lowerText) {
     "sectors",
     "regions",
     "unscouted",
+    "fleets",
     "mine",
     "me",
     "friend",
@@ -1389,6 +1410,7 @@ function isSensitiveOperationalCommand(lowerText) {
     "targets",
     "claimed",
     "bases",
+    "fleets",
     "intel",
     "a",
     "as",
@@ -1414,7 +1436,7 @@ function isSensitiveOperationalCommand(lowerText) {
 
 function closestCommand(command) {
   const cleanCommand = commandName(command);
-  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "galaxy", "setgroup", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "unscouted", "stale", "score", "bases", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
+  const commands = ["help", "ohelp", "onboardme", "approvechat", "approve", "officer", "demote", "ban", "access", "status", "map", "galaxy", "setgroup", "buildplan", "research", "researchplan", "attack", "attacks", "claim", "take", "sos", "report", "history", "occupied", "scout", "scouts", "watches", "intel", "astro", "astros", "sectors", "regions", "unscouted", "stale", "score", "bases", "fleets", "board", "incoming", "targets", "claimed", "join", "ready", "sent", "leave", "mine", "me"];
   let best = "";
   let bestDistance = 99;
   for (const candidate of commands) {
@@ -1540,7 +1562,7 @@ async function chatApproved(ctx) {
 
 function chatIdReport(ctx) {
   return [
-    "<b>VisionBot IDs</b>",
+    "<b>Lysander IDs</b>",
     `chat_id: <code>${escapeHtml(ctx.chat?.id || "")}</code>`,
     `chat_type: <code>${escapeHtml(ctx.chat?.type || "")}</code>`,
     `chat_title: <code>${escapeHtml(chatTitle(ctx))}</code>`,
@@ -1852,7 +1874,7 @@ async function sendCountdownMessage(ctx, mode, message) {
 
 async function handleWakeup(ctx, mode) {
   const checkpoints = [60, 45, 30, 15, 5];
-  const message = await sendCountdownMessage(ctx, mode, "VisionBot startup sequence: 60s");
+  const message = await sendCountdownMessage(ctx, mode, "Lysander startup sequence: 60s");
 
   for (const seconds of checkpoints.slice(1)) {
     await wait((checkpoints[checkpoints.indexOf(seconds) - 1] - seconds) * 1000);
@@ -1861,10 +1883,10 @@ async function handleWakeup(ctx, mode) {
         message.chatId,
         message.messageId,
         undefined,
-        `VisionBot startup sequence: ${seconds}s`
+        `Lysander startup sequence: ${seconds}s`
       );
     } catch {
-      await respond(ctx, mode, `VisionBot startup sequence: ${seconds}s`);
+      await respond(ctx, mode, `Lysander startup sequence: ${seconds}s`);
     }
   }
 
@@ -1874,10 +1896,10 @@ async function handleWakeup(ctx, mode) {
       message.chatId,
       message.messageId,
       undefined,
-      "VisionBot is awake. Use !help for commands."
+      "Lysander is awake. Use !help for commands."
     );
   } catch {
-    await respond(ctx, mode, "VisionBot is awake. Use !help for commands.");
+    await respond(ctx, mode, "Lysander is awake. Use !help for commands.");
   }
 }
 
@@ -4089,6 +4111,101 @@ async function handleBases(ctx, text, mode) {
   return sendBasesReport(ctx, mode, parsed.query, parsed.galaxy);
 }
 
+async function handleFleets(ctx, text, mode) {
+  const filters = parseFleetSearch(commandBody(text));
+  const galaxy = normalizeGalaxy(filters.galaxy);
+  const scopeId = await operationScopeId(ctx);
+  if (!scopeId) return respond(ctx, mode, "Lysander could not resolve the shared APP operation scope.");
+
+  const now = new Date();
+  const recentUnknownCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const lookups = await Promise.allSettled([
+    fetchAllRows("b24_fleet_movements", {
+      chat_id: `eq.${scopeId}`,
+      status: "eq.active",
+      arrival_at: `gt.${now.toISOString()}`
+    }, queryOptionsForGalaxy(galaxy, { order: "arrival_at.asc", maxRows: 100000 })),
+    fetchAllRows("b24_fleet_observations", {
+      chat_id: `eq.${scopeId}`,
+      source_kind: "eq.galaxy_moving_unknown",
+      observed_at: `gt.${recentUnknownCutoff}`
+    }, queryOptionsForGalaxy(galaxy, { order: "observed_at.desc", maxRows: 100000 })),
+    fetchAllRows("b24_bases", {}, queryOptionsForGalaxy(galaxy, {
+      select: "coord,guild,label",
+      order: "coord.asc",
+      maxRows: 100000
+    }))
+  ]);
+  const [movements, observations, bases] = lookups.map((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+    console.error(["Fleet movement", "Unknown-arrival fleet", "Fleet destination base"][index] + " lookup failed", result.reason);
+    return [];
+  });
+  const basesByCoord = new Map(bases.map((base) => [base.coord, base]));
+  const rows = [
+    ...movements.map((row) => ({ ...row, destination_coord: row.destination_coord, fleet_result_kind: "arrival" })),
+    ...observations.map((row) => ({ ...row, destination_coord: row.coord, fleet_result_kind: "unknown" }))
+  ].filter((row) => fleetMatchesSearch(row, basesByCoord.get(row.destination_coord), filters));
+
+  rows.sort((left, right) => {
+    if (left.fleet_result_kind !== right.fleet_result_kind) return left.fleet_result_kind === "arrival" ? -1 : 1;
+    const leftTime = new Date(left.arrival_at || left.observed_at).getTime() || 0;
+    const rightTime = new Date(right.arrival_at || right.observed_at).getTime() || 0;
+    return left.fleet_result_kind === "arrival" ? leftTime - rightTime : rightTime - leftTime;
+  });
+
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.min(filters.page, pageCount);
+  const start = (page - 1) * pageSize;
+  const pageRows = rows.slice(start, start + pageSize);
+  const scope = displayGalaxyScope(galaxy);
+  const filterLabels = [
+    filters.from ? `from ${formatFleetSearchTag(filters.from)}` : "",
+    filters.to ? `to ${formatFleetSearchTag(filters.to)}` : "",
+    filters.excludeFrom ? `excluding ${formatFleetSearchTag(filters.excludeFrom)} fleets` : ""
+  ].filter(Boolean);
+  const lines = [
+    `<b>${escapeHtml(scope)} MOVING FLEETS</b>`,
+    filterLabels.length ? `Filter: ${filterLabels.map(escapeHtml).join(" | ")}` : "All recently imported moving fleets",
+    `Known arrivals: ${movements.length} | Recent unknown arrivals: ${observations.length}`
+  ];
+  if (!rows.length) {
+    lines.push("", "No moving fleets match those filters. Click the Lysander Moving Fleets bookmarklet on the current Galaxy report, then try again.");
+    return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+  }
+
+  lines.push(`Page ${page}/${pageCount}`, "");
+  pageRows.forEach((row, index) => {
+    const destinationBase = basesByCoord.get(row.destination_coord);
+    const owner = formatFleetOwner(row);
+    const destinationOwner = destinationBase ? formatFleetOwner(destinationBase) : "unknown destination owner";
+    const size = Number(row.size);
+    const sizeLabel = Number.isFinite(size) ? size.toLocaleString("en-US") : "unknown size";
+    const timing = row.fleet_result_kind === "arrival"
+      ? `ETA ${formatEta(new Date(row.arrival_at))}`
+      : `arrival unknown, seen ${formatAge(new Date(row.observed_at))} ago`;
+    lines.push(`${String(start + index + 1).padStart(2, "0")} <code>${escapeHtml(row.destination_coord)}</code> - ${escapeHtml(owner)} - ${escapeHtml(sizeLabel)} - ${escapeHtml(timing)} - to ${escapeHtml(destinationOwner)}`);
+  });
+  if (pageCount > 1) {
+    const nextFilter = [galaxy, filters.from ? `from ${formatFleetSearchTag(filters.from)}` : "", filters.to ? `to ${formatFleetSearchTag(filters.to)}` : "", filters.excludeFrom ? `no ${formatFleetSearchTag(filters.excludeFrom)}` : ""].filter(Boolean).join(" ");
+    lines.push("", `Use <code>${escapeHtml(mode)}fleets ${escapeHtml(nextFilter)} page ${Math.min(page + 1, pageCount)}</code> to continue.`);
+  }
+  return respond(ctx, mode, lines.join("\n"), { parse_mode: "HTML" });
+}
+
+function formatFleetSearchTag(value) {
+  const clean = String(value || "").replace(/[\[\]]/g, "").trim();
+  return clean ? `[${clean.toUpperCase()}]` : "";
+}
+
+function formatFleetOwner(row) {
+  const guild = String(row?.guild || "").trim();
+  const tag = guild ? normalizeStanceTarget(guild) : "";
+  const player = String(row?.player || row?.label || "").replace(/^\[[^\]]+\]\s*/, "").trim();
+  return [tag, player].filter(Boolean).join(" ") || "unknown owner";
+}
+
 async function handleStance(ctx, text, mode, stance) {
   if (!(await safeUserCanUseOfficerCommands(ctx))) {
     return respond(ctx, mode, "Only Lysander officers can change shared friend/enemy classifications.");
@@ -4139,14 +4256,14 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
     return "";
   });
   const baseLookups = await Promise.allSettled([
-    fetchRows("b24_user_bases", {
+    fetchAllRows("b24_user_bases", {
       status: "eq.active"
     }, queryOptionsForGalaxy(galaxy, { order: "base_coord.asc" })),
-    fetchRows("b24_bases", {}, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })),
-    scopeId ? fetchRows("b24_intel_annotations", {
+    fetchAllRows("b24_bases", {}, queryOptionsForGalaxy(galaxy, { order: "coord.asc", maxRows: 100000 })),
+    scopeId ? fetchAllRows("b24_intel_annotations", {
       chat_id: `eq.${scopeId}`
     }, queryOptionsForGalaxy(galaxy, { order: "coord.asc" })) : [],
-    scopeId ? fetchRows("b24_player_links", {
+    scopeId ? fetchAllRows("b24_player_links", {
       chat_id: `eq.${scopeId}`
     }, { includeMap: false, order: "telegram_username.asc,game_username.asc" }) : []
   ]);
@@ -4158,9 +4275,10 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   });
 
   const needle = searchText(query);
+  const exactGuildTag = exactGuildTagQuery(query);
   const ownerTerms = identityOwnerSearchTerms(query, playerLinks);
   const matchingLinks = playerLinks.filter((link) => searchText(link.telegram_username).includes(needle));
-  const ownerSuggestions = baseOwnerSuggestions([...savedRows, ...importedRows], needle);
+  const ownerSuggestions = exactGuildTag ? [] : baseOwnerSuggestions([...savedRows, ...importedRows], needle);
   const exactOwner = ownerSuggestions.find((owner) => searchText(owner) === needle);
   if (!exactOwner && ownerSuggestions.length > 1) {
     const lines = [`Multiple base owners match ${escapeHtml(query)}:`, ...ownerSuggestions.slice(0, 12).map((owner) => `- ${escapeHtml(owner)}`)];
@@ -4171,12 +4289,13 @@ async function sendBasesReport(ctx, mode, query, galaxyOverride = "") {
   }
 
   const savedMatches = savedRows.filter((row) => {
+    if (exactGuildTag) return false;
     return ownerTerms.some((term) => searchText(row.owner_label).includes(term));
   });
-  const importedMatches = importedRows.filter((row) => {
-    return ownerTerms.some((term) => searchText(`${row.guild || ""} ${row.label || ""}`).includes(term));
-  });
-  const annotationMatches = annotations.filter((row) => searchText(row.alliance).includes(needle));
+  const importedMatches = importedRows.filter((row) => importedBaseMatchesQuery(row, query, ownerTerms));
+  const annotationMatches = annotations.filter((row) => exactGuildTag
+    ? searchText(row.alliance) === searchText(exactGuildTag)
+    : searchText(row.alliance).includes(needle));
 
   if (!savedMatches.length && !importedMatches.length && !annotationMatches.length) {
     return respond(ctx, mode, `No saved or imported bases found for ${escapeHtml(query)} in ${escapeHtml(scopeLabel)}.`, { parse_mode: "HTML" });
@@ -5762,6 +5881,7 @@ function scoutRegionMapKeyboard(galaxy, agenda, assignments, coverage) {
 
 async function matchingBaseCoords(galaxy, scopeId, query) {
   const needle = searchText(query);
+  const exactGuildTag = exactGuildTagQuery(query);
   if (!needle) return [];
   const mapId = galaxyToMapId(galaxy);
   const [savedBases, bases, annotations] = await Promise.all([
@@ -5773,13 +5893,15 @@ async function matchingBaseCoords(galaxy, scopeId, query) {
   ]);
   return [...new Set([
     ...savedBases
-      .filter((row) => searchText(row.owner_label).includes(needle))
+      .filter((row) => !exactGuildTag && searchText(row.owner_label).includes(needle))
       .map((row) => row.base_coord),
     ...bases
-      .filter((row) => searchText(`${row.guild || ""} ${row.label || ""}`).includes(needle))
+      .filter((row) => importedBaseMatchesQuery(row, query, [needle]))
       .map((row) => row.coord),
     ...annotations
-      .filter((row) => searchText(row.alliance).includes(needle))
+      .filter((row) => exactGuildTag
+        ? searchText(row.alliance) === searchText(exactGuildTag)
+        : searchText(row.alliance).includes(needle))
       .map((row) => row.coord)
   ].filter(Boolean))].sort();
 }
@@ -6365,7 +6487,7 @@ async function pollScheduledNotifications() {
       }
       const target = notification.user_id || notification.chat_id;
       if (!target) continue;
-      await bot.telegram.sendMessage(target, notification.message || "VisionBot reminder");
+      await bot.telegram.sendMessage(target, notification.message || "Lysander reminder");
       await markNotificationSent(notification);
     } catch (error) {
       console.error("notification send failed", notification.notification_id, error?.message || error);
@@ -7902,7 +8024,7 @@ function miniAppContext(session) {
       username: session.member.username || "",
       first_name: session.member.display_name || `Telegram ${session.u}`
     },
-    chat: { id: session.c, type: "group", title: "VisionBot Map" }
+    chat: { id: session.c, type: "group", title: "Lysander Map" }
   };
 }
 
@@ -8863,7 +8985,7 @@ async function miniAppImportIntel(session, body) {
       source_kind: row.sourceKind,
       observed_at: row.observedAt,
       raw_line: row.rawLine,
-      imported_by: session.member.display_name || "VisionBot exporter",
+      imported_by: session.member.display_name || "Lysander exporter",
       imported_by_user_id: session.u,
       chat_id: session.c,
       status: new Date(row.arrivalAt).getTime() > Date.now() ? "active" : "arrived",
@@ -8887,7 +9009,7 @@ async function miniAppImportIntel(session, body) {
       system_id: attackerCoord ? astroToSystem(attackerCoord) : null,
       eta_minutes: Math.max(1, Math.ceil((arrivalAt.getTime() - Date.now()) / 60000)),
       arrival_at: arrivalAt.toISOString(),
-      reported_by: session.member.display_name || "VisionBot exporter",
+      reported_by: session.member.display_name || "Lysander exporter",
       reported_by_user_id: session.u,
       chat_id: session.c,
       hostile_fleet: String(row.rawLine || "").slice(0, 2000),
@@ -8909,7 +9031,7 @@ async function miniAppImportIntel(session, body) {
     system_id: null,
     eta_minutes: Math.max(1, Math.ceil((new Date(row.arrival_at).getTime() - Date.now()) / 60000)),
     arrival_at: row.arrival_at,
-    reported_by: session.member.display_name || "VisionBot exporter",
+    reported_by: session.member.display_name || "Lysander exporter",
     reported_by_user_id: session.u,
     chat_id: session.c,
     hostile_fleet: row.raw_line || [row.guild, row.player, row.fleet_name].filter(Boolean).join(" "),
@@ -8978,7 +9100,7 @@ async function miniAppImportIntel(session, body) {
       liberated: Boolean(row.liberated),
       result_text: String(row.resultText || row.result_text || "").slice(0, 2000),
       raw_report: rawReport,
-      imported_by: session.member.display_name || "VisionBot importer",
+      imported_by: session.member.display_name || "Lysander importer",
       imported_by_user_id: session.u,
       chat_id: session.c,
       updated_at: stamp
@@ -9017,7 +9139,7 @@ async function miniAppImportIntel(session, body) {
       detection_seconds: finiteNumberOrNull(row.detectionSeconds || row.detection_seconds), destroyed: Boolean(row.destroyed),
       side: String(row.side || "").slice(0, 20) || null, source_kind: String(row.sourceKind || row.source_kind || "observation").slice(0, 40),
       observed_at: observedAt, raw_line: String(row.rawLine || row.raw_line || "").slice(0, 10000),
-      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+      imported_by: session.member.display_name || "Lysander importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
     };
   }).filter(Boolean);
   const uniqueFleetObservations = [...new Map(fleetObservations.map((row) => [row.observation_id, row])).values()].slice(0, 2000);
@@ -9048,7 +9170,7 @@ async function miniAppImportIntel(session, body) {
       observed_at: Number.isFinite(observed.getTime()) ? observed.toISOString() : stamp,
       resolved_at: resolved && Number.isFinite(resolved.getTime()) ? resolved.toISOString() : null,
       source_kind: String(row.sourceKind || row.source_kind || "observation").slice(0, 40),
-      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+      imported_by: session.member.display_name || "Lysander importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
     };
   }).filter(Boolean);
   const uniqueOccupations = [...new Map(occupationRows.map((row) => [row.coord, row])).values()].slice(0, 1000);
@@ -9066,7 +9188,7 @@ async function miniAppImportIntel(session, body) {
       actor_guild: String(row.actorGuild || row.actor_guild || "").slice(0, 80) || null,
       actor_player: String(row.actorPlayer || row.actor_player || "").slice(0, 160) || null,
       occurred_at: occurredAt, raw_line: String(row.rawLine || row.raw_line || "").slice(0, 10000),
-      imported_by: session.member.display_name || "VisionBot importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
+      imported_by: session.member.display_name || "Lysander importer", imported_by_user_id: session.u, chat_id: session.c, updated_at: stamp
     };
   }).filter(Boolean);
   const uniqueGameEvents = [...new Map(gameEvents.map((row) => [row.event_id, row])).values()].slice(0, 2000);
@@ -9377,7 +9499,7 @@ http.createServer(async (request, response) => {
   }
 
   response.writeHead(200, { "Content-Type": "text/plain" });
-  response.end(`VisionBot is running\nMode: ${webhookUrl ? "webhook" : "polling"}\n`);
+  response.end(`Lysander is running\nMode: ${webhookUrl ? "webhook" : "polling"}\n`);
 }).listen(port, "0.0.0.0", () => {
   console.log(`Health server listening on ${port}`);
 });
