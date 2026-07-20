@@ -96,6 +96,22 @@ export function identityOwnerSearchTerms(query, links = []) {
   ])];
 }
 
+export function exactGuildTagQuery(value) {
+  const match = String(value || "").trim().match(/^\[([^\]]{1,24})\]$/);
+  return match ? match[1].trim().toUpperCase() : "";
+}
+
+export function importedBaseMatchesQuery(row, query, ownerTerms = []) {
+  const exactTag = exactGuildTagQuery(query);
+  const normalize = (value) => String(value || "")
+    .replace(/[\[\]]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (exactTag) return normalize(row?.guild) === exactTag.toLowerCase();
+  return ownerTerms.some((term) => normalize(`${row?.guild || ""} ${row?.label || ""}`).includes(term));
+}
+
 export function withoutCoveredRegionTargets(agenda, covered = new Set()) {
   const operations = Array.isArray(agenda?.operations) ? agenda.operations : [];
   const isRegionAgenda = operations.length > 0 && operations.every((operation) => /^B\d{2}:\d{1,2}$/.test(String(operation.target_coord || "")));
