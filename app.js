@@ -1492,7 +1492,7 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
-      const exporterVersion = "2026-07-19.6";
+      const exporterVersion = "2026-07-20.1";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
@@ -1657,18 +1657,21 @@
           : Math.max(0, Date.parse(header || "") - Date.now());
         return Math.min(120000, Math.max(headerDelay || 0, 30000 + ((attempt - 1) * 15000)));
       };
-      const fetchAstroReport = async ({ terrain = "", astroType = "", solarPos = "0" }) => {
+      const fetchAstroReport = async ({ galaxyLabel, galaxyValue, galaxyIndex, galaxyTotal, terrain = "", astroType = "", solarPos = "0" }) => {
         for (let attempt = 1; attempt <= 6; attempt += 1) {
           await paceReportRequest();
           reportRequestCount += 1;
-          setProgress(`VisionBot exporter ${exporterVersion}\nCollecting ${exportGalaxy} astro report... request ${reportRequestCount}`);
+          setProgress(
+            `VisionBot exporter ${exporterVersion}\nCollecting ${galaxyLabel} (${galaxyIndex}/${galaxyTotal})... `
+            + `request ${reportRequestCount}`
+          );
           const response = await fetch("/report.aspx?view=astros", {
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: new URLSearchParams({
               form_status: "submitted",
-              galaxy: String(selectedGalaxyOption?.value || exportGalaxy.replace(/^B/, "")),
+              galaxy: String(galaxyValue),
               terrain,
               astro_type: astroType,
               solar_pos: solarPos
@@ -1692,28 +1695,29 @@
         }
         throw new Error("Astro report remained rate limited after several retries. Please wait a few minutes and try again.");
       };
-      const collectFullAstroReport = async () => {
+      const collectFullAstroReport = async ({ galaxyLabel, galaxyValue, galaxyIndex, galaxyTotal }) => {
         const terrainValues = [...document.querySelectorAll('select[name="terrain"] option')]
           .filter((option) => option.value && !/^any$/i.test(option.textContent.trim()))
           .map((option) => option.value);
         if (!terrainValues.length) throw new Error("Could not find the astro report terrain filters.");
         const collected = [];
         for (const terrain of terrainValues) {
-          const broad = await fetchAstroReport({ terrain });
+          const requestContext = { galaxyLabel, galaxyValue, galaxyIndex, galaxyTotal, terrain };
+          const broad = await fetchAstroReport(requestContext);
           if (!broad.capped) {
             collected.push(...broad.rows);
             continue;
           }
           for (let solar = 1; solar <= 5; solar += 1) {
-            const solarResult = await fetchAstroReport({ terrain, solarPos: String(solar) });
+            const solarResult = await fetchAstroReport({ ...requestContext, solarPos: String(solar) });
             if (!solarResult.capped) {
               collected.push(...solarResult.rows);
               continue;
             }
             for (const astroType of ["planet", "moon"]) {
-              const splitResult = await fetchAstroReport({ terrain, astroType, solarPos: String(solar) });
+              const splitResult = await fetchAstroReport({ ...requestContext, astroType, solarPos: String(solar) });
               if (splitResult.capped) {
-                throw new Error(`${terrain} ${astroType} solar position ${solar} still exceeds the report limit.`);
+                throw new Error(`${galaxyLabel} ${terrain} ${astroType} solar position ${solar} still exceeds the report limit.`);
               }
               collected.push(...splitResult.rows);
             }
@@ -1723,17 +1727,134 @@
       };
 
       if (isAstroReport) {
-        try {
-          astros = await collectFullAstroReport();
-          systems = [...new Set(astros.map((row) => row.coord.split(":").slice(0, 3).join(":")))]
-            .map((coord) => ({ coord }));
-          setProgress(`Collected ${astros.length.toLocaleString()} ${exportGalaxy} astros. Uploading...`);
-        } catch (error) {
-          progress.remove();
-          console.error(error);
-          alert(`VisionBot full report export failed: ${error.message}`);
+        const astroGalaxyOptions = [...(galaxySelect?.options || [])]
+          .map((option) => ({ label: normalizeGalaxy(option.textContent || option.value), value: option.value }))
+          .filter((option) => option.label && option.value !== "");
+        const astroGalaxyByLabel = new Map(astroGalaxyOptions.map((option) => [option.label, option]));
+        const checkpointKey = "visionbot-astro-scan-v1";
+        const readCheckpoint = () => {
+          try {
+            const parsed = JSON.parse(localStorage.getItem(checkpointKey) || "null");
+            return parsed && Array.isArray(parsed.targets) && Array.isArray(parsed.completed) ? parsed : null;
+          } catch {
+            return null;
+          }
+        };
+        const writeCheckpoint = (value) => {
+          try {
+            if (value) localStorage.setItem(checkpointKey, JSON.stringify(value));
+            else localStorage.removeItem(checkpointKey);
+          } catch {
+            // A scan can continue without resumability when browser storage is unavailable.
+          }
+        };
+        const savedCheckpoint = readCheckpoint();
+        const choice = prompt(
+          "Astro scan galaxies:\n\n"
+          + "Enter the current galaxy, a comma-separated list (B22,B23,B24), ALL, or RESUME.\n"
+          + "Long scans upload and checkpoint after each completed galaxy.",
+          savedCheckpoint?.targets?.some((label) => !savedCheckpoint.completed.includes(label)) ? "RESUME" : exportGalaxy
+        );
+        if (choice === null) return;
+        const normalizedChoice = String(choice).trim().toUpperCase();
+        let checkpoint;
+        if (normalizedChoice === "RESUME") {
+          if (!savedCheckpoint) {
+            alert("No saved Astro Reports scan was found.");
+            return;
+          }
+          checkpoint = savedCheckpoint;
+        } else {
+          const requestedLabels = normalizedChoice === "ALL"
+            ? astroGalaxyOptions.map((option) => option.label)
+            : normalizedChoice.split(/[\s,]+/).map(normalizeGalaxy).filter(Boolean);
+          const targets = [...new Set(requestedLabels)];
+          const invalid = targets.filter((label) => !astroGalaxyByLabel.has(label));
+          if (!targets.length || invalid.length) {
+            alert(`Invalid galaxy selection${invalid.length ? `: ${invalid.join(", ")}` : "."}`);
+            return;
+          }
+          checkpoint = { targets, completed: [], startedAt: new Date().toISOString(), exporterVersion };
+          if (targets.length > 1 && !confirm(
+            `Scan ${targets.length} galaxies?\n\nEach galaxy will be uploaded immediately after it completes. `
+            + "You can cancel and later choose RESUME."
+          )) return;
+          writeCheckpoint(checkpoint);
+        }
+        const remainingTargets = checkpoint.targets.filter((label) => !checkpoint.completed.includes(label));
+        if (!remainingTargets.length) {
+          writeCheckpoint(null);
+          alert("The saved Astro Reports scan is already complete.");
           return;
         }
+        cancelButton.style.display = "inline-block";
+        const scanTotals = { systems: 0, astros: 0, requests: reportRequestCount };
+        const uploadAstroGalaxy = async (galaxyLabel, astroRows, galaxyIndex, galaxyTotal) => {
+          const systemRows = [...new Set(astroRows.map((row) => row.coord.split(":").slice(0, 3).join(":")))]
+            .map((coord) => ({ coord }));
+          const chunks = Array.from(
+            { length: Math.max(1, Math.ceil(astroRows.length / 400)) },
+            (_, index) => astroRows.slice(index * 400, (index + 1) * 400)
+          );
+          const result = { systems: 0, astros: 0 };
+          for (let index = 0; index < chunks.length; index += 1) {
+            setProgress(
+              `Uploading ${galaxyLabel} (${galaxyIndex}/${galaxyTotal})... `
+              + `batch ${index + 1} of ${chunks.length}`
+            );
+            const response = await fetch(api, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                access, galaxy: galaxyLabel,
+                intel: {
+                  galaxy: galaxyLabel, systems: index === 0 ? systemRows : [], bases: [], astros: chunks[index],
+                  fleetMovements: [], sourceText: "", sourceUrl: location.href
+                }
+              })
+            });
+            const batchResult = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(batchResult.error || `${galaxyLabel} upload batch ${index + 1} failed`);
+            result.systems += Number(batchResult.systems || 0);
+            result.astros += Number(batchResult.astros || 0);
+          }
+          return result;
+        };
+        try {
+          for (let index = 0; index < remainingTargets.length; index += 1) {
+            const galaxyLabel = remainingTargets[index];
+            const galaxyOption = astroGalaxyByLabel.get(galaxyLabel);
+            const overallIndex = checkpoint.completed.length + 1;
+            const astroRows = await collectFullAstroReport({
+              galaxyLabel, galaxyValue: galaxyOption.value,
+              galaxyIndex: overallIndex, galaxyTotal: checkpoint.targets.length
+            });
+            setProgress(`Collected ${astroRows.length.toLocaleString()} ${galaxyLabel} astros. Uploading...`);
+            const uploaded = await uploadAstroGalaxy(
+              galaxyLabel, astroRows, overallIndex, checkpoint.targets.length
+            );
+            scanTotals.systems += uploaded.systems;
+            scanTotals.astros += uploaded.astros;
+            checkpoint.completed.push(galaxyLabel);
+            checkpoint.lastCompletedAt = new Date().toISOString();
+            writeCheckpoint(checkpoint);
+          }
+          writeCheckpoint(null);
+          alert(
+            `VisionBot Astro Reports scan complete: ${checkpoint.completed.length} galaxies, `
+            + `${scanTotals.systems.toLocaleString()} systems, ${scanTotals.astros.toLocaleString()} astros, `
+            + `${reportRequestCount} report requests (exporter ${exporterVersion}).`
+          );
+        } catch (error) {
+          console.error(error);
+          const remaining = checkpoint.targets.length - checkpoint.completed.length;
+          alert(
+            `VisionBot Astro Reports scan stopped: ${error.message}\n\n`
+            + `${checkpoint.completed.length} galaxies were safely uploaded; ${remaining} remain. Run the bookmarklet again and choose RESUME.`
+          );
+        } finally {
+          progress.remove();
+        }
+        return;
       }
 
       const guildReportIntel = { bases: [], fleetObservations: [], fleetMovements: [] };

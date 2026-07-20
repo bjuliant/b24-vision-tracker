@@ -130,6 +130,7 @@ For an already hardened database, `supabase-research-doctrine.sql` is a standalo
 - [ ] Verify incoming report/coverage in both directions.
 - [ ] Verify exact-base and region watch assignment in both directions.
 - [ ] Verify a signed bookmarklet import appears in both clients and contains no Supabase key.
+- [ ] Verify Astro Reports accepts one galaxy, a comma-separated list, `ALL`, and `RESUME`; confirm each completed galaxy is uploaded before the next begins and an interrupted run resumes at the first incomplete galaxy.
 - [ ] Verify `/map B23` and `/map B24` open isolated maps without changing saved defaults.
 - [ ] Verify a B23 room and B24 room can hold different `$setgalaxy` defaults simultaneously.
 - [ ] Verify a normal B23 or B24 page export follows the galaxy visible in Astro Empires, while a Guild Reports scan partitions mixed-galaxy coordinates into their matching maps.
