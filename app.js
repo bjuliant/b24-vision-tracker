@@ -61,6 +61,7 @@
   const importText = document.querySelector("#importText");
   const importButton = document.querySelector("#importButton");
   const bookmarkletButton = document.querySelector("#bookmarkletButton");
+  const movingFleetsBookmarkletButton = document.querySelector("#movingFleetsBookmarkletButton");
   const importResult = document.querySelector("#importResult");
   const sharedAttacksPanel = document.querySelector("#sharedAttacksPanel");
   const sharedAttackCounts = document.querySelector("#sharedAttackCounts");
@@ -237,7 +238,7 @@
       `<section class="access-lock">`,
       `<img class="access-lock-art" src="./assets/lysander-access-required.png" alt="Lysander awaiting authorization">`,
       `<div class="access-lock-copy">`,
-      `<h1>VisionBot Access Required</h1>`,
+      `<h1>Lysander Access Required</h1>`,
       `<p>${escapeHtml(reason)}</p>`,
       `<p>Use <code>/map</code> in your approved guild group or DM.</p>`,
       `</div>`,
@@ -845,6 +846,7 @@
 
     importButton.addEventListener("click", importIntel);
     bookmarkletButton.addEventListener("click", copyBookmarklet);
+    movingFleetsBookmarkletButton.addEventListener("click", copyMovingFleetsBookmarklet);
     claimButton.addEventListener("click", createClaim);
     attackWindowStart.addEventListener("change", () => {
       populateArrivalOptions();
@@ -1555,7 +1557,7 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
-      const exporterVersion = "2026-07-20.2";
+      const exporterVersion = "2026-07-20.3";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
@@ -1725,7 +1727,7 @@
           await paceReportRequest();
           reportRequestCount += 1;
           setProgress(
-            `VisionBot exporter ${exporterVersion}\nCollecting ${galaxyLabel} (${galaxyIndex}/${galaxyTotal})... `
+            `Lysander exporter ${exporterVersion}\nCollecting ${galaxyLabel} (${galaxyIndex}/${galaxyTotal})... `
             + `request ${reportRequestCount}`
           );
           const response = await fetch("/report.aspx?view=astros", {
@@ -1901,7 +1903,7 @@
           }
           writeCheckpoint(null);
           alert(
-            `VisionBot Astro Reports scan complete: ${checkpoint.completed.length} galaxies, `
+            `Lysander Astro Reports scan complete: ${checkpoint.completed.length} galaxies, `
             + `${scanTotals.systems.toLocaleString()} systems, ${scanTotals.astros.toLocaleString()} astros, `
             + `${reportRequestCount} report requests (exporter ${exporterVersion}).`
           );
@@ -1909,7 +1911,7 @@
           console.error(error);
           const remaining = checkpoint.targets.length - checkpoint.completed.length;
           alert(
-            `VisionBot Astro Reports scan stopped: ${error.message}\n\n`
+            `Lysander Astro Reports scan stopped: ${error.message}\n\n`
             + `${checkpoint.completed.length} galaxies were safely uploaded; ${remaining} remain. Run the bookmarklet again and choose RESUME.`
           );
         } finally {
@@ -2009,7 +2011,7 @@
           await paceReportRequest();
           reportRequestCount += 1;
           setProgress(
-            `VisionBot exporter ${exporterVersion}\nScanning guild reports ${completed + 1}/${total}\n`
+            `Lysander exporter ${exporterVersion}\nScanning guild reports ${completed + 1}/${total}\n`
             + `${reportType.replace("_", " ")} - request ${reportRequestCount}`
           );
           const params = new URLSearchParams();
@@ -2042,7 +2044,7 @@
         const guildOptions = [...(guildSelect?.options || [])].filter((option) => option.value);
         if (!guildForm || !guildOptions.length) {
           progress.remove();
-          alert("VisionBot could not find the guild report controls.");
+          alert("Lysander could not find the guild report controls.");
           return;
         }
         const reportTypes = ["bases", "fleets", "moving_fleets"];
@@ -2072,7 +2074,7 @@
         } catch (error) {
           progress.remove();
           console.error(error);
-          alert(`VisionBot guild scan stopped: ${error.message}`);
+          alert(`Lysander guild scan stopped: ${error.message}`);
           return;
         }
       }
@@ -2160,7 +2162,7 @@
             Object.keys(totals).forEach((key) => { totals[key] += Number(batchResult[key] || 0); });
           }
           alert(
-            `VisionBot guild scan complete: ${totals.bases} bases, ${totals.fleetObservations} fleet sightings, `
+            `Lysander guild scan complete: ${totals.bases} bases, ${totals.fleetObservations} fleet sightings, `
             + `${totals.fleetMovements} movements, ${totals.incoming} hostile incoming across ${galaxies.length} galaxies `
             + `(${reportRequestCount} report requests, exporter ${exporterVersion}).`
           );
@@ -2199,21 +2201,142 @@
           Object.keys(result).forEach((key) => { result[key] += Number(batchResult[key] || 0); });
         }
         alert(
-          `VisionBot import complete for ${exportGalaxy}: ${result.systems} systems, `
+          `Lysander import complete for ${exportGalaxy}: ${result.systems} systems, `
           + `${result.bases} bases, ${result.astros} astros, ${result.fleetMovements || 0} movements, `
           + `${result.incoming} hostile incoming, ${result.battleReports || 0} battles, `
           + `${result.occupations || 0} occupations${isAstroReport ? ` (${reportRequestCount} report requests, exporter ${exporterVersion})` : ""}`
         );
       } catch (error) {
         console.error(error);
-        alert(`VisionBot import failed: ${error.message}`);
+        alert(`Lysander import failed: ${error.message}`);
       } finally {
         progress.remove();
       }
     }
 
     const source = `(${visionBotExporter.toString()})(${JSON.stringify(options)})`;
-    return `javascript:(()=>{const fail=error=>{console.error(error);alert("VisionBot exporter failed to start: "+(error?.message||error))};try{Promise.resolve(${source}).catch(fail)}catch(error){fail(error)}})()`;
+    return `javascript:(()=>{const fail=error=>{console.error(error);alert("Lysander exporter failed to start: "+(error?.message||error))};try{Promise.resolve(${source}).catch(fail)}catch(error){fail(error)}})()`;
+  }
+
+  function signedMovingFleetsBookmarklet(exportAccess = miniAppAccess) {
+    const options = { access: exportAccess, api: `${botApiUrl}/api/miniapp/import`, version: "2026-07-20.1" };
+    async function lysanderMovingFleetsExporter({ access, api, version }) {
+      const params = new URLSearchParams(location.search);
+      if (!/\/report\.aspx$/i.test(location.pathname) || params.get("view") !== "galaxy") {
+        alert("Open Astro Empires Reports > Galaxy > Moving Fleets, then click this bookmarklet again.");
+        return;
+      }
+      const tables = [...document.querySelectorAll("table")];
+      let table = null;
+      let headerRow = null;
+      let headers = [];
+      for (const candidate of tables) {
+        for (const row of candidate.querySelectorAll("tr")) {
+          const values = [...row.querySelectorAll(":scope > th, :scope > td")].map((cell) => cell.textContent.trim());
+          if (["Player", "Destination", "Arrival", "Size", "Date Seen"].every((label) => values.includes(label))) {
+            table = candidate;
+            headerRow = row;
+            headers = values;
+            break;
+          }
+        }
+        if (table) break;
+      }
+      if (!table || !headerRow) {
+        alert("Lysander could not find the Moving Fleets results table. Make sure Moving Fleets is selected and the report is visible.");
+        return;
+      }
+      const cellIndex = (label) => headers.indexOf(label);
+      const coordFromCell = (cell) => {
+        const textCoord = (String(cell?.textContent || "").toUpperCase().match(/B\d{1,2}:\d{2}:\d{2}:\d{2}/) || [])[0];
+        if (textCoord) return textCoord.replace(/^B(\d):/, "B0$1:");
+        const href = cell?.querySelector('a[href*="loc="]')?.getAttribute("href") || "";
+        return decodeURIComponent(((href.match(/[?&]loc=([^&]+)/) || [])[1] || "")).toUpperCase().replace(/^B(\d):/, "B0$1:");
+      };
+      const identityFromCell = (cell) => {
+        const raw = String(cell?.textContent || "").replace(/\s+/g, " ").trim();
+        const guild = (raw.match(/^\[[^\]]{1,24}\]/) || [])[0] || "";
+        const player = raw.replace(/^\[[^\]]+\]\s*/, "").trim();
+        const href = cell?.querySelector('a[href*="player="]')?.getAttribute("href") || "";
+        const playerId = ((href.match(/[?&]player=(\d+)/) || [])[1] || "");
+        return { guild, player, playerId };
+      };
+      const batches = new Map();
+      const rows = [...table.querySelectorAll("tr")];
+      const start = rows.indexOf(headerRow) + 1;
+      for (const row of rows.slice(start)) {
+        const cells = [...row.querySelectorAll(":scope > th, :scope > td")];
+        if (cells.length < headers.length) continue;
+        const coord = coordFromCell(cells[cellIndex("Destination")]);
+        if (!/^B\d{2}:\d{2}:\d{2}:\d{2}$/.test(coord)) continue;
+        const galaxy = coord.split(":")[0];
+        if (!batches.has(galaxy)) batches.set(galaxy, { movements: [], observations: [] });
+        const identity = identityFromCell(cells[cellIndex("Player")]);
+        const arrival = String(cells[cellIndex("Arrival")]?.textContent || "").trim();
+        const size = Number(String(cells[cellIndex("Size")]?.textContent || "").replace(/[^\d]/g, "")) || null;
+        const rawLine = row.innerText.replace(/\s+/g, " ").trim();
+        if (/^\d{1,4}:\d{2}(?::\d{2})?$/.test(arrival)) {
+          batches.get(galaxy).movements.push({
+            defendedCoord: coord, eta: arrival, size, playerId: identity.playerId,
+            player: identity.player, guild: identity.guild, rawLine, sourceKind: "galaxy_moving_report"
+          });
+        } else {
+          const observationId = `moving-${identity.playerId || identity.player}-${coord}-${size || 0}`.replace(/[^A-Za-z0-9:-]/g, "-").slice(0, 100);
+          batches.get(galaxy).observations.push({
+            observationId, playerId: identity.playerId, player: identity.player, guild: identity.guild,
+            coord, size, observedAt: new Date().toISOString(), sourceKind: "galaxy_moving_unknown", rawLine
+          });
+        }
+      }
+      if (!batches.size) {
+        alert("Lysander found the Moving Fleets table, but it contains no fleet rows.");
+        return;
+      }
+      let movementTotal = 0;
+      let unknownTotal = 0;
+      for (const [galaxy, batch] of batches) {
+        const coords = [...batch.movements.map((row) => row.defendedCoord), ...batch.observations.map((row) => row.coord)];
+        const systems = [...new Set(coords.map((coord) => coord.split(":").slice(0, 3).join(":")))].map((coord) => ({ coord }));
+        const response = await fetch(api, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            access, galaxy,
+            intel: {
+              galaxy, systems, fleetMovements: batch.movements, fleetObservations: batch.observations,
+              sourceText: "", sourceUrl: location.href
+            }
+          })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `${galaxy} upload failed`);
+        movementTotal += Number(result.fleetMovements || 0);
+        unknownTotal += Number(result.fleetObservations || 0);
+      }
+      alert(`Lysander Moving Fleets import complete: ${movementTotal} timed movements and ${unknownTotal} unknown-arrival sightings across ${batches.size} ${batches.size === 1 ? "galaxy" : "galaxies"} (exporter ${version}).`);
+    }
+    const source = `(${lysanderMovingFleetsExporter.toString()})(${JSON.stringify(options)})`;
+    return `javascript:(()=>{const fail=error=>{console.error(error);alert("Lysander Moving Fleets import failed: "+(error?.message||error))};try{Promise.resolve(${source}).catch(fail)}catch(error){fail(error)}})()`;
+  }
+
+  async function copyMovingFleetsBookmarklet() {
+    if (!miniAppSession) {
+      importResult.textContent = "Open this map from /map before copying a secure exporter.";
+      return;
+    }
+    try {
+      const token = await miniAppApi("/api/miniapp/export-token", { method: "POST" });
+      const code = signedMovingFleetsBookmarklet(token.access);
+      try {
+        await navigator.clipboard.writeText(code);
+        importResult.textContent = `Lysander Moving Fleets bookmarklet copied. Save it as a separate browser bookmark; valid through ${new Date(token.expiresAt).toLocaleDateString()}.`;
+      } catch {
+        importText.value = code;
+        importResult.textContent = `Moving Fleets bookmarklet placed in the box. Save it as a separate bookmark; valid through ${new Date(token.expiresAt).toLocaleDateString()}.`;
+      }
+    } catch (error) {
+      importResult.textContent = error.message;
+    }
   }
 
   async function copyBookmarklet() {
@@ -2777,7 +2900,7 @@
         system_id: row.attackerCoord ? astroToSystem(row.attackerCoord) : null,
         eta_minutes: row.etaMinutes,
         arrival_at: row.arrivalAt,
-        reported_by: user || "VisionBot exporter",
+        reported_by: user || "Lysander exporter",
         reported_by_user_id: telegramUser?.id ? String(telegramUser.id) : null,
         chat_id: telegramChatId || null,
         hostile_fleet: row.rawLine || "",

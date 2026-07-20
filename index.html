@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Vision Tracker</title>
+    <title>Lysander Tactical Map</title>
     <link rel="stylesheet" href="./styles.css?v=20260720-1" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
@@ -304,14 +304,16 @@
             <strong>Setup for guildmates</strong>
             <ol>
               <li>Bookmark the AE galaxy map you use, such as <code>https://borealis.astroempires.com/map.aspx?gal=B24</code>.</li>
-              <li>Click <code>Copy AE Export Bookmarklet</code>, then save it as a second bookmark named <code>VisionBot Export</code>.</li>
-              <li>Open <code>B24 Map</code> while logged into AE, then click <code>VisionBot Export</code>.</li>
+              <li>Click <code>Copy AE Export Bookmarklet</code>, then save it as a second bookmark named <code>Lysander Export</code>.</li>
+              <li>Open <code>B24 Map</code> while logged into AE, then click <code>Lysander Export</code>.</li>
+              <li>For frequent fleet updates, copy the separate <code>Moving Fleets</code> bookmarklet once and run it from Reports → Galaxy → Moving Fleets.</li>
             </ol>
           </div>
           <textarea id="importText" spellcheck="false" placeholder="Paste a systems JSON export, base ownership JSON export, astro report rows, or fleet movements."></textarea>
           <div class="import-actions">
             <button class="command-button" id="importButton" type="button">Import</button>
             <button class="command-button" id="bookmarkletButton" type="button">Copy AE Export Bookmarklet</button>
+            <button class="command-button" id="movingFleetsBookmarkletButton" type="button">Copy Moving Fleets Bookmarklet</button>
             <span id="importResult">Ready</span>
           </div>
         </details>
@@ -332,6 +334,6 @@
     </template>
 
     <script src="./config.js"></script>
-    <script src="./app.js?v=20260720-3"></script>
+    <script src="./app.js?v=20260720-5"></script>
   </body>
 </html>
