@@ -132,7 +132,8 @@ For an already hardened database, `supabase-research-doctrine.sql` is a standalo
 - [ ] Verify a signed bookmarklet import appears in both clients and contains no Supabase key.
 - [ ] Verify `/map B23` and `/map B24` open isolated maps without changing saved defaults.
 - [ ] Verify a B23 room and B24 room can hold different `$setgalaxy` defaults simultaneously.
-- [ ] Verify separately copied B23 and B24 exporters import only into their bound galaxy.
+- [ ] Verify a normal B23 or B24 page export follows the galaxy visible in Astro Empires, while a Guild Reports scan partitions mixed-galaxy coordinates into their matching maps.
+- [ ] Verify a Guild Reports scan prompts before starting, shows paced progress and cancellation, and imports Bases, Fleets, and Moving Fleets without bypassing member access checks.
 - [ ] Verify a long-lived exporter continues after the short `/map` link expires and fails after the user is banned or removed.
 - [ ] Verify expired/revoked map access fails closed.
 - [ ] Verify battle report deduplication, owner/occupier separation, and history display if included in the batch.

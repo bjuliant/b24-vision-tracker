@@ -1492,7 +1492,7 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
-      const exporterVersion = "2026-07-19.5";
+      const exporterVersion = "2026-07-19.6";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
@@ -1501,6 +1501,8 @@
       const html = document.documentElement.innerHTML;
       const isAstroReport = /\/report\.aspx$/i.test(location.pathname)
         && new URLSearchParams(location.search).get("view") === "astros";
+      const isGuildReport = /\/report\.aspx$/i.test(location.pathname)
+        && new URLSearchParams(location.search).get("view") === "guild";
       const galaxySelect = document.querySelector('select[name="galaxy"]');
       const selectedGalaxyOption = galaxySelect?.selectedOptions?.[0];
       const locationValue = decodeURIComponent(new URLSearchParams(location.search).get("loc") || "");
@@ -1580,8 +1582,23 @@
 
       let reportRequestCount = 0;
       const progress = document.createElement("div");
+      const progressText = document.createElement("div");
+      const cancelButton = document.createElement("button");
+      let scanCancelled = false;
+      cancelButton.type = "button";
+      cancelButton.textContent = "Cancel";
+      Object.assign(cancelButton.style, {
+        display: "none", marginTop: "9px", padding: "5px 10px", border: "1px solid #8fcce9",
+        borderRadius: "4px", background: "#173447", color: "#fff", cursor: "pointer"
+      });
+      cancelButton.addEventListener("click", () => {
+        scanCancelled = true;
+        cancelButton.disabled = true;
+        cancelButton.textContent = "Cancelling...";
+      });
+      progress.append(progressText, cancelButton);
       const setProgress = (message) => {
-        progress.textContent = message;
+        progressText.textContent = message;
         Object.assign(progress.style, {
           position: "fixed", top: "12px", right: "12px", zIndex: "2147483647",
           maxWidth: "340px", padding: "12px 16px", border: "1px solid #39a9e8",
@@ -1626,8 +1643,10 @@
       let reportRequestGapMs = 3500;
       let lastReportRequestAt = 0;
       const paceReportRequest = async () => {
+        if (scanCancelled) throw new Error("Scan cancelled.");
         const remaining = reportRequestGapMs - (Date.now() - lastReportRequestAt);
         if (remaining > 0) await sleep(remaining);
+        if (scanCancelled) throw new Error("Scan cancelled.");
         lastReportRequestAt = Date.now();
       };
       const retryAfterMilliseconds = (response, attempt) => {
@@ -1717,6 +1736,165 @@
         }
       }
 
+      const guildReportIntel = { bases: [], fleetObservations: [], fleetMovements: [] };
+      const guildTagAndPlayer = (value) => {
+        const raw = String(value || "").replace(/\s+/g, " ").trim();
+        const tag = (raw.match(/^\[[^\]]{1,24}\]/) || [])[0] || "";
+        return { guild: tag, player: raw.replace(/^\[[^\]]+\]\s*/, "").trim() };
+      };
+      const coordFromCell = (cell) => {
+        const textCoord = (String(cell?.textContent || "").toUpperCase().match(/B\d{1,2}:\d{2}:\d{2}:\d{2}/) || [])[0];
+        if (textCoord) return textCoord;
+        const href = cell?.querySelector('a[href*="loc="]')?.getAttribute("href") || "";
+        return decodeURIComponent(((href.match(/[?&]loc=([^&]+)/) || [])[1] || "")).toUpperCase();
+      };
+      const observedAtFromAge = (value, now = Date.now()) => {
+        const match = String(value || "").match(/(\d+)\s*(minute|hour|day|week|month|year)/i);
+        if (!match) return new Date(now).toISOString();
+        const multipliers = {
+          minute: 60000, hour: 3600000, day: 86400000, week: 604800000,
+          month: 2592000000, year: 31536000000
+        };
+        return new Date(now - (Number(match[1]) * multipliers[match[2].toLowerCase()])).toISOString();
+      };
+      const findGuildResultTable = (doc, expectedHeaders) => [...doc.querySelectorAll("table")].find((table) => {
+        const rows = [...table.querySelectorAll("tr")];
+        return rows.some((row) => {
+          const values = [...row.querySelectorAll(":scope > th, :scope > td")].map((cell) => cell.textContent.trim());
+          return expectedHeaders.every((header) => values.includes(header));
+        });
+      });
+      const parseGuildReport = (doc, reportType, guildId) => {
+        const headers = reportType === "bases"
+          ? ["Player", "Base", "Location"]
+          : reportType === "fleets"
+            ? ["Player", "Location", "Size", "Date Seen"]
+            : ["Player", "Destination", "Arrival", "Size", "Date Seen"];
+        const table = findGuildResultTable(doc, headers);
+        if (!table) throw new Error(`Could not recognize the ${reportType.replace("_", " ")} report table.`);
+        const result = { bases: [], fleetObservations: [], fleetMovements: [] };
+        const rows = [...table.querySelectorAll("tr")];
+        const headerIndex = rows.findIndex((row) => {
+          const values = [...row.querySelectorAll(":scope > th, :scope > td")].map((cell) => cell.textContent.trim());
+          return headers.every((header) => values.includes(header));
+        });
+        const headerCells = [...rows[headerIndex].querySelectorAll(":scope > th, :scope > td")].map((cell) => cell.textContent.trim());
+        rows.slice(headerIndex + 1).forEach((row) => {
+          const cells = [...row.querySelectorAll(":scope > th, :scope > td")];
+          if (cells.length < headers.length) return;
+          const cell = (name) => cells[headerCells.indexOf(name)];
+          const playerCell = cell("Player");
+          const identity = guildTagAndPlayer(playerCell?.textContent);
+          const playerId = ((playerCell?.querySelector('a[href*="player="]')?.getAttribute("href") || "").match(/[?&]player=(\d+)/) || [])[1] || "";
+          if (reportType === "bases") {
+            const coord = coordFromCell(cell("Location"));
+            if (!/^B\d{1,2}:\d{2}:\d{2}:\d{2}$/.test(coord)) return;
+            const baseCell = cell("Base");
+            result.bases.push({
+              coord, guild: identity.guild, label: identity.player, sourceKind: "guild_report",
+              baseName: String(baseCell?.textContent || "").trim(),
+              baseId: ((baseCell?.querySelector('a[href*="base="]')?.getAttribute("href") || "").match(/[?&]base=(\d+)/) || [])[1] || "",
+              playerId
+            });
+            return;
+          }
+          const coord = coordFromCell(cell(reportType === "fleets" ? "Location" : "Destination"));
+          if (!/^B\d{1,2}:\d{2}:\d{2}:\d{2}$/.test(coord)) return;
+          const size = Number(String(cell("Size")?.textContent || "").replace(/[^\d]/g, "")) || null;
+          const dateSeen = String(cell("Date Seen")?.textContent || "").trim();
+          const rawLine = row.innerText.replace(/\s+/g, " ").trim();
+          if (reportType === "fleets") {
+            result.fleetObservations.push({
+              observationId: `guild-${guildId}-${playerId || identity.player}-${coord}-${size || 0}`.replace(/[^A-Za-z0-9:-]/g, "-").slice(0, 100),
+              playerId, player: identity.player, guild: identity.guild, coord, size,
+              observedAt: observedAtFromAge(dateSeen), sourceKind: "guild_report", rawLine
+            });
+            return;
+          }
+          const arrival = String(cell("Arrival")?.textContent || "").trim();
+          const parsedArrival = new Date(arrival);
+          result.fleetMovements.push({
+            defendedCoord: coord, eta: /^\d{1,4}:\d{2}(?::\d{2})?$/.test(arrival) ? arrival : "",
+            arrivalAt: Number.isFinite(parsedArrival.getTime()) ? parsedArrival.toISOString() : "",
+            size, playerId, player: `${identity.guild} ${identity.player}`.trim(), guild: identity.guild,
+            rawLine, sourceKind: "guild_report"
+          });
+        });
+        return result;
+      };
+      const fetchGuildReport = async (form, guildId, reportType, completed, total) => {
+        for (let attempt = 1; attempt <= 6; attempt += 1) {
+          await paceReportRequest();
+          reportRequestCount += 1;
+          setProgress(
+            `VisionBot exporter ${exporterVersion}\nScanning guild reports ${completed + 1}/${total}\n`
+            + `${reportType.replace("_", " ")} - request ${reportRequestCount}`
+          );
+          const params = new URLSearchParams();
+          for (const [key, value] of new FormData(form).entries()) {
+            if (typeof value === "string") params.append(key, value);
+          }
+          params.set("form_status", "submitted");
+          params.set("guild", guildId);
+          params.set("report_type", reportType);
+          const response = await fetch(form.action || "/report.aspx?view=guild", {
+            method: "POST", credentials: "same-origin",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: params
+          });
+          if (response.status === 429 && attempt < 6) {
+            reportRequestGapMs = Math.max(reportRequestGapMs, 7000);
+            const waitMs = retryAfterMilliseconds(response, attempt);
+            setProgress(`Astro Empires rate limit reached. Retrying in ${Math.ceil(waitMs / 1000)} seconds...`);
+            await sleep(waitMs);
+            continue;
+          }
+          if (!response.ok) throw new Error(`Guild report request failed (${response.status}).`);
+          const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+          return parseGuildReport(doc, reportType, guildId);
+        }
+        throw new Error("Guild reports remained rate limited after several retries.");
+      };
+      if (isGuildReport) {
+        const guildSelect = document.querySelector('select[name="guild"]');
+        const guildForm = guildSelect?.closest("form");
+        const guildOptions = [...(guildSelect?.options || [])].filter((option) => option.value);
+        if (!guildForm || !guildOptions.length) {
+          progress.remove();
+          alert("VisionBot could not find the guild report controls.");
+          return;
+        }
+        const reportTypes = ["bases", "fleets", "moving_fleets"];
+        const totalReports = guildOptions.length * reportTypes.length;
+        if (!confirm(
+          `Scan ${guildOptions.length} guilds across Bases, Fleets, and Moving Fleets?\n\n`
+          + `This requires ${totalReports} paced report requests and may take 10-20 minutes. Keep this tab open.`
+        )) return;
+        cancelButton.style.display = "inline-block";
+        try {
+          let completed = 0;
+          for (const option of guildOptions) {
+            for (const reportType of reportTypes) {
+              const intel = await fetchGuildReport(guildForm, option.value, reportType, completed, totalReports);
+              guildReportIntel.bases.push(...intel.bases);
+              guildReportIntel.fleetObservations.push(...intel.fleetObservations);
+              guildReportIntel.fleetMovements.push(...intel.fleetMovements);
+              completed += 1;
+            }
+          }
+          setProgress(
+            `Collected ${guildReportIntel.bases.length.toLocaleString()} bases, `
+            + `${guildReportIntel.fleetObservations.length.toLocaleString()} fleet sightings, and `
+            + `${guildReportIntel.fleetMovements.length.toLocaleString()} movements. Uploading...`
+          );
+          cancelButton.style.display = "none";
+        } catch (error) {
+          progress.remove();
+          console.error(error);
+          alert(`VisionBot guild scan stopped: ${error.message}`);
+          return;
+        }
+      }
+
       const pageCoord = (text.match(astroPattern) || [])[0] || "";
       const fleetMovements = [];
       document.querySelectorAll("tr").forEach((row) => {
@@ -1754,6 +1932,58 @@
 
       const uniqueByCoord = (rows) => [...new Map(rows.map((row) => [row.coord, row])).values()];
       try {
+        if (isGuildReport) {
+          const galaxyForCoord = (coord) => normalizeGalaxy((String(coord || "").match(/^B\d{1,2}/i) || [])[0]);
+          const galaxies = [...new Set([
+            ...guildReportIntel.bases.map((row) => galaxyForCoord(row.coord)),
+            ...guildReportIntel.fleetObservations.map((row) => galaxyForCoord(row.coord)),
+            ...guildReportIntel.fleetMovements.map((row) => galaxyForCoord(row.defendedCoord))
+          ].filter(Boolean))].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+          const totals = {
+            systems: 0, bases: 0, astros: 0, fleetMovements: 0, incoming: 0,
+            battleReports: 0, fleetObservations: 0, occupations: 0, gameEvents: 0
+          };
+          let uploadNumber = 0;
+          const uploadBatches = galaxies.flatMap((galaxyValue) => {
+            const galaxyBases = uniqueByCoord(guildReportIntel.bases.filter((row) => galaxyForCoord(row.coord) === galaxyValue));
+            const observations = guildReportIntel.fleetObservations.filter((row) => galaxyForCoord(row.coord) === galaxyValue);
+            const movements = guildReportIntel.fleetMovements.filter((row) => galaxyForCoord(row.defendedCoord) === galaxyValue);
+            const count = Math.max(1, Math.ceil(galaxyBases.length / 500), Math.ceil(observations.length / 500), Math.ceil(movements.length / 500));
+            return Array.from({ length: count }, (_, index) => ({
+              galaxy: galaxyValue,
+              bases: galaxyBases.slice(index * 500, (index + 1) * 500),
+              fleetObservations: observations.slice(index * 500, (index + 1) * 500),
+              fleetMovements: movements.slice(index * 500, (index + 1) * 500)
+            }));
+          });
+          for (const batch of uploadBatches) {
+            uploadNumber += 1;
+            setProgress(`Uploading ${batch.galaxy} guild intel... batch ${uploadNumber} of ${uploadBatches.length}`);
+            const systemRows = [...new Set([
+              ...batch.bases.map((row) => row.coord),
+              ...batch.fleetObservations.map((row) => row.coord),
+              ...batch.fleetMovements.map((row) => row.defendedCoord)
+            ].filter(Boolean).map((coord) => coord.split(":").slice(0, 3).join(":")))].map((coord) => ({ coord }));
+            const response = await fetch(api, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                access, galaxy: batch.galaxy,
+                intel: { galaxy: batch.galaxy, systems: systemRows, bases: batch.bases,
+                  fleetObservations: batch.fleetObservations, fleetMovements: batch.fleetMovements,
+                  sourceText: "", sourceUrl: location.href }
+              })
+            });
+            const batchResult = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(batchResult.error || `Guild intel upload ${uploadNumber} failed`);
+            Object.keys(totals).forEach((key) => { totals[key] += Number(batchResult[key] || 0); });
+          }
+          alert(
+            `VisionBot guild scan complete: ${totals.bases} bases, ${totals.fleetObservations} fleet sightings, `
+            + `${totals.fleetMovements} movements, ${totals.incoming} hostile incoming across ${galaxies.length} galaxies `
+            + `(${reportRequestCount} report requests, exporter ${exporterVersion}).`
+          );
+          return;
+        }
         const astroRows = uniqueByCoord(astros);
         const chunks = astroRows.length
           ? Array.from({ length: Math.ceil(astroRows.length / 400) }, (_, index) => astroRows.slice(index * 400, (index + 1) * 400))

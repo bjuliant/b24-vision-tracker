@@ -182,6 +182,7 @@ Lysander supports multiple Borealis galaxies without mixing their intel or opera
 - Use `$setgroup B23` in an approved Telegram room to make that room operate in B23. `$setgalaxy` remains an alias.
 - Use the header switcher to move between imported galaxies without changing `!g`; the selected `gal` remains in the URL across refreshes and shared links.
 - The secure exporter detects the galaxy currently open in Astro Empires. An authorized exporter can seed a new valid `Bxx` galaxy; once intel is stored, that galaxy appears in the Mini App switcher without a code change.
+- From Astro Empires' Guild Reports page, the secure exporter can scan every available guild across Bases, Fleets, and Moving Fleets. It confirms before starting, paces and retries the report requests, offers cancellation, partitions results by their coordinate galaxy, and uploads each galaxy separately under the same approved APP access scope.
 - Region-watch suggestions include only sectors with at least one imported system coordinate. Empty sectors remain visible on the tactical map but are not offered by `$regions`, cannot be claimed as watches, and are excluded from generated region agendas.
 - Officers can verify a Telegram-to-game identity with `$intel B24:13:45:10 @username` after that base has been imported. `$bases username` then expands through the linked in-game owner across all imported galaxies. Run `supabase-player-links.sql` before using this feature.
 
