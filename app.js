@@ -1492,7 +1492,7 @@
     };
 
     async function visionBotExporter({ galaxy: activeGalaxy, access, api }) {
-      const exporterVersion = "2026-07-20.1";
+      const exporterVersion = "2026-07-20.2";
       const normalizeGalaxy = (value) => {
         const match = String(value || "").toUpperCase().match(/B?\s*(\d{1,2})/);
         return match ? `B${String(Number(match[1])).padStart(2, "0")}` : "";
@@ -1744,9 +1744,7 @@
           try {
             if (value) localStorage.setItem(checkpointKey, JSON.stringify(value));
             else localStorage.removeItem(checkpointKey);
-          } catch {
-            // A scan can continue without resumability when browser storage is unavailable.
-          }
+          } catch {}
         };
         const savedCheckpoint = readCheckpoint();
         const choice = prompt(
@@ -2151,7 +2149,8 @@
       }
     }
 
-    return `javascript:(${visionBotExporter.toString()})(${JSON.stringify(options)})`;
+    const source = `(${visionBotExporter.toString()})(${JSON.stringify(options)})`;
+    return `javascript:(()=>{const fail=error=>{console.error(error);alert("VisionBot exporter failed to start: "+(error?.message||error))};try{Promise.resolve(${source}).catch(fail)}catch(error){fail(error)}})()`;
   }
 
   async function copyBookmarklet() {
