@@ -2223,7 +2223,7 @@
       access: exportAccess,
       api: `${botApiUrl}/api/miniapp/import`,
       galaxies: miniAppSession?.galaxies || [galaxy],
-      version: "2026-07-20.2"
+      version: "2026-07-20.3"
     };
     async function lysanderMovingFleetsExporter({ access, api, galaxies, version }) {
       const params = new URLSearchParams(location.search);
@@ -2306,9 +2306,14 @@
         alert("Lysander could not read the Galaxy report controls or imported-galaxy list.");
         return;
       }
+      const progress = document.createElement("div");
+      progress.style.cssText = "position:fixed;top:12px;right:12px;z-index:2147483647;max-width:320px;padding:12px 16px;border:1px solid #2f98d4;border-radius:8px;background:#071522;color:#e9f6ff;font:600 14px/1.4 Arial,sans-serif;box-shadow:0 4px 18px #0009";
+      progress.textContent = `Lysander Moving Fleets started: 0/${targets.length} galaxy reports`;
+      document.body.appendChild(progress);
       let reportsScanned = 0;
       for (const target of targets) {
         if (!available.has(target)) continue;
+        progress.textContent = `Lysander scanning ${target}: ${reportsScanned}/${targets.length} reports complete`;
         let report = null;
         if (target === currentGalaxy) {
           report = visibleReport;
@@ -2331,14 +2336,17 @@
         if (!report) throw new Error(`${target} Moving Fleets table was not returned`);
         collectRows(report);
         reportsScanned += 1;
+        progress.textContent = `Lysander Moving Fleets: ${reportsScanned}/${targets.length} reports complete`;
       }
       if (!batches.size) {
+        progress.remove();
         alert(`Lysander scanned ${reportsScanned} imported galaxy reports; none contains moving fleets.`);
         return;
       }
       let movementTotal = 0;
       let unknownTotal = 0;
       for (const [galaxy, batch] of batches) {
+        progress.textContent = `Lysander uploading ${galaxy} fleet sightings...`;
         const coords = [...batch.movements.map((row) => row.defendedCoord), ...batch.observations.map((row) => row.coord)];
         const systems = [...new Set(coords.map((coord) => coord.split(":").slice(0, 3).join(":")))].map((coord) => ({ coord }));
         const response = await fetch(api, {
@@ -2357,6 +2365,7 @@
         movementTotal += Number(result.fleetMovements || 0);
         unknownTotal += Number(result.fleetObservations || 0);
       }
+      progress.remove();
       alert(`Lysander Moving Fleets import complete: ${reportsScanned} galaxy reports scanned, ${movementTotal} timed movements and ${unknownTotal} unknown-arrival sightings uploaded (exporter ${version}).`);
     }
     const source = `(${lysanderMovingFleetsExporter.toString()})(${JSON.stringify(options)})`;
