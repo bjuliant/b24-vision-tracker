@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Apprime member accounts, Hall of Honor, ranks, and service points." />
+    <title>Hall of Honor — Apprime</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./portal.css" />
+  </head>
+  <body class="inner-page" data-page="members">
+    <header class="inner-header">
+      <a class="brand" href="./index.html"><img src="../assets/apprime-logo-v2.png" alt="Apprime — Above All" /></a>
+      <nav class="inner-nav" aria-label="Site navigation">
+        <a href="./index.html">Home</a><a href="./campaigns.html">Campaigns</a>
+        <a class="active" href="./members.html">Hall of Honor</a><a href="./war-room.html">War Room</a>
+        <a href="./archive.html">Graphics</a><a href="./index.html#recruitment">Recruitment</a>
+      </nav>
+      <a class="account-link" href="./members.html">Member login</a>
+    </header>
+    <main class="page-shell">
+      <section class="page-hero">
+        <p class="eyebrow">Service earns standing</p>
+        <h1>Hall of Honor</h1>
+        <p>Apprime members earn service points for leadership, campaign work, recruiting, reliable coverage, intelligence, design, and contributions to the order. Rank follows sustained service.</p>
+      </section>
+
+      <section class="portal-section">
+        <div class="portal-heading"><h2>Current Standing</h2><p>Recruit · Hoplite · Lochagos · Trierarch · Polemarch · Strategos</p></div>
+        <table class="member-table">
+          <thead><tr><th>#</th><th>Member</th><th>Rank</th><th>Points</th></tr></thead>
+          <tbody id="memberRows"><tr><td colspan="4">Loading Hall of Honor...</td></tr></tbody>
+        </table>
+      </section>
+
+      <section class="account-grid">
+        <article class="account-card auth-gate" id="authGate">
+          <h2>Member Login</h2>
+          <p>Enter your approved email address. We will send a secure one-time sign-in link—no password to remember.</p>
+          <form class="auth-form" id="authForm">
+            <label>Email address<input id="authEmail" type="email" autocomplete="email" required /></label>
+            <button class="portal-button primary" type="submit">Email sign-in link</button>
+            <p class="form-status" id="authStatus" aria-live="polite"></p>
+          </form>
+        </article>
+
+        <article class="account-card" id="memberPanel" hidden>
+          <h2>Your Account</h2>
+          <p id="accountEmail"></p>
+          <p class="rank-chip" id="accountRank"></p>
+          <form class="profile-form" id="profileForm">
+            <label>Display name<input id="profileName" maxlength="60" required /></label>
+            <label>Telegram username<input id="profileTelegram" maxlength="60" placeholder="without @" /></label>
+            <button class="portal-button" type="submit">Update profile</button>
+            <p class="form-status" id="profileStatus" aria-live="polite"></p>
+          </form>
+          <button class="portal-button" id="signOut" type="button">Sign out</button>
+        </article>
+
+        <article class="account-card" id="awardPanel" hidden>
+          <h2>Award Service Points</h2>
+          <p>Officer controls. Every award is recorded with its reason and awarding officer.</p>
+          <form class="award-form" id="awardForm">
+            <label>Member<select id="awardMember" required></select></label>
+            <label>Point change<input id="awardPoints" type="number" min="-10000" max="10000" required /></label>
+            <label>Reason<textarea id="awardReason" minlength="3" maxlength="240" required></textarea></label>
+            <button class="portal-button primary" type="submit">Record point award</button>
+            <p class="form-status" id="awardStatus" aria-live="polite"></p>
+          </form>
+        </article>
+
+        <article class="account-card" id="reviewPanel" hidden>
+          <h2>Artwork Review Queue</h2>
+          <p>Officer controls. Approve suitable public submissions or reject them from the gallery.</p>
+          <div id="reviewQueue"><p>No pending submissions.</p></div>
+          <p class="form-status" id="reviewStatus" aria-live="polite"></p>
+        </article>
+      </section>
+    </main>
+    <script src="../config.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="./portal.js"></script>
+  </body>
+</html>

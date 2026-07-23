@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Official and community-created Apprime graphics." />
+    <title>Graphics Archive — Apprime</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./portal.css" />
+  </head>
+  <body class="inner-page" data-page="archive">
+    <header class="inner-header">
+      <a class="brand" href="./index.html"><img src="../assets/apprime-logo-v2.png" alt="Apprime — Above All" /></a>
+      <nav class="inner-nav" aria-label="Site navigation">
+        <a href="./index.html">Home</a><a href="./campaigns.html">Campaigns</a>
+        <a href="./members.html">Hall of Honor</a><a href="./war-room.html">War Room</a>
+        <a class="active" href="./archive.html">Graphics</a><a href="./index.html#recruitment">Recruitment</a>
+      </nav>
+      <a class="account-link" href="./members.html">Member login</a>
+    </header>
+    <main class="page-shell">
+      <section class="page-hero">
+        <p class="eyebrow">Public marks and shared work</p>
+        <h1>Graphics Archive</h1>
+        <p>Official Apprime graphics are maintained separately from community submissions. Anyone can contribute an image; submissions enter a review queue before they appear in the public gallery.</p>
+      </section>
+
+      <section class="portal-section">
+        <div class="portal-heading"><h2>Official Graphics</h2><p>Approved marks and campaign artwork</p></div>
+        <div class="official-grid">
+          <article class="official-card"><img src="../assets/apprime-logo-v2.png" alt="Official Apprime guild mark" /><div><h3>Primary Guild Mark</h3><a class="portal-button" href="../assets/apprime-logo-v2.png" download>Download PNG</a></div></article>
+          <article class="official-card"><img src="../assets/apprime/hero-hoplite.png" alt="Official Apprime hoplite campaign artwork" /><div><h3>Hoplite Banner</h3><a class="portal-button" href="../assets/apprime/hero-hoplite.png" download>Download PNG</a></div></article>
+          <article class="official-card"><img src="../assets/apprime/og-apprime.png" alt="Official Apprime social sharing graphic" /><div><h3>Social Banner</h3><a class="portal-button" href="../assets/apprime/og-apprime.png" download>Download PNG</a></div></article>
+          <article class="official-card"><img src="../assets/apprime-logo.png" alt="Legacy Apprime wordmark" /><div><h3>Legacy Wordmark</h3><a class="portal-button" href="../assets/apprime-logo.png" download>Download PNG</a></div></article>
+          <article class="official-card"><img src="../assets/apprime/derived/campaign-astro-empires.jpg" alt="Astro Empires campaign card" /><div><h3>Astro Empires Card</h3><a class="portal-button" href="../assets/apprime/derived/campaign-astro-empires.jpg" download>Download JPG</a></div></article>
+          <article class="official-card"><img src="../assets/apprime/derived/lysander-commander.jpg" alt="Lysander commander portrait" /><div><h3>Lysander Portrait</h3><a class="portal-button" href="../assets/apprime/derived/lysander-commander.jpg" download>Download JPG</a></div></article>
+        </div>
+      </section>
+
+      <section class="portal-section" id="community">
+        <div class="portal-heading"><h2>Community Uploads</h2><p>PNG, JPEG, WebP, or GIF · 8 MB maximum</p></div>
+        <div class="empty-state" id="archiveConfigNotice" hidden>Uploads are designed and ready; connect the project database to activate them.</div>
+        <form class="upload-form" id="communityUploadForm">
+          <label>Your name or handle<input id="graphicSubmitter" maxlength="60" placeholder="Anonymous is allowed" /></label>
+          <label>Artwork title<input id="graphicTitle" maxlength="100" required placeholder="Campaign banner" /></label>
+          <label class="wide">Description<textarea id="graphicDescription" maxlength="500" placeholder="What is this graphic for?"></textarea></label>
+          <label class="wide">Image file<input id="graphicFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" required /></label>
+          <button class="portal-button primary wide" type="submit">Submit for review</button>
+          <p class="form-status" id="uploadStatus" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section class="portal-section">
+        <div class="portal-heading"><h2>Approved Community Gallery</h2><p>Reviewed public contributions</p></div>
+        <div class="community-grid" id="communityGallery"></div>
+      </section>
+    </main>
+    <script src="../config.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="./portal.js"></script>
+  </body>
+</html>

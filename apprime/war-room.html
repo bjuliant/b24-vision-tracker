@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Protected Apprime strategic theater overview." />
+    <title>War Room — Apprime</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./portal.css" />
+  </head>
+  <body class="inner-page" data-page="war-room">
+    <header class="inner-header">
+      <a class="brand" href="./index.html"><img src="../assets/apprime-logo-v2.png" alt="Apprime — Above All" /></a>
+      <nav class="inner-nav" aria-label="Site navigation">
+        <a href="./index.html">Home</a><a href="./campaigns.html">Campaigns</a>
+        <a href="./members.html">Hall of Honor</a><a class="active" href="./war-room.html">War Room</a>
+        <a href="./archive.html">Graphics</a><a href="./index.html#recruitment">Recruitment</a>
+      </nav>
+      <a class="account-link" href="./members.html">Member login</a>
+    </header>
+    <main class="page-shell">
+      <section class="page-hero">
+        <p class="eyebrow">Fleet Intel + Vision Tracking</p>
+        <h1>Strategic Theater</h1>
+        <p>One protected overview for the full operational theater. Fifty galaxy boards sit side by side; live sector intelligence remains behind Lysander’s signed Telegram access.</p>
+      </section>
+
+      <section class="portal-section">
+        <div class="portal-heading"><h2>50-Galaxy Overview</h2><p id="mapAccount" hidden></p></div>
+        <div class="auth-gate" id="mapAuthGate">
+          <h2>Member access required</h2>
+          <p>Sign in through the Hall of Honor to view the theater overview.</p>
+          <a class="portal-button primary" href="./members.html">Member login</a>
+        </div>
+        <div class="galaxy-board" id="galaxyBoard" hidden></div>
+        <div class="map-notice">
+          <div><strong>Live operational map</strong><p>Use <code>/map</code> with Lysander in your approved Telegram group. Signed access is checked again before any live intelligence loads.</p></div>
+          <a class="portal-button primary" href="../index.html">Open Lysander map</a>
+        </div>
+      </section>
+    </main>
+    <script src="../config.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="./portal.js"></script>
+  </body>
+</html>

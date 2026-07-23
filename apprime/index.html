@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080706" />
+    <meta
+      name="description"
+      content="Apprime — one order, many battlefields, one standard."
+    />
+    <meta property="og:title" content="Apprime — Above All" />
+    <meta
+      property="og:description"
+      content="A persistent gaming order forged across worlds and eras."
+    />
+    <meta property="og:image" content="../assets/apprime/og-apprime.png" />
+    <title>Apprime — Above All</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="#home" aria-label="Apprime home">
+        <img src="../assets/apprime-logo-v2.png" alt="Apprime — Above All" />
+      </a>
+
+      <button
+        class="nav-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="primary-nav"
+      >
+        <span></span><span></span><span></span>
+        <span class="sr-only">Toggle navigation</span>
+      </button>
+
+      <nav id="primary-nav" class="primary-nav" aria-label="Primary navigation">
+        <a class="active" href="#home">Home</a>
+        <a href="./campaigns.html">Campaigns</a>
+        <a href="./members.html">Hall of Honor</a>
+        <a href="#doctrine">Doctrine</a>
+        <a href="./war-room.html">War Room</a>
+        <a href="./archive.html">Archives</a>
+        <a href="#recruitment">Recruitment</a>
+      </nav>
+
+      <div class="theater-status">
+        <span>Status: <strong>Active</strong></span>
+        <span>Current theater: <b>Astro Empires</b></span>
+        <i aria-hidden="true">A</i>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero panel-frame" id="home">
+        <div class="hero-copy">
+          <p class="eyebrow">One order. Many battlefields.</p>
+          <h1>
+            <span>The banner</span>
+            <em>outlives the</em>
+            <span>battlefield</span>
+          </h1>
+          <div class="motto"><span></span>Above all<span></span></div>
+          <p class="hero-intro">
+            Apprime is a persistent gaming order forged across worlds and eras.
+            Currently deployed in <strong>Astro Empires</strong>, with a legacy
+            in Planetarion and other battlefronts still to come.
+          </p>
+          <div class="hero-actions">
+            <a class="bronze-button" href="#campaigns">Explore the order</a>
+            <a class="text-link" href="#archives">View the archive <span>→</span></a>
+          </div>
+        </div>
+        <div class="hero-seal" aria-hidden="true">A</div>
+      </section>
+
+      <div class="top-grid">
+        <section class="section-block campaigns" id="campaigns">
+          <header class="section-heading">
+            <span>01</span>
+            <h2>Campaigns</h2>
+          </header>
+          <div class="campaign-grid">
+            <article class="campaign-card astro">
+              <img class="campaign-art" src="../assets/apprime/derived/campaign-astro-empires.jpg" alt="Apprime fleet approaching a contested planet" />
+              <div class="campaign-copy">
+                <h3>Astro Empires</h3>
+                <p class="status-red">Current theater</p>
+                <footer>
+                  <span>Active operations <i></i></span>
+                  <b aria-hidden="true">A</b>
+                </footer>
+              </div>
+            </article>
+
+            <article class="campaign-card planetarion">
+              <img class="campaign-art" src="../assets/apprime/derived/campaign-planetarion.jpg" alt="Planetarion city beneath a blue moon" />
+              <div class="campaign-copy">
+                <h3>Planetarion</h3>
+                <p class="status-red">Legacy archive</p>
+                <footer><span>Campaign history</span><b>▤</b></footer>
+              </div>
+            </article>
+
+            <article class="campaign-card future">
+              <img class="campaign-art" src="../assets/apprime/derived/campaign-future.jpg" alt="An unknown red world at the edge of space" />
+              <div class="campaign-copy">
+                <h3>Future games</h3>
+                <p class="status-red">Unknown battlefields</p>
+                <footer><span>The mission continues</span><b>⚔</b></footer>
+              </div>
+            </article>
+          </div>
+          <a class="outline-button section-deep-link" href="./campaigns.html">Explore all campaigns</a>
+        </section>
+
+        <section class="section-block honor" id="honor">
+          <header class="section-heading">
+            <span>02</span>
+            <h2>Hall of Honor</h2>
+          </header>
+          <div class="honor-grid">
+            <article>
+              <img class="medallion-art" src="../assets/apprime/derived/hero-lysander-medallion.jpg" alt="" />
+              <h3>Lysander</h3>
+              <p>Strategos</p>
+            </article>
+            <article>
+              <img class="medallion-art" src="../assets/apprime/derived/hero-aurelius-medallion.jpg" alt="" />
+              <h3>Aurelius</h3>
+              <p>Tacticus</p>
+            </article>
+            <article>
+              <img class="medallion-art" src="../assets/apprime/derived/hero-nova-medallion.jpg" alt="" />
+              <h3>Nova</h3>
+              <p>Cohort</p>
+            </article>
+            <article>
+              <img class="medallion-art" src="../assets/apprime/derived/hero-veritas-medallion.jpg" alt="" />
+              <h3>Veritas</h3>
+              <p>Sentinel</p>
+            </article>
+            <article>
+              <img class="medallion-art" src="../assets/apprime/derived/hero-draxus-medallion.jpg" alt="" />
+              <h3>Draxus</h3>
+              <p>Veteran</p>
+            </article>
+          </div>
+          <a class="outline-button" href="./members.html">Enter the Hall of Honor</a>
+        </section>
+
+        <section class="section-block doctrine" id="doctrine">
+          <header class="section-heading">
+            <span>03</span>
+            <h2>Doctrine</h2>
+          </header>
+          <div class="doctrine-body">
+            <div class="doctrine-list">
+              <article>
+                <i>⌖</i>
+                <div>
+                  <h3>Discipline above impulse</h3>
+                  <p>We act with purpose, execute with precision, and hold the line—always.</p>
+                </div>
+              </article>
+              <article>
+                <i>⚔</i>
+                <div>
+                  <h3>Coordination above strength</h3>
+                  <p>Strategy, timing, and unity defeat raw power.</p>
+                </div>
+              </article>
+              <article>
+                <i>Α</i>
+                <div>
+                  <h3>Identity above all</h3>
+                  <p>We are more than a guild. We are Apprime—across games, across time.</p>
+                </div>
+              </article>
+            </div>
+            <div class="doctrine-crest" aria-hidden="true">
+              <span>Α</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="bottom-grid">
+        <section class="section-block war-room" id="war-room">
+          <header class="section-heading">
+            <span>04</span>
+            <h2>War Room</h2>
+          </header>
+          <div class="war-grid">
+            <article class="commander-card">
+              <div class="commander-portrait" aria-hidden="true">
+                <img src="../assets/apprime/derived/lysander-commander.jpg" alt="" />
+              </div>
+              <div>
+                <h3>Lysander</h3>
+                <p class="micro">Order intelligence</p>
+                <blockquote>
+                  “Victory is not given. It is coordinated, committed, and claimed.”
+                </blockquote>
+              </div>
+            </article>
+
+            <article class="war-module intel-module">
+              <header><span>Fleet intel</span><i>Three live feeds</i></header>
+              <img class="war-visual" src="../assets/apprime/derived/war-fleet-intel.jpg" alt="Fleet intelligence map with marked sectors" />
+              <a href="./war-room.html">Open strategic theater</a>
+            </article>
+
+            <article class="war-module tracking-module">
+              <header><span>Vision tracking</span><i>Shared intelligence</i></header>
+              <img class="war-visual" src="../assets/apprime/derived/war-vision-tracking.jpg" alt="Orbital vision tracking display" />
+              <a href="./war-room.html">Open strategic theater</a>
+            </article>
+
+            <article class="war-module board-module">
+              <header><span>Operations</span><i>Member-owned</i></header>
+              <ul>
+                <li><b>Attack boards</b><span>Coordinated waves</span></li>
+                <li><b>Defense coverage</b><span>Named responsibility</span></li>
+                <li><b>Scouting watches</b><span>Persistent vision</span></li>
+              </ul>
+              <a href="./war-room.html">Open War Room</a>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-block archives" id="archives">
+          <header class="section-heading">
+            <span>05</span>
+            <h2>Graphics Archive</h2>
+          </header>
+          <p class="section-lede">Public Apprime marks and campaign artwork.</p>
+          <div class="archive-strip" aria-label="Campaign archive previews">
+            <figure>
+              <img src="../assets/apprime/derived/archive-helios.jpg" alt="Battle over Helios Gate" />
+              <figcaption>Helios Gate</figcaption>
+            </figure>
+            <figure>
+              <img src="../assets/apprime/derived/archive-acheron.jpg" alt="Acheron Belt campaign" />
+              <figcaption>Acheron Belt</figcaption>
+            </figure>
+            <figure>
+              <img src="../assets/apprime/derived/archive-planetarion.jpg" alt="Planetarion campaign archive" />
+              <figcaption>Planetarion</figcaption>
+            </figure>
+            <figure>
+              <img src="../assets/apprime/derived/archive-orders.jpg" alt="Orders of Lysander" />
+              <figcaption>Orders</figcaption>
+            </figure>
+          </div>
+          <div class="archive-list">
+            <a href="../assets/apprime-logo-v2.png" download>
+              <img src="../assets/apprime-logo-v2.png" alt="" />
+              <span><b>Primary guild mark</b><small>Transparent PNG</small></span>
+              <em>Download</em>
+            </a>
+            <a href="../assets/apprime/hero-hoplite.png" download>
+              <img src="../assets/apprime/hero-hoplite.png" alt="" />
+              <span><b>Hoplite campaign banner</b><small>Wide hero artwork</small></span>
+              <em>Download</em>
+            </a>
+            <a href="../assets/apprime-logo.png" download>
+              <img src="../assets/apprime-logo.png" alt="" />
+              <span><b>Legacy wordmark</b><small>Transparent PNG</small></span>
+              <em>Download</em>
+            </a>
+          </div>
+          <p class="archive-note">Additional public artwork can be added to this archive without exposing guild operations.</p>
+          <a class="outline-button" href="./archive.html">Open full graphics archive</a>
+        </section>
+
+        <section class="section-block recruitment" id="recruitment">
+          <header class="section-heading">
+            <span>06</span>
+            <h2>Recruitment</h2>
+          </header>
+          <div class="recruit-copy">
+            <p class="eyebrow">The order seeks</p>
+            <h3>Disciplined players</h3>
+            <p>
+              If you value strategy over chaos, loyalty over ego, and victory
+              over convenience—you belong with us.
+            </p>
+          </div>
+          <div class="recruit-traits">
+            <span>✥ Strategic thinkers</span>
+            <span>♜ Active &amp; reliable</span>
+          </div>
+          <a class="recruit-button" href="https://t.me/LDKcarDi" target="_blank" rel="noopener">Contact @LDKcarDi on Telegram <b>⛨</b></a>
+          <p class="micro">One standard. One banner.</p>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <a class="footer-brand" href="#home">
+        <img src="../assets/apprime-logo-v2.png" alt="Apprime" />
+      </a>
+      <p><span>◈</span> One order. Many battlefields. One standard.</p>
+      <div>
+        <span>Current theater: <b>Astro Empires</b></span>
+        <span>Status: <strong>Active</strong><i></i></span>
+      </div>
+    </footer>
+  </body>
+</html>
