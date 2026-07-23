@@ -17,6 +17,28 @@
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 
+  function initThemeControls() {
+    const buttons = $$(".theme-toggle");
+    const sync = () => {
+      const isLight = document.documentElement.dataset.theme === "light";
+      buttons.forEach((button) => {
+        button.querySelector("span").textContent = isLight ? "☾" : "☀";
+        button.querySelector("b").textContent = isLight ? "Dark skin" : "Light skin";
+        button.setAttribute("aria-label", `Switch to ${isLight ? "dark" : "light"} skin`);
+        button.setAttribute("aria-pressed", String(isLight));
+      });
+    };
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextTheme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+        document.documentElement.dataset.theme = nextTheme;
+        localStorage.setItem("apprime-theme", nextTheme);
+        sync();
+      });
+    });
+    sync();
+  }
+
   function setStatus(element, message, kind = "") {
     if (!element) return;
     element.textContent = message;
@@ -358,6 +380,7 @@
   }
 
   async function init() {
+    initThemeControls();
     const session = await currentSession();
     updateAccountLinks(session);
     if (page === "archive") await initArchive();

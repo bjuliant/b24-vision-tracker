@@ -1,6 +1,28 @@
 const navToggle = document.querySelector(".nav-toggle");
 const navigation = document.querySelector(".primary-nav");
 const navigationLinks = [...document.querySelectorAll(".primary-nav a")];
+const themeToggles = [...document.querySelectorAll(".theme-toggle")];
+
+function syncThemeControls() {
+  const isLight = document.documentElement.dataset.theme === "light";
+  themeToggles.forEach((button) => {
+    button.querySelector("span").textContent = isLight ? "☾" : "☀";
+    button.querySelector("b").textContent = isLight ? "Dark skin" : "Light skin";
+    button.setAttribute("aria-label", `Switch to ${isLight ? "dark" : "light"} skin`);
+    button.setAttribute("aria-pressed", String(isLight));
+  });
+}
+
+themeToggles.forEach((button) => {
+  button.addEventListener("click", () => {
+    const nextTheme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = nextTheme;
+    localStorage.setItem("apprime-theme", nextTheme);
+    syncThemeControls();
+  });
+});
+
+syncThemeControls();
 
 navToggle?.addEventListener("click", () => {
   const isOpen = navigation.classList.toggle("open");

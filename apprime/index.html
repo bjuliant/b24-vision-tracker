@@ -22,6 +22,9 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <script>
+      document.documentElement.dataset.theme = localStorage.getItem("apprime-theme") || "dark";
+    </script>
     <script src="./site.js" defer></script>
   </head>
   <body>
@@ -57,6 +60,9 @@
         <span>Current theater: <b>Astro Empires</b></span>
         <i aria-hidden="true">A</i>
       </div>
+      <button class="theme-toggle" type="button" aria-label="Switch to light skin">
+        <span aria-hidden="true">☀</span><b>Light skin</b>
+      </button>
     </header>
 
     <main id="main">
