@@ -241,6 +241,7 @@
       `<h1>Lysander Access Required</h1>`,
       `<p>${escapeHtml(reason)}</p>`,
       `<p>Use <code>/map</code> in your approved guild group or DM.</p>`,
+      `<a class="access-public-link" href="./apprime/">Visit the public Aprime site</a>`,
       `</div>`,
       `</section>`
     ].join("");

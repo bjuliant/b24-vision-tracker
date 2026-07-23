@@ -92,6 +92,28 @@ button {
   font-weight: 750;
 }
 
+.access-public-link {
+  display: inline-flex;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid rgba(207, 158, 82, 0.58);
+  border-radius: 4px;
+  color: #dfbd7d;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  text-transform: uppercase;
+  background: rgba(122, 78, 31, 0.12);
+}
+
+.access-public-link:hover,
+.access-public-link:focus-visible {
+  color: #f5dfb7;
+  border-color: #e0b66d;
+  background: rgba(122, 78, 31, 0.24);
+}
+
 .topbar {
   display: flex;
   align-items: center;
